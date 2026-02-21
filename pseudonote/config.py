@@ -13,7 +13,17 @@ from pseudonote.qt_compat import QtCore, Signal
 class Config:
     def __init__(self):
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        self.config_path = os.path.join(self.plugin_dir, "PseudoNote.ini")
+        # Location in the plugin directory (might be read-only if in Program Files)
+        self.plugin_config_path = os.path.join(self.plugin_dir, "PseudoNote.ini")
+        # Writable fallback in user home directory
+        self.user_config_path = os.path.join(os.path.expanduser("~"), ".pseudonote.ini")
+        
+        # Determine the primary path to use (prefer the one that exists or the user one for writing)
+        if os.path.exists(self.user_config_path):
+            self.config_path = self.user_config_path
+        else:
+            self.config_path = self.plugin_config_path
+
         self.model = "gpt-4"
         self.proxy = ""
 
@@ -60,11 +70,18 @@ class Config:
         self.anthropic_key = os.environ.get("PSEUDONOTE_ANTHROPIC_API_KEY", "")
         self.gemini_key = os.environ.get("PSEUDONOTE_GEMINI_API_KEY", "")
 
-        if not os.path.exists(self.config_path):
+        parser = configparser.ConfigParser()
+        # Read from both. User config overrides plugin config if both exist.
+        configs_to_read = []
+        if os.path.exists(self.plugin_config_path):
+            configs_to_read.append(self.plugin_config_path)
+        if os.path.exists(self.user_config_path):
+            configs_to_read.append(self.user_config_path)
+        
+        if not configs_to_read:
             return
 
-        parser = configparser.ConfigParser()
-        parser.read(self.config_path, encoding="utf-8")
+        parser.read(configs_to_read, encoding="utf-8")
 
         if parser.has_section("PseudoNote"):
             if parser.has_option("PseudoNote", "MODEL"):
@@ -201,12 +218,29 @@ class Config:
         parser.set("Fonts", "MD_FONT", self.markdown_font)
         parser.set("Fonts", "MD_SIZE", str(self.markdown_font_size))
 
+        # Try saving. Handle Permission Denied (e.g. Program Files) by falling back to user home.
+        success = False
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 parser.write(f)
-            LOGGER.log("Configuration saved.")
-        except Exception as e:
-            LOGGER.log(f"Error saving config: {e}")
+            LOGGER.log(f"Configuration saved to {self.config_path}")
+            success = True
+        except (IOError, OSError) as e:
+            if self.config_path != self.user_config_path:
+                LOGGER.log(f"Permission denied writing to {self.config_path}. Falling back to user home...")
+                self.config_path = self.user_config_path
+                try:
+                    with open(self.config_path, 'w', encoding='utf-8') as f:
+                        parser.write(f)
+                    LOGGER.log(f"Configuration saved to {self.config_path}")
+                    success = True
+                except Exception as e2:
+                    LOGGER.log(f"Failed to save to user home: {e2}")
+            else:
+                LOGGER.log(f"Error saving config: {e}")
+
+        if not success:
+             LOGGER.log("CRITICAL: Could not save configuration to any location.")
 
 
 # ---------------------------------------------------------------------------
