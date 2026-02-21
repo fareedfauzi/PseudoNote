@@ -18,6 +18,16 @@ except ImportError:
             QtGui = None
             print("[PseudoNote] Qt not found (PyQt5, PySide2 or PySide6 required).")
 
+# Flattening for easier imports
+if QtWidgets:
+    # We use __dict__.update to avoid massive explicit lists
+    # This makes 'from pseudonote.qt_compat import QPushButton' work
+    globals().update({k: v for k, v in QtWidgets.__dict__.items() if not k.startswith('__')})
+if QtGui:
+    globals().update({k: v for k, v in QtGui.__dict__.items() if not k.startswith('__')})
+if QtCore:
+    globals().update({k: v for k, v in QtCore.__dict__.items() if not k.startswith('__')})
+
 
 def get_text_width(fm, text):
     if hasattr(fm, "horizontalAdvance"):

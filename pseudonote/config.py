@@ -62,6 +62,14 @@ class Config:
         self.markdown_font = "Consolas"
         self.markdown_font_size = 10
 
+        # Analysis Defaults
+        self.batch_size = 10
+        self.parallel_workers = 1
+        self.min_func_size = 10
+        self.max_xrefs = 100
+        self.filter_system = True
+        self.filter_empty = True
+
         self.load()
 
     def load(self):
@@ -165,6 +173,14 @@ class Config:
             self.markdown_font = parser.get("Fonts", "MD_FONT", fallback="Consolas")
             self.markdown_font_size = parser.getint("Fonts", "MD_SIZE", fallback=10)
 
+        if parser.has_section("Analysis"):
+            self.batch_size = parser.getint("Analysis", "BATCH_SIZE", fallback=10)
+            self.parallel_workers = parser.getint("Analysis", "WORKERS", fallback=1)
+            self.min_func_size = parser.getint("Analysis", "MIN_SIZE", fallback=10)
+            self.max_xrefs = parser.getint("Analysis", "MAX_XREFS", fallback=100)
+            self.filter_system = parser.getboolean("Analysis", "FILTER_SYS", fallback=True)
+            self.filter_empty = parser.getboolean("Analysis", "FILTER_EMPTY", fallback=True)
+
     def save(self):
         parser = configparser.ConfigParser()
         parser.optionxform = str
@@ -217,6 +233,14 @@ class Config:
         parser.set("Fonts", "CODE_SIZE", str(self.code_font_size))
         parser.set("Fonts", "MD_FONT", self.markdown_font)
         parser.set("Fonts", "MD_SIZE", str(self.markdown_font_size))
+
+        if not parser.has_section("Analysis"): parser.add_section("Analysis")
+        parser.set("Analysis", "BATCH_SIZE", str(self.batch_size))
+        parser.set("Analysis", "WORKERS", str(self.parallel_workers))
+        parser.set("Analysis", "MIN_SIZE", str(self.min_func_size))
+        parser.set("Analysis", "MAX_XREFS", str(self.max_xrefs))
+        parser.set("Analysis", "FILTER_SYS", str(self.filter_system))
+        parser.set("Analysis", "FILTER_EMPTY", str(self.filter_empty))
 
         # Try saving. Handle Permission Denied (e.g. Program Files) by falling back to user home.
         success = False

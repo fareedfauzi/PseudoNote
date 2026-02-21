@@ -17,26 +17,19 @@ except ImportError:
 import urllib.request, urllib.error
 
 # GUI Imports
-try:
-    from PyQt5.QtWidgets import *
-    from PyQt5.QtGui import *
-    from PyQt5.QtCore import *
-    from PyQt5.QtCore import Qt 
-    Signal = pyqtSignal
-except ImportError:
-    try:
-        from PySide6.QtWidgets import *
-        from PySide6.QtGui import *
-        from PySide6.QtCore import *
-        from PySide6.QtCore import Qt
-    except ImportError:
-        try:
-            from PySide2.QtWidgets import *
-            from PySide2.QtGui import *
-            from PySide2.QtCore import *
-            from PySide2.QtCore import Qt
-        except:
-            pass
+from pseudonote.qt_compat import QtWidgets, QtGui, QtCore, Signal
+from pseudonote.qt_compat import (
+    QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox, 
+    QSpinBox, QProgressBar, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QFrame,
+    QHeaderView, QAbstractItemView, QMenu, QAction,
+    QDialog, QDialogButtonBox, QGroupBox, QFileDialog,
+    QApplication, QThread, QTimer, QAbstractTableModel,
+    QModelIndex, QTableView, QColor, QFont, QIcon, QSize,
+    QBrush, QPainter, QPalette, QKeySequence, QTextEdit,
+    QWidget, QTabWidget, QStackedWidget, QSplitter, QSpacerItem
+)
+Qt = QtCore.Qt
 
 # Modern Dark Theme (VS Code / Material inspired)
 STYLES = """
@@ -744,21 +737,23 @@ class AnalyzeWorker(QThread):
             # Extract the first token that looks like an identifier
             parts = re.split(r'[\s,\:\(\)\|]+', clean)
             if not parts: continue
-            
             nm = parts[0].strip(' "\'`*')
             nm = re.sub(r'[^a-zA-Z0-9_]', '', nm)
             
             if nm and len(nm) >= 3 and nm.lower() not in ('function','func','sub','unknown','unnamed','noname','the','this','and','for','with'):
-                if nm not in names:
-                    names.append(nm)
+                names.append(nm)
 
-        # Fallback: regex scan for snake_case identifiers in the whole response
+        # Fallback: regex scan for identifiers in the whole response
         if len(names) < expected:
-            found = re.findall(r'\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b', resp)
+            # Regex for common function naming patterns (snake_case, camelCase)
+            found = re.findall(r'\b([a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)*)\b', resp)
             for n in found:
-                if n not in names and len(n) >= 3 and n not in ('void', 'int', 'char', 'return', 'include', 'func', 'function'):
-                    names.append(n)
-                    if len(names) >= expected: break
+                if len(n) >= 3 and n.lower() not in ('void', 'int', 'char', 'return', 'include', 'func', 'function', 'const', 'unsigned', 'static'):
+                    # In fallback mode, we still allow duplicates if needed, but usually we try to fill gaps
+                    if len(names) < expected:
+                        names.append(n)
+                    else:
+                        break
 
         if len(names) < expected:
             self.log.emit(f"Parser found {len(names)}/{expected} names. Check IDA Output for raw text.", 'warn')
@@ -781,48 +776,61 @@ class RenamerSettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         
-        # Provider
+        # API Provider settings
         layout.addWidget(QLabel("API Provider:"))
         self.provider_cb = QComboBox()
         self.provider_cb.addItems(["OpenAI", "Anthropic", "Ollama", "LMStudio", "OpenAICompatible", "DeepSeek", "Gemini"])
-        
-        # Select current
-        curr = self.config.active_provider
-        idx = self.provider_cb.findText(curr, Qt.MatchFixedString) if curr else -1
-        if idx >= 0: self.provider_cb.setCurrentIndex(idx)
-        else: self.provider_cb.setCurrentText(curr if curr else "OpenAI")
-        
         layout.addWidget(self.provider_cb)
-        
-        # URL
+
         layout.addWidget(QLabel("API URL:"))
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("https://api.openai.com/v1")
         layout.addWidget(self.url_edit)
-        
-        # Model
+
         layout.addWidget(QLabel("Model Code/Name:"))
         self.model_edit = QLineEdit()
         self.model_edit.setPlaceholderText("gpt-4")
         layout.addWidget(self.model_edit)
 
-        # Key (Optional but good to have)
+        # API Key
         layout.addWidget(QLabel("API Key:"))
         self.key_edit = QLineEdit()
         layout.addWidget(self.key_edit)
         
+        # Performance Section
+        layout.addSpacing(10)
+        layout.addWidget(QLabel("<b>Bulk Renamer Settings</b>"))
+        perf_grp = QGroupBox("Optimization")
+        perf_layout = QGridLayout()
+        
+        perf_layout.addWidget(QLabel("Batch Size:"), 0, 0)
+        self.batch_spin = QSpinBox()
+        self.batch_spin.setRange(1, 50)
+        self.batch_spin.setValue(getattr(self.config, 'batch_size', 10))
+        perf_layout.addWidget(self.batch_spin, 0, 1)
+
+        perf_layout.addWidget(QLabel("Parallel Workers:"), 0, 2)
+        self.workers_spin = QSpinBox()
+        self.workers_spin.setRange(1, 10)
+        self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 1))
+        perf_layout.addWidget(self.workers_spin, 0, 3)
+        
+        perf_grp.setLayout(perf_layout)
+        layout.addWidget(perf_grp)
+        layout.addStretch()
+
+        # Select current provider
+        curr = self.config.active_provider
+        idx = self.provider_cb.findText(curr, Qt.MatchFixedString) if curr else -1
+        if idx >= 0: self.provider_cb.setCurrentIndex(idx)
+        else: self.provider_cb.setCurrentText(curr if curr else "OpenAI")
+
         # Connect
         self.provider_cb.currentTextChanged.connect(self.load_for_provider)
-        
-        # Load initial values
         self.load_for_provider(self.provider_cb.currentText())
-
-        layout.addStretch()
 
         # Save Button
         try:
-            # PySide6 bitwise OR on flags results in an int, which the constructor may reject.
-            # Wrapping it in StandardButton fixes the type mismatch.
             btns = QDialogButtonBox.StandardButton(QDialogButtonBox.Save.value | QDialogButtonBox.Cancel.value)
         except AttributeError:
             btns = QDialogButtonBox.Save | QDialogButtonBox.Cancel
@@ -891,7 +899,6 @@ class RenamerSettingsDialog(QDialog):
             self.config.lmstudio_url = url
             self.config.lmstudio_model = model
             self.config.lmstudio_key = key
-        elif pl == 'openaicompatible':
             self.config.custom_url = url
             self.config.custom_model = model
             self.config.custom_key = key
@@ -900,6 +907,9 @@ class RenamerSettingsDialog(QDialog):
              self.config.gemini_model = model
 
         try:
+            # Save Performance
+            self.config.batch_size = self.batch_spin.value()
+            self.config.parallel_workers = self.workers_spin.value()
             self.config.save()
             self.accept()
         except Exception as e:
@@ -907,7 +917,7 @@ class RenamerSettingsDialog(QDialog):
 
 class BulkRenamer(QDialog):
     def __init__(self, pn_config, parent=None):
-        super(BulkRenamer, self).__init__(parent)
+        super().__init__(parent)
         self.pn_config = pn_config
         self.cfg = self.build_cfg(pn_config)
         self.model = None
@@ -932,12 +942,8 @@ class BulkRenamer(QDialog):
         # Convert PseudoNote config to local format expected by workers
         cfg = {
             'provider': c.active_provider,
-            'batch_size': 20,
-            'parallel_workers': 10,
-            'filter_system': True,
-            'filter_empty': True,
-            'min_func_size': 10,
-            'max_xrefs': 100,
+            'batch_size': getattr(c, 'batch_size', 10),
+            'parallel_workers': getattr(c, 'parallel_workers', 1),
             'use_custom_prompt': False,
             'custom_prompt': ''
         }
@@ -985,71 +991,6 @@ class BulkRenamer(QDialog):
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # Header Area: Config Summary + Status using a modern header feel
-        header = QWidget()
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(0,0,0,0)
-        
-        # Replaced Header with simpler Settings Button
-        settings_btn = QPushButton("⚙️ Settings")
-        settings_btn.setFocusPolicy(Qt.NoFocus)
-        settings_btn.setFixedWidth(100)
-        settings_btn.clicked.connect(self.open_settings)
-        
-        hl.addStretch()
-        hl.addWidget(settings_btn)
-        
-        layout.addWidget(header)
-
-        settings_grp = QGroupBox("")
-        gl = QGridLayout(settings_grp)
-        gl.setVerticalSpacing(10)
-        gl.setHorizontalSpacing(15)
-
-        # Row 0: Performance
-        gl.addWidget(QLabel("Batch Size:"), 0, 0)
-        self.batch_spin = QSpinBox()
-        self.batch_spin.setRange(1, 50)
-        self.batch_spin.setValue(10) # Suggested batch size for efficiency within limits
-        gl.addWidget(self.batch_spin, 0, 1)
-
-        gl.addWidget(QLabel("Workers:"), 0, 2)
-        self.workers_spin = QSpinBox()
-        self.workers_spin.setRange(1, 20)
-        # Default workers to 1 as requested to avoid rate limits
-        self.workers_spin.setValue(1) # Force default to 1
-        gl.addWidget(self.workers_spin, 0, 3)
-
-        self.speed_lbl = QLabel('')
-        self.speed_lbl.setObjectName("dim")
-        self.batch_spin.valueChanged.connect(self.update_speed)
-        self.workers_spin.valueChanged.connect(self.update_speed)
-        self.update_speed()
-        gl.addWidget(self.speed_lbl, 0, 4, 1, 2)
-
-        # Row 1: Filters
-        gl.addWidget(QLabel("Min Size (bytes):"), 1, 0)
-        self.min_size_spin = QSpinBox()
-        self.min_size_spin.setRange(0, 5000)
-        self.min_size_spin.setValue(self.cfg.get('min_func_size', 10))
-        gl.addWidget(self.min_size_spin, 1, 1)
-
-        gl.addWidget(QLabel("Max XRefs:"), 1, 2)
-        self.max_xref_spin = QSpinBox()
-        self.max_xref_spin.setRange(0, 10000)
-        self.max_xref_spin.setValue(self.cfg.get('max_xrefs', 100))
-        gl.addWidget(self.max_xref_spin, 1, 3)
-
-        self.filter_sys_cb = QCheckBox('Skip System Functions')
-        self.filter_sys_cb.setChecked(self.cfg.get('filter_system', True))
-        gl.addWidget(self.filter_sys_cb, 1, 4)
-
-        self.filter_empty_cb = QCheckBox('Skip Tiny Functions')
-        self.filter_empty_cb.setChecked(self.cfg.get('filter_empty', True))
-        gl.addWidget(self.filter_empty_cb, 1, 5)
-
-        layout.addWidget(settings_grp)
-
         # Toolbar
         tb_widget = QWidget()
         tb = QHBoxLayout(tb_widget)
@@ -1057,8 +998,18 @@ class BulkRenamer(QDialog):
         
         self.load_btn = QPushButton('Load All sub_*')
         self.load_btn.setObjectName("primary")
-        self.load_btn.clicked.connect(self.load_funcs)
+        self.load_btn.clicked.connect(lambda: self.load_funcs())
         tb.addWidget(self.load_btn)
+
+        btn_lib = QPushButton('Load unknown_libname_*')
+        btn_lib.setObjectName("primary")
+        btn_lib.clicked.connect(lambda: self.load_funcs(prefix='unknown_libname_', append=True))
+        tb.addWidget(btn_lib)
+
+        btn_fnb = QPushButton('Load fn_b_* (renamed functions)')
+        btn_fnb.setObjectName("primary")
+        btn_fnb.clicked.connect(lambda: self.load_funcs(prefix='fn_b_', append=True))
+        tb.addWidget(btn_fnb)
         
         lb = QPushButton('Load Current')
         lb.clicked.connect(self.load_current)
@@ -1079,7 +1030,7 @@ class BulkRenamer(QDialog):
         tb.addWidget(self.filter_edit)
         
         tb.addStretch()
-        
+
         self.count_lbl = QLabel('0 functions loaded')
         self.count_lbl.setObjectName("accent")
         tb.addWidget(self.count_lbl)
@@ -1098,7 +1049,11 @@ class BulkRenamer(QDialog):
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(26)
-        
+    
+        # Context Menu for Settings
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.on_table_context_menu)
+    
         # Column sizing
         self.table.setColumnWidth(0, 30)  # Checkbox
         self.table.setColumnWidth(1, 100) # Address
@@ -1186,10 +1141,22 @@ class BulkRenamer(QDialog):
         bottom.addLayout(actions)
         layout.addLayout(bottom)
 
-    def update_speed(self):
-        b, w = self.batch_spin.value(), self.workers_spin.value()
-        fps = (b * w) / 2.0
-        self.speed_lbl.setText(f'Speed: ~{fps:.0f} func/s')
+    def on_table_context_menu(self, pos):
+        menu = QMenu(self)
+        menu.setStyleSheet(STYLES)
+        act = menu.addAction("⚙️ Configure API Settings...")
+        act.triggered.connect(self.open_settings)
+        
+        menu.addSeparator()
+        
+        # Add basic selection actions to context menu too
+        sel_all = menu.addAction("Select All")
+        sel_all.triggered.connect(lambda: self.model.toggle_all(True))
+        
+        sel_none = menu.addAction("Select None")
+        sel_none.triggered.connect(lambda: self.model.toggle_all(False))
+        
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
 
     def add_log(self, msg, lv='info'):
         colors = {'info':'#CCCCCC','ok':'#4EC9B0','err':'#F44336','warn':'#DCDCAA'}
@@ -1204,14 +1171,21 @@ class BulkRenamer(QDialog):
         if sug: txt += f' <span style="color:#4EC9B0">({sug} suggestions)</span>'
         self.count_lbl.setText(txt)
 
-    def load_funcs(self):
-        self.model.clear()
-        self.temp_funcs = []
+    def load_funcs(self, prefix='sub_', append=False):
+        self.load_prefix = prefix
+        if not append:
+            self.model.clear()
+            self.temp_funcs = []
+            self.seen_eas = set()
+        else:
+            self.temp_funcs = self.model.funcs[:]
+            self.seen_eas = {f.ea for f in self.temp_funcs}
+
         self.scanned = 0
         self.is_loading = True
         self.progress.setVisible(True)
         self.progress.setRange(0,0)
-        self.status_lbl.setText('Scanning functions...')
+        self.status_lbl.setText(f'Scanning for {prefix}*...')
         self.load_btn.setEnabled(False)
         self.analyze_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -1225,24 +1199,18 @@ class BulkRenamer(QDialog):
             self.finish_load()
             return
 
-        min_size = self.min_size_spin.value()
-        max_xrefs = self.max_xref_spin.value()
-        filter_sys = self.filter_sys_cb.isChecked()
-        filter_empty = self.filter_empty_cb.isChecked()
-
         for _ in range(2000):
             try:
                 ea = next(self.func_iter)
+                if ea in self.seen_eas: continue
+                
                 self.scanned += 1
                 name = idc.get_func_name(ea)
-                if not name or not name.startswith('sub_'): continue
+                if not name or not name.startswith(self.load_prefix): continue
                 if not is_valid_seg(ea): continue
-                if filter_sys and is_sys_func(name): continue
-                if filter_empty:
-                    sz = get_func_size(ea)
-                    if sz < min_size: continue
-                    if max_xrefs > 0 and get_xref_count(ea) > max_xrefs: continue
+                
                 self.temp_funcs.append(FuncData(ea, name))
+                self.seen_eas.add(ea)
             except StopIteration:
                 self.finish_load()
                 return
@@ -1344,9 +1312,8 @@ class BulkRenamer(QDialog):
         self.progress.setRange(0, len(items))
         self.progress.setValue(0)
 
-        batch_size = self.batch_spin.value()
-        num_workers = 1 # Enforce single worker to strict rate limits (max 3 req/min)
-        # num_workers = self.workers_spin.value()
+        batch_size = getattr(self.pn_config, 'batch_size', 10)
+        num_workers = getattr(self.pn_config, 'parallel_workers', 1)
         sys_prompt = self.get_system_prompt(batch_size > 1)
 
         chunk_size = max(1, len(items) // num_workers)

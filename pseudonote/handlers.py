@@ -785,3 +785,23 @@ class BulkRenameHandler(idaapi.action_handler_t):
         return idaapi.AST_ENABLE_ALWAYS
 
 
+
+class SettingsHandler(idaapi.action_handler_t):
+    """Open the API Settings dialog."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        # We need to reach the view or at least the config
+        # The view usually has the on_settings method
+        import pseudonote.view as vm
+        if vm._view_instance:
+            vm._view_instance.on_settings()
+        else:
+            # Fallback if view not open: open a standalone dialog
+            d = vm.SettingsDialog(CONFIG)
+            d.exec_()
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS

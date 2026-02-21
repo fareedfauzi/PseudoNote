@@ -152,6 +152,54 @@ class SimpleAI:
 
         threading.Thread(target=thread_target).start()
 
+    def test_connection(self):
+        """
+        Synchronous connection test for use in Settings UI.
+        Returns (success, message)
+        """
+        prompt = "test connection. reply with exactly 'pong'."
+        try:
+            if self.provider in ["openai", "deepseek", "ollama", "lmstudio", "custom"]:
+                if not self.client: return False, "Client not initialized."
+                
+                model = self.config.model
+                if self.provider == "ollama" and self.config.ollama_model: model = self.config.ollama_model
+                if self.provider == "custom" and self.config.custom_model: model = self.config.custom_model
+
+                is_reasoning = any(x in model.lower() for x in ["o1", "o3", "gpt-5"])
+                valid_args = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+                
+                if is_reasoning:
+                    valid_args["max_completion_tokens"] = 10
+                else:
+                    valid_args["max_tokens"] = 10
+                    valid_args["temperature"] = 0
+
+                response = self.client.chat.completions.create(**valid_args)
+                if response.choices and response.choices[0].message.content:
+                    return True, f"Connection successful!"
+                return False, "Connected but received empty response."
+
+            elif self.provider == "anthropic":
+                if not self.client: return False, "Anthropic client not initialized."
+                message = self.client.messages.create(
+                    model=self.config.anthropic_model if self.config.anthropic_model else self.config.model,
+                    max_tokens=10,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                return True, f"Connection successful!"
+
+            elif self.provider == "gemini":
+                if not self.client: return False, "Gemini not configured."
+                model_name = self.config.gemini_model if self.config.gemini_model else self.config.model
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                return True, f"Connection successful!"
+
+            return False, f"Unknown provider: {self.provider}"
+        except Exception as e:
+            return False, f"Connection Failed: {str(e)}"
+
 
 # Module-level singleton
 AI_CLIENT = None

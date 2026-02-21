@@ -25,6 +25,7 @@ from pseudonote.handlers import (
     DeleteCommentsHandler,
     StructAnalysisHandler,
     BulkRenameHandler,
+    SettingsHandler,
 )
 
 # These will be imported lazily to avoid circular imports
@@ -117,6 +118,17 @@ class PseudoNotePlugin(idaapi.plugin_t):
         )
         idaapi.register_action(list_action_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/View saved Codes and Notes", "pseudonote:list", idaapi.SETMENU_APP)
+
+        # Register Settings Action
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:settings",
+            "Configure API Settings...",
+            SettingsHandler(),
+            "",
+            "Configure AI Provider and Performance settings",
+            128
+        ))
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Configure API Settings...", "pseudonote:settings", idaapi.SETMENU_APP)
 
         rename_func_desc = idaapi.action_desc_t(
             "pseudonote:rename_function",

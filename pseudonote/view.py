@@ -135,7 +135,7 @@ if QtWidgets:
             self.tabs.addTab(self.provider_tab, "AI Providers")
             self.appearance_tab = QtWidgets.QWidget()
             self.init_appearance_tab()
-            self.tabs.addTab(self.appearance_tab, "Appearance")
+            self.tabs.addTab(self.appearance_tab, "Pane Appearance")
             self.log_tab = QtWidgets.QWidget()
             self.init_log_tab()
             self.tabs.addTab(self.log_tab, "Debug Logs")
@@ -175,11 +175,80 @@ if QtWidgets:
             self.info_label = QtWidgets.QLabel("* Grayed out fields are not needed")
             self.info_label.setStyleSheet("color: gray; font-size: 10px;")
             fl.addRow(self.info_label)
+            fl.addRow(self.info_label)
             form_grp.setLayout(fl)
             layout.addWidget(form_grp)
+
+            # Performance Section
+            perf_grp = QtWidgets.QGroupBox("Bulk Renamer Settings")
+            pl = QtWidgets.QGridLayout()
+            
+            pl.addWidget(QtWidgets.QLabel("Batch Size:"), 0, 0)
+            self.batch_spin = QtWidgets.QSpinBox()
+            self.batch_spin.setRange(1, 50)
+            self.batch_spin.setValue(getattr(self.config, 'batch_size', 10))
+            pl.addWidget(self.batch_spin, 0, 1)
+
+            pl.addWidget(QtWidgets.QLabel("Parallel Workers:"), 0, 2)
+            self.workers_spin = QtWidgets.QSpinBox()
+            self.workers_spin.setRange(1, 10)
+            self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 1))
+            pl.addWidget(self.workers_spin, 0, 3)
+            
+            perf_grp.setLayout(pl)
+            layout.addWidget(perf_grp)
+
+            # Test Connection Button
+            self.test_conn_btn = QtWidgets.QPushButton("Test Connection")
+            self.test_conn_btn.clicked.connect(self.on_test_connection)
+            layout.addWidget(self.test_conn_btn)
+            
+            self.test_result_label = QtWidgets.QLabel("")
+            self.test_result_label.setWordWrap(True)
+            self.test_result_label.setStyleSheet("font-size: 11px;")
+            layout.addWidget(self.test_result_label)
+
             layout.addStretch()
             self.provider_tab.setLayout(layout)
             self.load_fields(self.current_provider)
+
+        def on_test_connection(self):
+            self.test_result_label.setText("Testing... please wait.")
+            self.test_result_label.setStyleSheet("color: black; font-size: 11px;")
+            QtWidgets.QApplication.processEvents()
+            
+            # Temporary save fields to config for testing
+            self.save_fields_to_temp(self.current_provider)
+            # Create a temporary config object for testing without modifying global state yet
+            from pseudonote.config import Config
+            test_cfg = Config()
+            # Copy all temp settings to this test_cfg
+            test_cfg.active_provider = self.current_provider
+            s = self.temp_settings
+            test_cfg.openai_key = s["OpenAI"]["key"]; test_cfg.openai_url = s["OpenAI"]["url"]; test_cfg.openai_model = s["OpenAI"]["model"]
+            test_cfg.anthropic_key = s["Anthropic"]["key"]; test_cfg.anthropic_url = s["Anthropic"]["url"]; test_cfg.anthropic_model = s["Anthropic"]["model"]
+            test_cfg.deepseek_key = s["DeepSeek"]["key"]; test_cfg.deepseek_url = s["DeepSeek"]["url"]; test_cfg.deepseek_model = s["DeepSeek"]["model"]
+            test_cfg.gemini_key = s["Gemini"]["key"]; test_cfg.gemini_model = s["Gemini"]["model"]
+            test_cfg.ollama_host = s["Ollama"]["url"]; test_cfg.ollama_model = s["Ollama"]["model"]
+            test_cfg.lmstudio_key = s["LMStudio"]["key"]; test_cfg.lmstudio_url = s["LMStudio"]["url"]; test_cfg.lmstudio_model = s["LMStudio"]["model"]
+            test_cfg.custom_key = s["OpenAICompatible"]["key"]; test_cfg.custom_url = s["OpenAICompatible"]["url"]; test_cfg.custom_model = s["OpenAICompatible"]["model"]
+            
+            active_data = s.get(self.current_provider, {})
+            test_cfg.model = active_data.get("model", test_cfg.model)
+
+            from pseudonote.ai_client import SimpleAI
+            try:
+                tester = SimpleAI(test_cfg)
+                success, message = tester.test_connection()
+                if success:
+                    self.test_result_label.setText(message)
+                    self.test_result_label.setStyleSheet("color: #4EC9B0; font-size: 11px; font-weight: bold;")
+                else:
+                    self.test_result_label.setText(f"Fail: {message}")
+                    self.test_result_label.setStyleSheet("color: #F44336; font-size: 11px;")
+            except Exception as e:
+                self.test_result_label.setText(f"Error: {e}")
+                self.test_result_label.setStyleSheet("color: #F44336; font-size: 11px;")
 
         def init_appearance_tab(self):
             layout = QtWidgets.QVBoxLayout()
@@ -295,6 +364,11 @@ if QtWidgets:
             c.ui_font = fw["ui"][0].currentText(); c.ui_font_size = fw["ui"][1].value()
             c.code_font = fw["code"][0].currentText(); c.code_font_size = fw["code"][1].value()
             c.markdown_font = fw["md"][0].currentText(); c.markdown_font_size = fw["md"][1].value()
+            
+            # Save Performance
+            c.batch_size = self.batch_spin.value()
+            c.parallel_workers = self.workers_spin.value()
+            
             c.save()
             self.accept()
 
@@ -1640,6 +1714,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         if idaapi.get_widget_type(widget) in [idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE, idaapi.BWN_DISASMS]:
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:action", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:list", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_variables", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
@@ -1647,8 +1722,9 @@ class ContextMenuHooks(idaapi.UI_Hooks):
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyze_struct", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_comments", "PseudoNote/Comments/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_comments", "PseudoNote/Comments/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_comments", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_comments", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
             if idaapi.get_widget_type(widget) == idaapi.BWN_PSEUDOCODE:
                 idaapi.attach_action_to_popup(widget, popup, "pseudonote:highlight_on", "PseudoNote/Call Highlight/")
                 idaapi.attach_action_to_popup(widget, popup, "pseudonote:highlight_off", "PseudoNote/Call Highlight/")
