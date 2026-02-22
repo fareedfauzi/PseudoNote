@@ -122,13 +122,13 @@ class PseudoNotePlugin(idaapi.plugin_t):
         # Register Settings Action
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:settings",
-            "Configure API Settings...",
+            "Configure Settings...",
             SettingsHandler(),
             "",
             "Configure AI Provider and Performance settings",
             128
         ))
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Configure API Settings...", "pseudonote:settings", idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Configure Settings...", "pseudonote:settings", idaapi.SETMENU_APP)
 
         rename_func_desc = idaapi.action_desc_t(
             "pseudonote:rename_function",

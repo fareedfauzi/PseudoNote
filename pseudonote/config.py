@@ -65,8 +65,7 @@ class Config:
         # Analysis Defaults
         self.batch_size = 10
         self.parallel_workers = 1
-        self.min_func_size = 10
-        self.max_xrefs = 100
+        self.rename_prefix = "fn_b_"
         self.filter_system = True
         self.filter_empty = True
 
@@ -176,8 +175,7 @@ class Config:
         if parser.has_section("Analysis"):
             self.batch_size = parser.getint("Analysis", "BATCH_SIZE", fallback=10)
             self.parallel_workers = parser.getint("Analysis", "WORKERS", fallback=1)
-            self.min_func_size = parser.getint("Analysis", "MIN_SIZE", fallback=10)
-            self.max_xrefs = parser.getint("Analysis", "MAX_XREFS", fallback=100)
+            self.rename_prefix = parser.get("Analysis", "RENAME_PREFIX", fallback="fn_b_")
             self.filter_system = parser.getboolean("Analysis", "FILTER_SYS", fallback=True)
             self.filter_empty = parser.getboolean("Analysis", "FILTER_EMPTY", fallback=True)
 
@@ -185,8 +183,9 @@ class Config:
         parser = configparser.ConfigParser()
         parser.optionxform = str
 
-        if os.path.exists(self.config_path):
-            parser.read(self.config_path, encoding="utf-8")
+        # Do not read existing file to avoid carrying over old/unused attributes
+        # if os.path.exists(self.config_path):
+        #     parser.read(self.config_path, encoding="utf-8")
 
         if not parser.has_section("PseudoNote"): parser.add_section("PseudoNote")
         parser.set("PseudoNote", "MODEL", self.model)
@@ -237,8 +236,7 @@ class Config:
         if not parser.has_section("Analysis"): parser.add_section("Analysis")
         parser.set("Analysis", "BATCH_SIZE", str(self.batch_size))
         parser.set("Analysis", "WORKERS", str(self.parallel_workers))
-        parser.set("Analysis", "MIN_SIZE", str(self.min_func_size))
-        parser.set("Analysis", "MAX_XREFS", str(self.max_xrefs))
+        parser.set("Analysis", "RENAME_PREFIX", self.rename_prefix)
         parser.set("Analysis", "FILTER_SYS", str(self.filter_system))
         parser.set("Analysis", "FILTER_EMPTY", str(self.filter_empty))
 

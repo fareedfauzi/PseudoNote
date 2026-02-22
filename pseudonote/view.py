@@ -136,6 +136,9 @@ if QtWidgets:
             self.appearance_tab = QtWidgets.QWidget()
             self.init_appearance_tab()
             self.tabs.addTab(self.appearance_tab, "Pane Appearance")
+            self.bulk_tab = QtWidgets.QWidget()
+            self.init_bulk_tab()
+            self.tabs.addTab(self.bulk_tab, "Bulk Renamer")
             self.log_tab = QtWidgets.QWidget()
             self.init_log_tab()
             self.tabs.addTab(self.log_tab, "Debug Logs")
@@ -175,28 +178,8 @@ if QtWidgets:
             self.info_label = QtWidgets.QLabel("* Grayed out fields are not needed")
             self.info_label.setStyleSheet("color: gray; font-size: 10px;")
             fl.addRow(self.info_label)
-            fl.addRow(self.info_label)
             form_grp.setLayout(fl)
             layout.addWidget(form_grp)
-
-            # Performance Section
-            perf_grp = QtWidgets.QGroupBox("Bulk Renamer Settings")
-            pl = QtWidgets.QGridLayout()
-            
-            pl.addWidget(QtWidgets.QLabel("Batch Size:"), 0, 0)
-            self.batch_spin = QtWidgets.QSpinBox()
-            self.batch_spin.setRange(1, 50)
-            self.batch_spin.setValue(getattr(self.config, 'batch_size', 10))
-            pl.addWidget(self.batch_spin, 0, 1)
-
-            pl.addWidget(QtWidgets.QLabel("Parallel Workers:"), 0, 2)
-            self.workers_spin = QtWidgets.QSpinBox()
-            self.workers_spin.setRange(1, 10)
-            self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 1))
-            pl.addWidget(self.workers_spin, 0, 3)
-            
-            perf_grp.setLayout(pl)
-            layout.addWidget(perf_grp)
 
             # Test Connection Button
             self.test_conn_btn = QtWidgets.QPushButton("Test Connection")
@@ -249,6 +232,38 @@ if QtWidgets:
             except Exception as e:
                 self.test_result_label.setText(f"Error: {e}")
                 self.test_result_label.setStyleSheet("color: #F44336; font-size: 11px;")
+
+        def init_bulk_tab(self):
+            layout = QtWidgets.QVBoxLayout()
+            
+            grp = QtWidgets.QGroupBox("Bulk Renamer Optimization")
+            fl = QtWidgets.QFormLayout()
+            
+            self.batch_spin = QtWidgets.QSpinBox()
+            self.batch_spin.setRange(1, 100)
+            self.batch_spin.setValue(getattr(self.config, 'batch_size', 10))
+            fl.addRow("Batch Size (Functions per AI call):", self.batch_spin)
+            
+            self.workers_spin = QtWidgets.QSpinBox()
+            self.workers_spin.setRange(1, 10)
+            self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 1))
+            fl.addRow("Parallel Batch Workers:", self.workers_spin)
+            
+            self.prefix_edit = QtWidgets.QLineEdit()
+            self.prefix_edit.setText(getattr(self.config, 'rename_prefix', 'fn_b_'))
+            self.prefix_edit.setPlaceholderText("fn_b_")
+            fl.addRow("Rename Prefix:", self.prefix_edit)
+            
+            grp.setLayout(fl)
+            layout.addWidget(grp)
+            
+            info = QtWidgets.QLabel("Note: Reducing batch size can improve accuracy but increases API costs and analysis time.")
+            info.setStyleSheet("color: gray; font-style: italic;")
+            info.setWordWrap(True)
+            layout.addWidget(info)
+            
+            layout.addStretch()
+            self.bulk_tab.setLayout(layout)
 
         def init_appearance_tab(self):
             layout = QtWidgets.QVBoxLayout()
@@ -368,6 +383,7 @@ if QtWidgets:
             # Save Performance
             c.batch_size = self.batch_spin.value()
             c.parallel_workers = self.workers_spin.value()
+            c.rename_prefix = self.prefix_edit.text().strip() or "fn_b_"
             
             c.save()
             self.accept()

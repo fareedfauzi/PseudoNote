@@ -1,4 +1,4 @@
-# PseudoNote Installation
+# PseudoNote Installation and Setup
 
 ### 1. Copy Files
 Copy `PseudoNote.py` and the `pseudonote/` folder into your IDA `plugins` directory.
@@ -9,13 +9,9 @@ Run this in your terminal:
 pip install openai httpx
 ```
 
-### 3. Set API Key
+### 3. Set API Key for the LLM
 
-Option, you also can do this in the settings menu in PseudoNote pane
-
-1. Open `pseudonote/PseudoNote.ini`.
-2. Set your `PROVIDER` (OpenAI, Anthropic, DeepSeek, etc.) and `MODEL`.
-3. Add your `API_KEY` and `BASE_URL` in the corresponding section.
+Open the plugin **Right-Click** > **PseudoNote** > **Configure Settings**
 
 ### 4. Use
 - **Ctrl+Alt+G**: Open PseudoNote panes.

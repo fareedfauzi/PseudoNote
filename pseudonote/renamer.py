@@ -18,11 +18,12 @@ import urllib.request, urllib.error
 
 # GUI Imports
 from pseudonote.qt_compat import QtWidgets, QtGui, QtCore, Signal
+from pseudonote.config import CONFIG, LOGGER
 from pseudonote.qt_compat import (
     QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox, 
     QSpinBox, QProgressBar, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QHBoxLayout, QGridLayout, QFrame,
-    QHeaderView, QAbstractItemView, QMenu, QAction,
+    QHeaderView, QAbstractItemView, QMenu, QAction, QMessageBox, QInputDialog,
     QDialog, QDialogButtonBox, QGroupBox, QFileDialog,
     QApplication, QThread, QTimer, QAbstractTableModel,
     QModelIndex, QTableView, QColor, QFont, QIcon, QSize,
@@ -31,195 +32,207 @@ from pseudonote.qt_compat import (
 )
 Qt = QtCore.Qt
 
-# Modern Dark Theme (VS Code / Material inspired)
+# Modern Light Theme (Premium Clean)
 STYLES = """
 QWidget {
-    background-color: #1E1E1E;
-    color: #CCCCCC;
+    background-color: #FDFDFD;
+    color: #333333;
     font-family: 'Segoe UI', sans-serif;
     font-size: 10pt;
+    outline: none; /* Remove focus dots globally */
 }
 
 QDialog {
-    background-color: #1E1E1E;
+    background-color: #F5F5F7;
 }
 
 QGroupBox {
-    border: 1px solid #3E3E42;
-    border-radius: 4px;
-    margin-top: 20px; /* Leave space for title */
-    background-color: #252526;
+    border: 1px solid #D1D1D6;
+    border-radius: 8px;
+    margin-top: 20px;
+    background-color: #FFFFFF;
     font-weight: bold;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 10px;
+    left: 15px;
     padding: 0 5px;
-    color: #4FC3F7; /* Light Blue */
-    background-color: #1E1E1E; /* Match dialog bg to cut through border */
+    color: #007AFF;
+    background-color: #FFFFFF;
 }
 
 QLineEdit, QTextEdit, QPlainTextEdit {
-    background-color: #2D2D30;
-    border: 1px solid #3E3E42;
-    border-radius: 2px;
-    color: #F0F0F0;
-    padding: 4px;
-    selection-background-color: #264F78;
+    background-color: #FFFFFF;
+    border: 1px solid #D1D1D6;
+    border-radius: 4px;
+    color: #1C1C1E;
+    padding: 6px;
+    selection-background-color: #007AFF;
+    selection-color: #FFFFFF;
 }
 QLineEdit:focus, QTextEdit:focus {
-    border: 1px solid #007ACC; /* VS Code Blue */
+    border: 1px solid #007AFF;
 }
 QLineEdit:disabled {
-    color: #6D6D6D;
-    background-color: #252526;
+    color: #8E8E93;
+    background-color: #F2F2F7;
 }
 
 QPushButton {
-    background-color: #3E3E42;
-    color: #FFFFFF;
-    border: 1px solid #3E3E42;
-    padding: 6px 16px;
-    border-radius: 2px;
+    background-color: #FFFFFF;
+    color: #1C1C1E;
+    border: 1px solid #D1D1D6;
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-weight: 500;
 }
 QPushButton:hover {
-    background-color: #4E4E52;
-    border-color: #5E5E62;
+    background-color: #F2F2F7;
 }
 QPushButton:pressed {
-    background-color: #007ACC;
-    border-color: #007ACC;
+    background-color: #E5E5EA;
+}
+QPushButton:focus {
+    outline: none; /* Ensure no focus dots on buttons */
 }
 QPushButton:disabled {
-    background-color: #2D2D30;
-    color: #6D6D6D;
-    border-color: #2D2D30;
+    background-color: #F2F2F7;
+    color: #8E8E93;
 }
 
-/* Specific Button Styles */
 QPushButton#primary {
-    background-color: #007ACC;
-    border-color: #007ACC;
+    background-color: #007AFF;
+    color: #FFFFFF;
+    border: 1px solid #007AFF;
 }
 QPushButton#primary:hover {
-    background-color: #0098FF;
+    background-color: #0062CC;
+}
+QPushButton#primary:disabled {
+    background-color: #E5E5EA;
+    color: #8E8E93;
+    border: 1px solid #D1D1D6;
 }
 
 QPushButton#success {
-    background-color: #388E3C;
-    border-color: #388E3C;
+    background-color: #34C759;
+    color: #FFFFFF;
+    border: 1px solid #34C759;
 }
 QPushButton#success:hover {
-    background-color: #43A047;
+    background-color: #28a745;
+}
+QPushButton#success:disabled {
+    background-color: #E5E5EA;
+    color: #8E8E93;
+    border: 1px solid #D1D1D6;
 }
 
 QPushButton#danger {
-    background-color: #D32F2F;
-    border-color: #D32F2F;
+    background-color: #FF3B30;
+    color: #FFFFFF;
+    border: 1px solid #FF3B30;
 }
 QPushButton#danger:hover {
-    background-color: #E53935;
+    background-color: #c82333;
+}
+QPushButton#danger:disabled {
+    background-color: #E5E5EA;
+    color: #8E8E93;
+    border: 1px solid #D1D1D6;
 }
 
 QTableView {
-    background-color: #252526;
-    border: 1px solid #3E3E42;
-    gridline-color: #3E3E42;
-    selection-background-color: #264F78;
+    background-color: #FFFFFF;
+    border: 1px solid #D1D1D6;
+    gridline-color: #F2F2F7;
+    selection-background-color: #007AFF;
     selection-color: #FFFFFF;
-    alternate-background-color: #2D2D30;
+    alternate-background-color: #F9F9FB;
+    border-radius: 4px;
 }
 QTableView::item {
-    padding: 2px;
+    padding: 4px;
 }
 QHeaderView::section {
-    background-color: #2D2D30;
-    color: #CCCCCC;
-    padding: 4px;
+    background-color: #F2F2F7;
+    color: #3A3A3C;
+    padding: 8px;
     border: none;
-    border-right: 1px solid #3E3E42;
-    border-bottom: 1px solid #3E3E42;
+    border-right: 1px solid #D1D1D6;
+    border-bottom: 1px solid #D1D1D6;
     font-weight: bold;
+    background: transparent;
 }
 QHeaderView::section:horizontal {
-    border-top: 1px solid #3E3E42;
-}
-
-QScrollBar:vertical {
-    border: none;
-    background: #1E1E1E;
-    width: 14px;
-    margin: 0px;
-}
-QScrollBar::handle:vertical {
-    background: #424242;
-    min-height: 20px;
-    border-radius: 0px;
-}
-QScrollBar::handle:vertical:hover {
-    background: #686868;
-}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0px; 
+    border-top: 1px solid #D1D1D6;
 }
 
 QProgressBar {
-    background-color: #2D2D30;
+    background-color: #E5E5EA;
     border: none;
-    color: #FFFFFF;
+    border-radius: 6px;
+    color: #000000;
     text-align: center;
 }
 QProgressBar::chunk {
-    background-color: #007ACC;
-}
-
-QSpinBox {
-    background-color: #2D2D30;
-    border: 1px solid #3E3E42;
-    padding: 2px;
-    color: #F0F0F0;
-}
-QSpinBox::up-button, QSpinBox::down-button {
-    background-color: #3E3E42;
-    border: none;
-    width: 16px;
-}
-QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-    background-color: #4E4E52;
+    background-color: #007AFF;
+    border-radius: 6px;
 }
 
 QLabel {
-    color: #CCCCCC;
+    color: #3A3A3C;
+    background: transparent;
 }
 QLabel#h1 {
-    color: #FFFFFF;
-    font-size: 12pt;
+    color: #1C1C1E;
+    font-size: 13pt;
     font-weight: bold;
 }
 QLabel#accent {
-    color: #4FC3F7;
+    color: #007AFF;
 }
-QLabel#dim {
-    color: #808080;
+QLabel#status_msg {
+    color: #636366;
     font-style: italic;
+    font-size: 9pt;
+    background: transparent;
+}
+
+QCheckBox {
+    background: transparent;
 }
 
 QComboBox {
-    background-color: #3E3E42;
-    border: 1px solid #3E3E42;
-    border-radius: 2px;
-    padding: 4px;
-    color: #FFFFFF;
-}
-QComboBox::drop-down {
-    border: none;
+    background-color: #FFFFFF;
+    border: 1px solid #D1D1D6;
+    border-radius: 4px;
+    padding: 6px;
+    color: #1C1C1E;
 }
 QComboBox QAbstractItemView {
-    background-color: #252526;
-    border: 1px solid #3E3E42;
-    selection-background-color: #007ACC;
-    color: #FFFFFF;
+    background-color: #FFFFFF;
+    border: 1px solid #D1D1D6;
+    selection-background-color: #007AFF;
+    color: #1C1C1E;
+}
+QScrollBar:vertical {
+    border: none;
+    background: #FDFDFD;
+    width: 12px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: #D1D1D6;
+    min-height: 30px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #C7C7CC;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
 }
 """
 
@@ -227,7 +240,9 @@ SKIP_SEGS = {'.plt','.plt.got','.plt.sec','extern','.extern','.got','.got.plt','
 SYS_PREFIX = ('__cxa_','__gxx_','__gnu_','__libc_','__ctype_','_GLOBAL_','_init','_fini','_start','atexit','malloc','free','memcpy','memset','strlen','printf','scanf','fprintf','sprintf','operator','std::','boost::','__stack_chk','__security','_security','__report','__except','__imp_','__x86.','__do_global')
 SYS_MODULES = ('kernel32.','ntdll.','user32.','advapi32.','msvcrt.','ucrtbase.','ws2_32.','libc.so','libm.so','libpthread','foundation.','corefoundation.','uikit.')
 
-DEFAULT_PROMPT = """You are an expert reverse engineer. Analyze the decompiled code and suggest a descriptive function name.
+DEFAULT_PROMPT = """You are an expert reverse engineer performing function naming. Decision Rules:
+1) If it strongly matches a known/common routine, use canonical-style naming (symbol recovery mode).
+2) Otherwise generate a descriptive snake_case name reflecting WHAT the function does (descriptive mode).
 
 Rules:
 - Use snake_case format
@@ -239,8 +254,9 @@ Rules:
 
 Output ONLY the function name, nothing else."""
 
-DEFAULT_BATCH_PROMPT = """You are an expert reverse engineer. For each function below, suggest a descriptive snake_case name.
-
+DEFAULT_BATCH_PROMPT = """You are an expert reverse engineer. For each function:
+1) If it strongly matches a known/common routine, use canonical-style naming (symbol recovery mode).
+2) Otherwise generate a descriptive snake_case name reflecting WHAT the function does (descriptive mode).
 Rules:
 - snake_case format only
 - Be specific: parse_config_file, validate_user_token, send_heartbeat_packet
@@ -466,8 +482,9 @@ def clean_name(name, existing=None):
     if name in ('function','func','sub','unknown','unnamed','noname'): return None
     
     # Add prefix as requested
-    if not name.startswith('fn_b_'):
-        name = f"fn_b_{name}"
+    prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
+    if not name.startswith(prefix):
+        name = f"{prefix}{name}"
 
     if existing:
         orig, cnt = name, 1
@@ -542,11 +559,11 @@ class VirtualFuncModel(QAbstractTableModel):
             return Qt.AlignLeft | Qt.AlignVCenter
 
         elif role == Qt.ForegroundRole and c==4:
-            # Color code status
-            if f.status == 'OK': return QColor('#4EC9B0') # Green-ish
-            if f.status == 'Skip': return QColor('#808080') # Gray
-            if f.status == 'Applied': return QColor('#569CD6') # Blue-ish
-            if f.status == 'Pending': return QColor('#DCDCAA') # Yellow-ish
+            # Color code status (Light theme colors)
+            if f.status == 'OK': return QColor('#34C759') # Apple Green
+            if f.status == 'Skip': return QColor('#8E8E93') # Apple Gray
+            if f.status == 'Applied': return QColor('#007AFF') # Apple Blue
+            if f.status == 'Pending': return QColor('#FF9500') # Apple Orange
             
         return None
 
@@ -605,6 +622,7 @@ class AnalyzeWorker(QThread):
     progress = Signal(int, int)
     finished = Signal(int)
     log = Signal(str, str)
+    update_status = Signal(str)
 
     def __init__(self, cfg, items, existing, sys_prompt, batch_size):
         super().__init__()
@@ -636,8 +654,13 @@ class AnalyzeWorker(QThread):
             self.progress.emit(done, total)
             
             if self.needs_cooldown:
-                time.sleep(22)
+                self.log.emit('Rate limit reached. Cooling down...', 'info')
+                for s in range(22, 0, -1):
+                    if not self.running: break
+                    self.update_status.emit(f'Cooling down ({s}s)')
+                    time.sleep(1)
                 self.needs_cooldown = False
+                self.update_status.emit('')
 
         self.finished.emit(done)
 
@@ -765,162 +788,12 @@ class AnalyzeWorker(QThread):
             
         return names[:expected], actual_count
 
-class RenamerSettingsDialog(QDialog):
-    def __init__(self, config, parent=None):
-        super().__init__(parent)
-        self.config = config
-        self.setWindowTitle("Settings")
-        self.resize(500, 350)
-        self.setStyleSheet(STYLES)
-        
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        
-        # API Provider settings
-        layout.addWidget(QLabel("API Provider:"))
-        self.provider_cb = QComboBox()
-        self.provider_cb.addItems(["OpenAI", "Anthropic", "Ollama", "LMStudio", "OpenAICompatible", "DeepSeek", "Gemini"])
-        layout.addWidget(self.provider_cb)
-
-        layout.addWidget(QLabel("API URL:"))
-        self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("https://api.openai.com/v1")
-        layout.addWidget(self.url_edit)
-
-        layout.addWidget(QLabel("Model Code/Name:"))
-        self.model_edit = QLineEdit()
-        self.model_edit.setPlaceholderText("gpt-4")
-        layout.addWidget(self.model_edit)
-
-        # API Key
-        layout.addWidget(QLabel("API Key:"))
-        self.key_edit = QLineEdit()
-        layout.addWidget(self.key_edit)
-        
-        # Performance Section
-        layout.addSpacing(10)
-        layout.addWidget(QLabel("<b>Bulk Renamer Settings</b>"))
-        perf_grp = QGroupBox("Optimization")
-        perf_layout = QGridLayout()
-        
-        perf_layout.addWidget(QLabel("Batch Size:"), 0, 0)
-        self.batch_spin = QSpinBox()
-        self.batch_spin.setRange(1, 50)
-        self.batch_spin.setValue(getattr(self.config, 'batch_size', 10))
-        perf_layout.addWidget(self.batch_spin, 0, 1)
-
-        perf_layout.addWidget(QLabel("Parallel Workers:"), 0, 2)
-        self.workers_spin = QSpinBox()
-        self.workers_spin.setRange(1, 10)
-        self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 1))
-        perf_layout.addWidget(self.workers_spin, 0, 3)
-        
-        perf_grp.setLayout(perf_layout)
-        layout.addWidget(perf_grp)
-        layout.addStretch()
-
-        # Select current provider
-        curr = self.config.active_provider
-        idx = self.provider_cb.findText(curr, Qt.MatchFixedString) if curr else -1
-        if idx >= 0: self.provider_cb.setCurrentIndex(idx)
-        else: self.provider_cb.setCurrentText(curr if curr else "OpenAI")
-
-        # Connect
-        self.provider_cb.currentTextChanged.connect(self.load_for_provider)
-        self.load_for_provider(self.provider_cb.currentText())
-
-        # Save Button
-        try:
-            btns = QDialogButtonBox.StandardButton(QDialogButtonBox.Save.value | QDialogButtonBox.Cancel.value)
-        except AttributeError:
-            btns = QDialogButtonBox.Save | QDialogButtonBox.Cancel
-
-        btn_box = QDialogButtonBox(btns)
-        btn_box.accepted.connect(self.save)
-        btn_box.rejected.connect(self.reject)
-        layout.addWidget(btn_box)
-
-    def load_for_provider(self, p):
-        p = p.lower()
-        if p == 'openai':
-            self.url_edit.setText(self.config.openai_url)
-            self.model_edit.setText(self.config.openai_model)
-            self.key_edit.setText(self.config.openai_key)
-        elif p == 'deepseek':
-            self.url_edit.setText(self.config.deepseek_url)
-            self.model_edit.setText(self.config.deepseek_model)
-            self.key_edit.setText(self.config.deepseek_key)
-        elif p == 'anthropic':
-            self.url_edit.setText(self.config.anthropic_url)
-            self.model_edit.setText(self.config.anthropic_model)
-            self.key_edit.setText(self.config.anthropic_key)
-        elif p == 'ollama':
-            self.url_edit.setText(self.config.ollama_host)
-            self.model_edit.setText(self.config.ollama_model)
-            self.key_edit.setText("ollama") 
-        elif p == 'lmstudio':
-            self.url_edit.setText(self.config.lmstudio_url)
-            self.model_edit.setText(self.config.lmstudio_model)
-            self.key_edit.setText(self.config.lmstudio_key)
-        elif p == 'openaicompatible':
-            self.url_edit.setText(self.config.custom_url)
-            self.model_edit.setText(self.config.custom_model)
-            self.key_edit.setText(self.config.custom_key)
-        elif p == 'gemini':
-            self.url_edit.setText('google_generative_ai')
-            self.model_edit.setText(self.config.gemini_model)
-            self.key_edit.setText(self.config.gemini_key)
-
-    def save(self):
-        p = self.provider_cb.currentText()
-        self.config.active_provider = p 
-        
-        pl = p.lower()
-        url = self.url_edit.text().strip()
-        model = self.model_edit.text().strip()
-        key = self.key_edit.text().strip()
-        
-        if pl == 'openai':
-            self.config.openai_url = url
-            self.config.openai_model = model
-            self.config.openai_key = key
-        elif pl == 'deepseek':
-            self.config.deepseek_url = url
-            self.config.deepseek_model = model
-            self.config.deepseek_key = key
-        elif pl == 'anthropic':
-            self.config.anthropic_url = url
-            self.config.anthropic_model = model
-            self.config.anthropic_key = key
-        elif pl == 'ollama':
-            self.config.ollama_host = url
-            self.config.ollama_model = model
-        elif pl == 'lmstudio':
-            self.config.lmstudio_url = url
-            self.config.lmstudio_model = model
-            self.config.lmstudio_key = key
-            self.config.custom_url = url
-            self.config.custom_model = model
-            self.config.custom_key = key
-        elif pl == 'gemini':
-             self.config.gemini_key = key
-             self.config.gemini_model = model
-
-        try:
-            # Save Performance
-            self.config.batch_size = self.batch_spin.value()
-            self.config.parallel_workers = self.workers_spin.value()
-            self.config.save()
-            self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save settings: {e}")
 
 class BulkRenamer(QDialog):
     def __init__(self, pn_config, parent=None):
         super().__init__(parent)
-        self.pn_config = pn_config
-        self.cfg = self.build_cfg(pn_config)
-        self.model = None
+        self.pn_config = CONFIG
+        self.workers = []
         self.is_loading = False
         self.load_timer = None
         self.func_iter = None
@@ -929,9 +802,17 @@ class BulkRenamer(QDialog):
         self.workers = []
         self.existing_names = set()
         self.setup_ui()
+        self.loader = None
+        self.worker = None
+
+        # Animated status indicator
+        self.busy_dots = 0
+        self.busy_timer = QTimer(self)
+        self.busy_timer.timeout.connect(self.on_busy_tick)
 
     def open_settings(self):
-        d = RenamerSettingsDialog(self.pn_config, self)
+        from pseudonote.view import SettingsDialog
+        d = SettingsDialog(self.pn_config, self)
         if d.exec_():
             # Refresh local config from updated pn_config
             self.cfg = self.build_cfg(self.pn_config)
@@ -944,6 +825,7 @@ class BulkRenamer(QDialog):
             'provider': c.active_provider,
             'batch_size': getattr(c, 'batch_size', 10),
             'parallel_workers': getattr(c, 'parallel_workers', 1),
+            'rename_prefix': getattr(c, 'rename_prefix', 'fn_b_'),
             'use_custom_prompt': False,
             'custom_prompt': ''
         }
@@ -993,12 +875,14 @@ class BulkRenamer(QDialog):
 
         # Toolbar
         tb_widget = QWidget()
+        tb_widget.setObjectName("ToolbarRow")
+        tb_widget.setStyleSheet("QWidget#ToolbarRow { background: transparent; }")
         tb = QHBoxLayout(tb_widget)
         tb.setContentsMargins(0, 5, 0, 5)
         
         self.load_btn = QPushButton('Load All sub_*')
         self.load_btn.setObjectName("primary")
-        self.load_btn.clicked.connect(lambda: self.load_funcs())
+        self.load_btn.clicked.connect(lambda: self.load_funcs(prefix='sub_', append=True))
         tb.addWidget(self.load_btn)
 
         btn_lib = QPushButton('Load unknown_libname_*')
@@ -1006,18 +890,15 @@ class BulkRenamer(QDialog):
         btn_lib.clicked.connect(lambda: self.load_funcs(prefix='unknown_libname_', append=True))
         tb.addWidget(btn_lib)
 
-        btn_fnb = QPushButton('Load fn_b_* (renamed functions)')
+        prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
+        btn_fnb = QPushButton(f'Load {prefix}* (renamed functions)')
         btn_fnb.setObjectName("primary")
-        btn_fnb.clicked.connect(lambda: self.load_funcs(prefix='fn_b_', append=True))
+        btn_fnb.clicked.connect(lambda: self.load_funcs(prefix=prefix, append=True))
         tb.addWidget(btn_fnb)
         
-        lb = QPushButton('Load Current')
+        lb = QPushButton('Load Current Function')
         lb.clicked.connect(self.load_current)
         tb.addWidget(lb)
-        
-        rlb = QPushButton('Load Range')
-        rlb.clicked.connect(self.load_range)
-        tb.addWidget(rlb)
         
         tb.addSpacing(10)
         tb.addWidget(QLabel('|'))
@@ -1070,7 +951,9 @@ class BulkRenamer(QDialog):
 
         # Log Panel (Collapsible feel via small height)
         log_header = QHBoxLayout()
-        log_header.addWidget(QLabel("Activity Log"))
+        log_lbl = QLabel("Activity Log")
+        log_lbl.setStyleSheet("background: transparent; color: #666666; font-weight: 600; font-size: 10pt;")
+        log_header.addWidget(log_lbl)
         log_header.addStretch()
         
         # Unload button
@@ -1085,24 +968,33 @@ class BulkRenamer(QDialog):
         log_header.addWidget(cb)
         bottom.addLayout(log_header)
 
+        # Merged Log and Progress area
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumHeight(100)
-        self.log.setStyleSheet("font-family: Consolas; font-size: 9pt;")
+        self.log.setMaximumHeight(130) # Slightly taller since it now holds status
+        self.log.setStyleSheet("""
+            QTextEdit {
+                font-family: 'Segoe UI', Consolas; 
+                font-size: 9pt; 
+                background-color: transparent; 
+                border: 1px solid #E0E0E0; 
+                border-radius: 6px;
+                color: #333333;
+            }
+        """)
         bottom.addWidget(self.log)
         
-        # Progress Bar overlay logic could be added, but simple one for now
         self.progress = QProgressBar()
         self.progress.setVisible(False)
-        self.progress.setFixedHeight(12)
+        self.progress.setFixedHeight(16) # Slightly taller for text
+        self.progress.setTextVisible(True)
+        self.progress.setAlignment(Qt.AlignCenter)
         bottom.addWidget(self.progress)
-        self.status_lbl = QLabel("")
-        bottom.addWidget(self.status_lbl)
 
         # Action Buttons bar
         actions = QHBoxLayout()
         
-        self.analyze_btn = QPushButton('Analyze Selected Functions')
+        self.analyze_btn = QPushButton('Analyze Selected Function')
         self.analyze_btn.setObjectName("primary")
         self.analyze_btn.setMinimumHeight(32)
         self.analyze_btn.setMinimumWidth(180)
@@ -1120,12 +1012,12 @@ class BulkRenamer(QDialog):
         
         # Selection Utils
         ab = QPushButton('Select All')
-        ab.setFixedWidth(100)
+        ab.setFixedWidth(150)
         ab.clicked.connect(lambda: self.model.toggle_all(True))
         actions.addWidget(ab)
         
         nb = QPushButton('Select None')
-        nb.setFixedWidth(100)
+        nb.setFixedWidth(150)
         nb.clicked.connect(lambda: self.model.toggle_all(False))
         actions.addWidget(nb)
         
@@ -1135,6 +1027,7 @@ class BulkRenamer(QDialog):
         self.apply_btn.setObjectName("success")
         self.apply_btn.setMinimumHeight(32)
         self.apply_btn.setMinimumWidth(150)
+        self.apply_btn.setEnabled(False) # Grey out until suggestions exist
         self.apply_btn.clicked.connect(self.apply_renames)
         actions.addWidget(self.apply_btn)
         
@@ -1144,7 +1037,7 @@ class BulkRenamer(QDialog):
     def on_table_context_menu(self, pos):
         menu = QMenu(self)
         menu.setStyleSheet(STYLES)
-        act = menu.addAction("⚙️ Configure API Settings...")
+        act = menu.addAction("⚙️ Configure Settings...")
         act.triggered.connect(self.open_settings)
         
         menu.addSeparator()
@@ -1159,10 +1052,36 @@ class BulkRenamer(QDialog):
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
     def add_log(self, msg, lv='info'):
-        colors = {'info':'#CCCCCC','ok':'#4EC9B0','err':'#F44336','warn':'#DCDCAA'}
-        self.log.append(f'<span style="color:{colors.get(lv,"#CCCCCC")}">[{time.strftime("%H:%M:%S")}] {msg}</span>')
+        colors = {'info':'#3A3A3C','ok':'#34C759','err':'#FF3B30','warn':'#FF9500'}
+        self.log.append(f'<span style="color:{colors.get(lv,"#3A3A3C")}">[{time.strftime("%H:%M:%S")}] {msg}</span>')
         sb = self.log.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    def on_busy_tick(self):
+        self.busy_dots = (self.busy_dots + 1) % 4
+        if self.progress.isVisible():
+            fmt = self.progress.format().rstrip('.')
+            self.progress.setFormat(fmt + ('.' * self.busy_dots))
+
+    def update_status(self, text):
+        if not text:
+            self.busy_timer.stop()
+            return
+            
+        # If it's a progress update, show it on the progress bar if visible
+        if self.progress.isVisible() and any(x in text for x in ["Scanning", "Analyzing", "Cooling down"]):
+            self.progress.setFormat(f"{text}  %p%")
+        else:
+            # Log significant status changes to the activity log, but skip per-second updates
+            if not any(text.startswith(x) for x in ["Scanning", "Analyzing", "Cooling down"]):
+                self.add_log(text, 'info')
+        
+        if "Analyzing" in text or "Cooling down" in text:
+            if not self.busy_timer.isActive():
+                self.busy_dots = 0
+                self.busy_timer.start(500)
+        else:
+            self.busy_timer.stop()
 
     def update_count(self):
         v, t = self.model.rowCount(), self.model.total()
@@ -1170,6 +1089,10 @@ class BulkRenamer(QDialog):
         txt = f'{v:,}/{t:,} functions'
         if sug: txt += f' <span style="color:#4EC9B0">({sug} suggestions)</span>'
         self.count_lbl.setText(txt)
+        
+        # Update Apply button: only enable if we have suggestions AND not busy
+        if not self.workers and not self.is_loading:
+            self.apply_btn.setEnabled(sug > 0)
 
     def load_funcs(self, prefix='sub_', append=False):
         self.load_prefix = prefix
@@ -1185,10 +1108,13 @@ class BulkRenamer(QDialog):
         self.is_loading = True
         self.progress.setVisible(True)
         self.progress.setRange(0,0)
-        self.status_lbl.setText(f'Scanning for {prefix}*...')
+        self.update_status(f'Scanning for {prefix}*...')
+        
+        # UI State: Loading is considered a busy/analysing state for these buttons
         self.load_btn.setEnabled(False)
         self.analyze_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        
         self.func_iter = iter(idautils.Functions())
         self.load_timer = QTimer(self)
         self.load_timer.timeout.connect(self.load_batch)
@@ -1216,7 +1142,7 @@ class BulkRenamer(QDialog):
                 return
 
         if self.scanned % 10000 < 2000:
-            self.status_lbl.setText(f'Scanning... {self.scanned:,} checked | Found {len(self.temp_funcs):,}')
+            self.update_status(f'Scanning... {self.scanned:,} checked | Found {len(self.temp_funcs):,}')
 
     def finish_load(self):
         self.is_loading = False
@@ -1228,7 +1154,9 @@ class BulkRenamer(QDialog):
         self.progress.setVisible(False)
         self.update_count()
         self.add_log(f'Loaded {self.model.total():,} functions', 'ok')
-        self.status_lbl.setText('')
+        self.update_status('')
+        
+        # UI State: Not busy anymore
         self.load_btn.setEnabled(True)
         self.analyze_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
@@ -1246,27 +1174,6 @@ class BulkRenamer(QDialog):
             self.update_count()
             self.add_log(f'Loaded current: {name}', 'ok')
 
-    def load_range(self):
-        start, ok1 = QInputDialog.getText(self, 'Range', 'Start address (hex):')
-        if not ok1: return
-        end, ok2 = QInputDialog.getText(self, 'Range', 'End address (hex):')
-        if not ok2: return
-        try:
-            start_ea = int(start, 16)
-            end_ea = int(end, 16)
-        except:
-            QMessageBox.warning(self, 'Error', 'Invalid hex address')
-            return
-
-        funcs = []
-        for ea in idautils.Functions(start_ea, end_ea):
-            name = idc.get_func_name(ea)
-            if name and name.startswith('sub_'):
-                funcs.append(FuncData(ea, name))
-
-        self.model.set_data(funcs)
-        self.update_count()
-        self.add_log(f'Loaded {len(funcs)} functions in range', 'ok')
 
     def get_existing(self):
         ex = set()
@@ -1285,6 +1192,9 @@ class BulkRenamer(QDialog):
             QMessageBox.warning(self, 'Warning', 'Load functions first')
             return
 
+        # Ensure we use up-to-date settings from CONFIG
+        self.cfg = self.build_cfg(CONFIG)
+        
         items = self.model.get_checked()
         if not items:
             QMessageBox.warning(self, 'Warning', 'No functions selected')
@@ -1306,8 +1216,12 @@ class BulkRenamer(QDialog):
         self.workers = []
 
         self.existing_names = self.get_existing()
+        
+        # UI State: Analysing
         self.analyze_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self.apply_btn.setEnabled(False) # Also grey out apply while analysing
+        
         self.progress.setVisible(True)
         self.progress.setRange(0, len(items))
         self.progress.setValue(0)
@@ -1329,6 +1243,7 @@ class BulkRenamer(QDialog):
             worker.progress.connect(self.on_progress)
             worker.finished.connect(self.on_worker_finished)
             worker.log.connect(self.add_log)
+            worker.update_status.connect(self.update_status)
             self.workers.append(worker)
             worker.start()
 
@@ -1349,7 +1264,7 @@ class BulkRenamer(QDialog):
         self.completed += done - getattr(self, '_last_done', 0)
         self._last_done = done
         self.progress.setValue(min(self.completed, self.total_items))
-        self.status_lbl.setText(f'Analyzing: {self.completed:,}/{self.total_items:,}')
+        self.update_status(f'Analyzing: {self.completed:,}/{self.total_items:,}')
 
     def on_worker_finished(self, count):
         sender = self.sender()
@@ -1362,10 +1277,14 @@ class BulkRenamer(QDialog):
     def finish_analyze(self):
         self.progress.setVisible(False)
         suggestions = sum(1 for f in self.model.funcs if f.suggested)
-        self.status_lbl.setText(f'Done: {suggestions:,} suggestions')
+        self.update_status(f'Done: {suggestions:,} suggestions')
         self.add_log(f'Analysis complete: {suggestions:,} suggestions', 'ok')
+        
+        # UI State: Finished analysing
         self.analyze_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.apply_btn.setEnabled(suggestions > 0)
+        
         self.workers = []
         self._last_done = 0
 
@@ -1385,9 +1304,13 @@ class BulkRenamer(QDialog):
         self.add_log('Stopped', 'warn')
         self.progress.setVisible(False)
         self.update_count()
+        
+        # UI State: Stopped/Not busy
         self.load_btn.setEnabled(True)
         self.analyze_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        suggestions = sum(1 for f in self.model.funcs if f.suggested)
+        self.apply_btn.setEnabled(suggestions > 0)
 
     def jump_to(self, idx):
         f = self.model.get_func(idx.row())
@@ -1413,4 +1336,4 @@ class BulkRenamer(QDialog):
         self.model.refresh_rows(indices)
         self.update_count()
         self.add_log(f'Applied {applied:,} renames', 'ok')
-        self.status_lbl.setText(f'Applied {applied:,} renames')
+        self.update_status(f'Applied {applied:,} renames')
