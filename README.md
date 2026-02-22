@@ -11,16 +11,16 @@ pip install openai httpx
 
 ### 3. Set the API Key for the LLM
 
-Open the plugin **Right-Click** > **PseudoNote** > **Configure Settings**
+**Right-Click** on Pseudocode/IDA-view > **PseudoNote** > **Configure Settings**
 
-<img width="502" height="432" alt="image" src="https://github.com/user-attachments/assets/5a40018d-6169-446e-9cec-2d06653825df" />
+<img width="505" height="432" alt="image" src="https://github.com/user-attachments/assets/dda7c949-fd9a-4dd6-b66e-c9f6c4682fc6" />
 
 Test the connection to the API before use the LLM feature.
 
 Once saved, a .ini file will be written to the installation folder. If it fails due to permission issues, the .ini file will be saved in the home directory.
 
 ### 4. Use
-- **Right-Click**: See options in Pseudocode/Disassembly.
+**Right-Click**: See options in Pseudocode/Disassembly.
 
 <img width="1252" height="767" alt="image" src="https://github.com/user-attachments/assets/b303633e-dacf-4c1a-b8ca-8c6ae06c05f4" />
 
@@ -36,3 +36,6 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 9. Function call Highlighting - Highlight call and jump instructions/functions directly in IDA views and Pseudocode view.
 10. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio. (Currently, only OpenAI and OpenAI-compatible providers have been fully tested.)
 11. Save all generated data directly into the IDA database (.idb).
+
+<img width="1535" height="821" alt="image" src="https://github.com/user-attachments/assets/514f7c28-c60b-4e81-a6f0-e03a867ab36e" />
+
