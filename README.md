@@ -31,9 +31,9 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 4. Bulk functions renamer
 5. Automatically generate C function prototypes and type definitions.
 6. Analyst Notes - Integrated Markdown editor with live preview with markdown toolbar.
-7. Logical Flow - Generate high-level, text-based execution flow maps.
-8. AI Commenting - Insert structured section comments into the pseudocode (Only pseudocode).
-9. Function call Highlighting - Highlight call and jump instructions/functions directly in IDA views and Pseudocode view.
+7. Generate high-level, text-based execution tree graph flow.
+8. Insert section comments into the pseudocode (Only pseudocode).
+9. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
 10. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio. (Currently, only OpenAI and OpenAI-compatible providers have been fully tested.)
 11. Save all generated data directly into the IDA database (.idb).
 
