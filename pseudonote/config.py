@@ -66,6 +66,9 @@ class Config:
         self.batch_size = 10
         self.parallel_workers = 1
         self.rename_prefix = "fn_b_"
+        self.function_prefix = "fn_"
+        self.use_rename_prefix = True
+        self.use_bulk_prefix = True
         self.filter_system = True
         self.filter_empty = True
 
@@ -176,6 +179,9 @@ class Config:
             self.batch_size = parser.getint("Analysis", "BATCH_SIZE", fallback=10)
             self.parallel_workers = parser.getint("Analysis", "WORKERS", fallback=1)
             self.rename_prefix = parser.get("Analysis", "RENAME_PREFIX", fallback="fn_b_")
+            self.function_prefix = parser.get("Analysis", "FUNCTION_PREFIX", fallback="fn_")
+            self.use_rename_prefix = parser.getboolean("Analysis", "USE_PREFIX", fallback=True)
+            self.use_bulk_prefix = parser.getboolean("Analysis", "USE_BULK_PREFIX", fallback=True)
             self.filter_system = parser.getboolean("Analysis", "FILTER_SYS", fallback=True)
             self.filter_empty = parser.getboolean("Analysis", "FILTER_EMPTY", fallback=True)
 
@@ -237,6 +243,9 @@ class Config:
         parser.set("Analysis", "BATCH_SIZE", str(self.batch_size))
         parser.set("Analysis", "WORKERS", str(self.parallel_workers))
         parser.set("Analysis", "RENAME_PREFIX", self.rename_prefix)
+        parser.set("Analysis", "FUNCTION_PREFIX", self.function_prefix)
+        parser.set("Analysis", "USE_PREFIX", str(self.use_rename_prefix))
+        parser.set("Analysis", "USE_BULK_PREFIX", str(self.use_bulk_prefix))
         parser.set("Analysis", "FILTER_SYS", str(self.filter_system))
         parser.set("Analysis", "FILTER_EMPTY", str(self.filter_empty))
 

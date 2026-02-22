@@ -25,7 +25,7 @@ def _get_ai():
     return _ai_mod.AI_CLIENT
 
 _view_instance = None
-START_TEXT = "Select a function to convert"
+START_TEXT = "Click the button to generate the code"
 plugin_instance = None
 
 
@@ -103,7 +103,7 @@ if QtWidgets:
             super().__init__(parent)
             self.config = config
             self.setWindowTitle("PseudoNote Settings")
-            self.resize(500, 400)
+            self.resize(700, 500)
             self.providers = ["OpenAI", "Anthropic", "DeepSeek", "Gemini", "Ollama", "LMStudio", "OpenAICompatible"]
             self.temp_settings = {
                 "OpenAI": {"key": config.openai_key, "url": config.openai_url, "model": config.openai_model},
@@ -139,6 +139,9 @@ if QtWidgets:
             self.bulk_tab = QtWidgets.QWidget()
             self.init_bulk_tab()
             self.tabs.addTab(self.bulk_tab, "Bulk Renamer")
+            self.renaming_tab = QtWidgets.QWidget()
+            self.init_rename_tab()
+            self.tabs.addTab(self.renaming_tab, "Function rename")
             self.log_tab = QtWidgets.QWidget()
             self.init_log_tab()
             self.tabs.addTab(self.log_tab, "Debug Logs")
@@ -249,10 +252,18 @@ if QtWidgets:
             self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 1))
             fl.addRow("Parallel Batch Workers:", self.workers_spin)
             
+            self.disable_bulk_prefix_cb = QtWidgets.QCheckBox("Disable prefix")
+            self.disable_bulk_prefix_cb.setChecked(not getattr(self.config, 'use_bulk_prefix', True))
+            fl.addRow("", self.disable_bulk_prefix_cb)
+            
             self.prefix_edit = QtWidgets.QLineEdit()
             self.prefix_edit.setText(getattr(self.config, 'rename_prefix', 'fn_b_'))
             self.prefix_edit.setPlaceholderText("fn_b_")
             fl.addRow("Rename Prefix:", self.prefix_edit)
+            
+            # Gray out logic for bulk
+            self.disable_bulk_prefix_cb.toggled.connect(lambda checked: self.prefix_edit.setEnabled(not checked))
+            self.prefix_edit.setEnabled(not self.disable_bulk_prefix_cb.isChecked())
             
             grp.setLayout(fl)
             layout.addWidget(grp)
@@ -302,6 +313,38 @@ if QtWidgets:
             self.save_fields_to_temp(self.current_provider)
             self.current_provider = text
             self.load_fields(text)
+
+        def init_rename_tab(self):
+            layout = QtWidgets.QVBoxLayout()
+            
+            grp = QtWidgets.QGroupBox("Function Renaming Settings")
+            fl = QtWidgets.QFormLayout()
+            
+            self.disable_prefix_cb = QtWidgets.QCheckBox("Disable prefix")
+            # If use_rename_prefix is True, disable_prefix is False
+            use_pref = getattr(self.config, 'use_rename_prefix', True)
+            self.disable_prefix_cb.setChecked(not use_pref)
+            fl.addRow("", self.disable_prefix_cb)
+            
+            self.func_prefix_edit = QtWidgets.QLineEdit()
+            self.func_prefix_edit.setText(getattr(self.config, 'function_prefix', 'fn_'))
+            self.func_prefix_edit.setPlaceholderText("fn_ (empty for none)")
+            fl.addRow("Rename prefix:", self.func_prefix_edit)
+
+            # Gray out logic
+            self.disable_prefix_cb.toggled.connect(lambda checked: self.func_prefix_edit.setEnabled(not checked))
+            self.func_prefix_edit.setEnabled(not self.disable_prefix_cb.isChecked())
+            
+            grp.setLayout(fl)
+            layout.addWidget(grp)
+            
+            info = QtWidgets.QLabel("This prefix applies to 'Rename Function' context menu actions (both code and malware). You can leave it empty or uncheck the box above if you don't want any prefix.")
+            info.setStyleSheet("color: gray; font-style: italic;")
+            info.setWordWrap(True)
+            layout.addWidget(info)
+            
+            layout.addStretch()
+            self.renaming_tab.setLayout(layout)
 
         def save_fields_to_temp(self, provider):
             if provider in self.temp_settings:
@@ -383,7 +426,12 @@ if QtWidgets:
             # Save Performance
             c.batch_size = self.batch_spin.value()
             c.parallel_workers = self.workers_spin.value()
+            c.use_bulk_prefix = not self.disable_bulk_prefix_cb.isChecked()
             c.rename_prefix = self.prefix_edit.text().strip() or "fn_b_"
+            
+            # Save Function Rename
+            c.use_rename_prefix = not self.disable_prefix_cb.isChecked()
+            c.function_prefix = self.func_prefix_edit.text().strip()
             
             c.save()
             self.accept()
@@ -411,11 +459,7 @@ if QtWidgets:
             self.explanation_viewer = None
             self.note_save_btn = None
             self.note_edit_btn = None
-            self.note_save_btn = None
-            self.note_edit_btn = None
             self.explain_code_btn = None
-            self.explain_malware_btn = None
-            self.suggest_name_btn = None
             self.explain_malware_btn = None
             self.suggest_name_btn = None
             self.gflow_btn = None
@@ -424,9 +468,18 @@ if QtWidgets:
             self.highlighter = None
             self.lang_combo = None
             self.current_lang = "C"
+            self.notes_light_mode = True
+            self.code_light_mode = False
+            self.highlighters = []
+            self.code_pages = []
+            self.status_pages = []
 
         def OnCreate(self, form):
             self.parent = self.FormToPyQtWidget(form)
+            # Reset trackers to avoid dangling references during init
+            self.highlighters = []
+            self.code_pages = []
+            self.status_pages = []
             self.init_ui()
             self.hooks = ScreenHooks(self)
             self.hooks.hook()
@@ -435,6 +488,11 @@ if QtWidgets:
             self.refresh_ui(force=True)
 
         def init_ui(self):
+            # Also reset in init_ui for safety
+            self.highlighters = []
+            self.code_pages = []
+            self.status_pages = []
+            
             layout = QtWidgets.QVBoxLayout()
             layout.setContentsMargins(0, 0, 0, 0)
             self.splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -464,6 +522,13 @@ if QtWidgets:
             self.title_label.setStyleSheet("color: #CCCCCC; font-weight: bold;")
             ch_layout.addWidget(self.title_label)
             ch_layout.addStretch()
+
+            self.code_theme_toggle_btn = QtWidgets.QPushButton("☀")
+            self.code_theme_toggle_btn.setFixedSize(24, 24)
+            self.code_theme_toggle_btn.setToolTip("Toggle Light/Dark Mode for Code")
+            self.code_theme_toggle_btn.setStyleSheet("QPushButton { border: none; color: #CCCCCC; background: transparent; font-size: 16px; } QPushButton:hover { color: #FFFFFF; background-color: #3E3E42; border-radius: 3px; }")
+            self.code_theme_toggle_btn.clicked.connect(self.on_toggle_code_theme)
+            ch_layout.addWidget(self.code_theme_toggle_btn)
 
             self.settings_btn = QtWidgets.QPushButton("⚙")
             self.settings_btn.setFixedSize(24, 24)
@@ -504,7 +569,7 @@ if QtWidgets:
             cm_sp_layout = QtWidgets.QVBoxLayout()
             cm_sp_layout.setAlignment(QtCore.Qt.AlignCenter)
             self.comments_ai_status_label = QtWidgets.QLabel(START_TEXT)
-            self.comments_ai_status_label.setStyleSheet("color: #888888; font-size: 14px; font-style: italic; background-color: transparent;")
+            self.comments_ai_status_label.setStyleSheet("color: #888888; font-size: 16px; background-color: transparent;")
             cm_sp_layout.addWidget(self.comments_ai_status_label)
             cm_status_page.setLayout(cm_sp_layout)
             self.comments_ai_stack.addWidget(cm_status_page)
@@ -515,12 +580,16 @@ if QtWidgets:
             self.comments_ai_stack.addWidget(self.comments_ai_editor)
 
             cm_widget = QtWidgets.QWidget()
-            cm_widget.setStyleSheet("background-color: #1E1E1E;")
             cm_layout = QtWidgets.QVBoxLayout()
             cm_layout.setContentsMargins(0, 5, 0, 0)
             cm_layout.addWidget(self.comments_ai_stack)
             cm_widget.setLayout(cm_layout)
             self.code_tab_widget.addTab(cm_widget, "Code Comments")
+            
+            self.code_pages.extend([self.asm_page_widget, self.c_page_widget, cm_widget])
+            # Assuming status_page in create_code_page is what's added to stacks
+            # Extracting status pages from stacks
+            self.status_pages.extend([self.asm_status_stack.widget(0), self.c_status_stack.widget(0), cm_status_page])
 
             # Corner widget for code tabs
             self.corner_widget = QtWidgets.QWidget()
@@ -591,6 +660,14 @@ if QtWidgets:
             self.func_name_label.setStyleSheet("color: #CCCCCC; font-weight: bold; margin-left: 5px;")
             nh_layout.addWidget(self.func_name_label)
             nh_layout.addStretch()
+
+            self.theme_toggle_btn = QtWidgets.QPushButton("☀")
+            self.theme_toggle_btn.setFixedSize(24, 24)
+            self.theme_toggle_btn.setToolTip("Toggle Light/Dark Mode for Notes")
+            self.theme_toggle_btn.setStyleSheet("QPushButton { border: none; color: #CCCCCC; background: transparent; font-size: 16px; } QPushButton:hover { color: #FFFFFF; background-color: #3E3E42; border-radius: 3px; }")
+            self.theme_toggle_btn.clicked.connect(self.on_toggle_notes_theme)
+            nh_layout.addWidget(self.theme_toggle_btn)
+
             n_header.setLayout(nh_layout)
             note_layout.addWidget(n_header)
 
@@ -651,7 +728,6 @@ if QtWidgets:
             self.note_viewer.setOpenExternalLinks(True)
             self.note_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 11pt; }")
             self.note_viewer.setPlaceholderText("Click 'Edit' button to add notes.")
-            self.note_stack.addWidget(self.note_viewer)
             self.note_stack.addWidget(self.note_viewer)
 
             self.note_editor = MarkdownEditor()
@@ -783,12 +859,10 @@ if QtWidgets:
 
         def create_code_page(self, mode):
              page = QtWidgets.QWidget()
-             page.setStyleSheet("background-color: #1E1E1E;")
              layout = QtWidgets.QVBoxLayout()
              layout.setContentsMargins(0, 5, 0, 0)
              stack = QtWidgets.QStackedWidget()
              status_page = QtWidgets.QWidget()
-             status_page.setStyleSheet("background-color: #1E1E1E;")
              sp_layout = QtWidgets.QVBoxLayout()
              sp_layout.setAlignment(QtCore.Qt.AlignCenter)
              status_label = QtWidgets.QLabel(START_TEXT)
@@ -801,6 +875,7 @@ if QtWidgets:
              highlighter = None
              if MultiHighlighter:
                  highlighter = MultiHighlighter(editor.document())
+                 self.highlighters.append(highlighter)
              stack.addWidget(editor)
              layout.addWidget(stack)
              btn_text = f"Convert to {self.current_lang} (AI)"
@@ -1022,11 +1097,18 @@ if QtWidgets:
             buttons = [self.asm_convert_btn, self.c_convert_btn, self.explain_code_btn,
                        self.explain_malware_btn, self.suggest_name_btn, self.gflow_btn, self.get_comments_ai_btn]
             if active:
-                for b in buttons: b.setEnabled(False)
-                if btn: btn.original_text = btn.text(); btn.setText(loading_text)
+                for b in buttons: 
+                    if b: b.setEnabled(False)
+                if btn: 
+                    btn.original_text = btn.text()
+                    btn.setText(loading_text)
             else:
-                for b in buttons: b.setEnabled(True)
-                if btn and hasattr(btn, 'original_text'): pass
+                for b in buttons: 
+                    if b: b.setEnabled(True)
+                for b in buttons:
+                    if b and hasattr(b, 'original_text'):
+                        b.setText(b.original_text)
+                        delattr(b, 'original_text')
 
         def on_save_note(self):
              if not self.current_ea: return
@@ -1076,23 +1158,90 @@ if QtWidgets:
                 QTabBar::tab:focus {{ outline: none; border: none; }}
             """
 
+        def on_toggle_notes_theme(self):
+            self.notes_light_mode = not self.notes_light_mode
+            self.theme_toggle_btn.setText("🌙" if self.notes_light_mode else "☀")
+            self.apply_fonts_and_styles()
+
+        def on_toggle_code_theme(self):
+            self.code_light_mode = not self.code_light_mode
+            self.code_theme_toggle_btn.setText("🌙" if self.code_light_mode else "☀")
+            self.apply_fonts_and_styles()
+
         def apply_fonts_and_styles(self):
              c_font = QtGui.QFont(self.config.code_font, self.config.code_font_size)
              c_font.setStyleHint(QtGui.QFont.Monospace)
              if hasattr(self, 'asm_code_editor') and self.asm_code_editor: self.asm_code_editor.setFont(c_font)
              if hasattr(self, 'c_code_editor') and self.c_code_editor: self.c_code_editor.setFont(c_font)
              if hasattr(self, 'comments_ai_editor') and self.comments_ai_editor: self.comments_ai_editor.setFont(c_font)
+             # Theme colors for Code
+             c_bg = "#FFFFFF" if self.code_light_mode else "#1E1E1E"
+             c_fg = "#222222" if self.code_light_mode else "#D4D4D4"
+             c_border = "1px solid #DDDDDD" if self.code_light_mode else "none"
+
+             # Theme colors for Notes
+             n_bg = "#FFFFFF" if self.notes_light_mode else "#1E1E1E"
+             n_fg = "#222222" if self.notes_light_mode else "#D4D4D4"
+             n_border = "1px solid #DDDDDD" if self.notes_light_mode else "none"
+
+             c_fam = self.config.code_font
+             c_size = self.config.code_font_size
              m_fam = self.config.markdown_font
              m_size = self.config.markdown_font_size
-             editor_style = f"QPlainTextEdit {{ background-color: #1E1E1E; color: #D4D4D4; border: none; font-family: '{m_fam}'; font-size: {m_size}pt; }}"
-             if hasattr(self, 'note_editor') and self.note_editor:
-                 self.note_editor.setStyleSheet(editor_style)
-             viewer_style = f"QTextBrowser {{ border: none; background-color: #1E1E1E; color: #D4D4D4; padding: 10px; font-family: '{m_fam}'; font-size: {m_size}pt; }}"
-             if hasattr(self, 'note_viewer') and self.note_viewer: self.note_viewer.setStyleSheet(viewer_style)
-             if hasattr(self, 'note_previewer') and self.note_previewer: self.note_previewer.setStyleSheet(viewer_style)
-             if hasattr(self, 'explanation_viewer') and self.explanation_viewer: self.explanation_viewer.setStyleSheet(viewer_style)
-             if hasattr(self, 'suggestion_viewer') and self.suggestion_viewer: self.suggestion_viewer.setStyleSheet(viewer_style)
-             if hasattr(self, 'gflow_viewer') and self.gflow_viewer: self.gflow_viewer.setStyleSheet(viewer_style)
+
+             code_style = f"QPlainTextEdit {{ background-color: {c_bg}; color: {c_fg}; border: {c_border}; font-family: '{c_fam}'; font-size: {c_size}pt; }}"
+
+             def safe_set_light_mode(w, mode):
+                 if not w: return
+                 try:
+                     if hasattr(w, 'set_light_mode'):
+                         w.set_light_mode(mode)
+                 except RuntimeError:
+                     pass
+
+             if hasattr(self, 'asm_code_editor'):
+                 try: self.asm_code_editor.setStyleSheet(code_style)
+                 except RuntimeError: pass
+                 safe_set_light_mode(getattr(self, 'asm_code_editor', None), self.code_light_mode)
+                 
+             if hasattr(self, 'c_code_editor'):
+                 try: self.c_code_editor.setStyleSheet(code_style)
+                 except RuntimeError: pass
+                 safe_set_light_mode(getattr(self, 'c_code_editor', None), self.code_light_mode)
+                 
+             if hasattr(self, 'comments_ai_editor'):
+                 try: self.comments_ai_editor.setStyleSheet(code_style)
+                 except RuntimeError: pass
+                 safe_set_light_mode(getattr(self, 'comments_ai_editor', None), self.code_light_mode)
+             
+             # Filter dead highlighters
+             valid_hls = []
+             for hl in self.highlighters:
+                 try:
+                     if hasattr(hl, 'set_light_mode'):
+                         hl.set_light_mode(self.code_light_mode)
+                     valid_hls.append(hl)
+                 except RuntimeError:
+                     continue
+             self.highlighters = valid_hls
+
+             note_style = f"QPlainTextEdit {{ background-color: {n_bg}; color: {n_fg}; border: {n_border}; font-family: '{m_fam}'; font-size: {m_size}pt; }}"
+             if hasattr(self, 'note_editor'):
+                 try: self.note_editor.setStyleSheet(note_style)
+                 except RuntimeError: pass
+                 safe_set_light_mode(getattr(self, 'note_editor', None), self.notes_light_mode)
+
+             note_viewer_style = f"QTextBrowser {{ border: {n_border}; background-color: {n_bg}; color: {n_fg}; padding: 10px; font-family: '{m_fam}'; font-size: {m_size}pt; }}"
+             def safe_set_ss(obj, style):
+                 if not obj: return
+                 try: obj.setStyleSheet(style)
+                 except RuntimeError: pass
+
+             safe_set_ss(getattr(self, 'note_viewer', None), note_viewer_style)
+             safe_set_ss(getattr(self, 'note_previewer', None), note_viewer_style)
+             safe_set_ss(getattr(self, 'explanation_viewer', None), note_viewer_style)
+             safe_set_ss(getattr(self, 'suggestion_viewer', None), note_viewer_style)
+             safe_set_ss(getattr(self, 'gflow_viewer', None), note_viewer_style)
              ui_fam = self.config.ui_font
              ui_size = self.config.ui_font_size
              if hasattr(self, 'title_label') and self.title_label:
@@ -1103,6 +1252,15 @@ if QtWidgets:
                   self.c_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: '{ui_fam}'; font-size: {ui_size}pt;")
              if hasattr(self, 'asm_status_label') and self.asm_status_label:
                   self.asm_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: '{ui_fam}'; font-size: {ui_size}pt;")
+             if hasattr(self, 'comments_ai_status_label') and self.comments_ai_status_label:
+                  self.comments_ai_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: '{ui_fam}'; font-size: {ui_size}pt;")
+
+             # Update page backgrounds
+             for p in self.code_pages:
+                 if p: p.setStyleSheet(f"background-color: {c_bg};")
+             for sp in self.status_pages:
+                 if sp: sp.setStyleSheet(f"background-color: {c_bg};")
+
              sheet = self.get_tab_style()
              for tabs in [getattr(self, 'code_tab_widget', None), getattr(self, 'note_tab_widget', None)]:
                  if tabs:

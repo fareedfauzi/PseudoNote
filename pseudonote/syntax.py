@@ -14,36 +14,44 @@ if QtWidgets:
             self.rules = []
             self.comment_start = QtCore.QRegExp(r'/\*')
             self.comment_end = QtCore.QRegExp(r'\*/')
+            self.light_mode = False
+            self.current_lang = "C"
             self.multiline_comment_format = QtGui.QTextCharFormat()
-            self.multiline_comment_format.setForeground(QtGui.QColor("#6A9955"))
-
             self.update_rules("C")
 
+        def set_light_mode(self, enabled):
+            self.light_mode = enabled
+            self.update_rules(self.current_lang)
+
         def update_rules(self, lang):
+            self.current_lang = lang
             self.rules = []
             keywords = []
             types = []
 
-
             k_fmt = QtGui.QTextCharFormat()
-            k_fmt.setForeground(QtGui.QColor("#569CD6"))
+            k_fmt.setForeground(QtGui.QColor("#0000FF" if self.light_mode else "#569CD6"))
             k_fmt.setFontWeight(QtGui.QFont.Bold)
 
             t_fmt = QtGui.QTextCharFormat()
-            t_fmt.setForeground(QtGui.QColor("#4EC9B0"))
+            t_fmt.setForeground(QtGui.QColor("#267F99" if self.light_mode else "#4EC9B0"))
             t_fmt.setFontWeight(QtGui.QFont.Bold)
 
             f_fmt = QtGui.QTextCharFormat()
-            f_fmt.setForeground(QtGui.QColor("#DCDCAA"))
+            # Striking Dark Magenta for functions in light mode
+            f_fmt.setForeground(QtGui.QColor("#AF00DB" if self.light_mode else "#DCDCAA"))
+            if self.light_mode: f_fmt.setFontWeight(QtGui.QFont.Bold)
 
             s_fmt = QtGui.QTextCharFormat()
-            s_fmt.setForeground(QtGui.QColor("#CE9178"))
+            s_fmt.setForeground(QtGui.QColor("#A31515" if self.light_mode else "#CE9178"))
 
             c_fmt = QtGui.QTextCharFormat()
-            c_fmt.setForeground(QtGui.QColor("#6A9955"))
+            c_fmt.setForeground(QtGui.QColor("#008000" if self.light_mode else "#6A9955"))
 
             n_fmt = QtGui.QTextCharFormat()
-            n_fmt.setForeground(QtGui.QColor("#B5CEA8"))
+            n_fmt.setForeground(QtGui.QColor("#098658" if self.light_mode else "#B5CEA8"))
+
+            self.multiline_comment_format.setForeground(QtGui.QColor("#008000" if self.light_mode else "#6A9955"))
 
             if lang in ["C", "C++"]:
                 keywords = [
@@ -218,7 +226,10 @@ if QtWidgets:
             self.rules.append((QtCore.QRegExp(r'\b[0-9]+\b'), n_fmt))
             self.rules.append((QtCore.QRegExp(r'\b0x[0-9a-fA-F]+\b'), n_fmt))
 
-            self.rehighlight()
+            try:
+                self.rehighlight()
+            except RuntimeError:
+                pass
 
         def highlightBlock(self, text):
 

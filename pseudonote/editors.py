@@ -25,10 +25,16 @@ if QtWidgets:
         def __init__(self):
             super(CodeEditor, self).__init__()
             self.lineNumberArea = LineNumberArea(self)
+            self._light_mode = False
             self.blockCountChanged.connect(self.updateLineNumberAreaWidth)
             self.updateRequest.connect(self.updateLineNumberArea)
             self.cursorPositionChanged.connect(self.highlightCurrentLine)
             self.updateLineNumberAreaWidth(0)
+            self.highlightCurrentLine()
+
+        def set_light_mode(self, enabled):
+            self._light_mode = enabled
+            self.lineNumberArea.update()
             self.highlightCurrentLine()
 
         def lineNumberAreaWidth(self):
@@ -58,7 +64,8 @@ if QtWidgets:
 
         def lineNumberAreaPaintEvent(self, event):
             painter = QtGui.QPainter(self.lineNumberArea)
-            painter.fillRect(event.rect(), QtGui.QColor("#252526"))
+            bg = QtGui.QColor("#F3F3F3") if self._light_mode else QtGui.QColor("#252526")
+            painter.fillRect(event.rect(), bg)
 
             block = self.firstVisibleBlock()
             blockNumber = block.blockNumber()
@@ -80,7 +87,7 @@ if QtWidgets:
             extraSelections = []
             if not self.isReadOnly():
                 selection = QtWidgets.QTextEdit.ExtraSelection()
-                lineColor = QtGui.QColor("#2a2d2e")
+                lineColor = QtGui.QColor("#E8E8E8") if self._light_mode else QtGui.QColor("#2a2d2e")
                 selection.format.setBackground(lineColor)
                 selection.format.setProperty(QtGui.QTextFormat.FullWidthSelection, True)
                 selection.cursor = self.textCursor()

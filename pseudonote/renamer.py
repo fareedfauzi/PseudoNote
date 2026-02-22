@@ -151,6 +151,7 @@ QTableView {
     selection-color: #FFFFFF;
     alternate-background-color: #F9F9FB;
     border-radius: 4px;
+    outline: none;
 }
 QTableView::item {
     padding: 4px;
@@ -246,7 +247,9 @@ DEFAULT_PROMPT = """You are an expert reverse engineer performing function namin
 
 Rules:
 - Use snake_case format
-- Be specific and descriptive (e.g., parse_user_config, validate_license_key, decrypt_network_packet)
+- if it is a system function, use the system name
+- if it is a library function, use the library name
+- if it not, be specific and descriptive (e.g., parse_user_config, validate_license_key, decrypt_network_packet)
 - Focus on what the function DOES, not how
 - Use common prefixes: init_, parse_, validate_, process_, handle_, send_, recv_, encrypt_, decrypt_, load_, save_, get_, set_, create_, destroy_, check_, is_, has_
 - Keep names 3-40 characters
@@ -259,7 +262,9 @@ DEFAULT_BATCH_PROMPT = """You are an expert reverse engineer. For each function:
 2) Otherwise generate a descriptive snake_case name reflecting WHAT the function does (descriptive mode).
 Rules:
 - snake_case format only
-- Be specific: parse_config_file, validate_user_token, send_heartbeat_packet
+- if it is a system function, use the system name
+- if it is a library function, use the library name
+- if it not, be specific and descriptive (e.g., parse_user_config, validate_license_key, decrypt_network_packet)
 - Focus on WHAT function does
 - Common prefixes: init_, parse_, validate_, process_, handle_, send_, recv_, encrypt_, decrypt_, load_, save_, get_, set_, create_, destroy_, check_, is_, has_
 - 3-40 chars per name
@@ -482,9 +487,10 @@ def clean_name(name, existing=None):
     if name in ('function','func','sub','unknown','unnamed','noname'): return None
     
     # Add prefix as requested
-    prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
-    if not name.startswith(prefix):
-        name = f"{prefix}{name}"
+    if getattr(CONFIG, 'use_bulk_prefix', True):
+        prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
+        if not name.startswith(prefix):
+            name = f"{prefix}{name}"
 
     if existing:
         orig, cnt = name, 1
@@ -795,6 +801,7 @@ class BulkRenamer(QDialog):
         self.pn_config = CONFIG
         self.workers = []
         self.is_loading = False
+        self.load_mode = 'prefix' # prefix or search
         self.load_timer = None
         self.func_iter = None
         self.temp_funcs = []
@@ -816,7 +823,18 @@ class BulkRenamer(QDialog):
         if d.exec_():
             # Refresh local config from updated pn_config
             self.cfg = self.build_cfg(self.pn_config)
-            # Maybe show status message?
+            
+            # Update Bulk Load button visibility and text
+            use_prefix = getattr(CONFIG, 'use_bulk_prefix', True)
+            prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
+            self.btn_fnb.setVisible(use_prefix)
+            if use_prefix:
+                self.btn_fnb.setText(f'Load {prefix}* (renamed functions)')
+                # Re-connect to use the new prefix in the lambda
+                try: self.btn_fnb.clicked.disconnect()
+                except: pass
+                self.btn_fnb.clicked.connect(lambda: self.load_funcs(prefix=prefix, append=True))
+            
             self.add_log(f"Settings updated. Provider: {self.cfg['provider']}, Model: {self.cfg['model']}")
 
     def build_cfg(self, c):
@@ -873,50 +891,86 @@ class BulkRenamer(QDialog):
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # Toolbar
-        tb_widget = QWidget()
-        tb_widget.setObjectName("ToolbarRow")
-        tb_widget.setStyleSheet("QWidget#ToolbarRow { background: transparent; }")
-        tb = QHBoxLayout(tb_widget)
-        tb.setContentsMargins(0, 5, 0, 5)
+        # Toolbar Container
+        tb_container = QVBoxLayout()
+        tb_container.setSpacing(8)
         
-        self.load_btn = QPushButton('Load All sub_*')
+        # Row 1: Presets
+        tb_row1_widget = QWidget()
+        tb_row1_widget.setObjectName("RowContainer1")
+        tb_row1_widget.setStyleSheet("QWidget#RowContainer1 { background-color: transparent; }")
+        tb_row1 = QHBoxLayout(tb_row1_widget)
+        tb_row1.setContentsMargins(0, 0, 0, 0)
+        
+        self.load_btn = QPushButton('Load sub_*')
         self.load_btn.setObjectName("primary")
         self.load_btn.clicked.connect(lambda: self.load_funcs(prefix='sub_', append=True))
-        tb.addWidget(self.load_btn)
+        tb_row1.addWidget(self.load_btn)
 
         btn_lib = QPushButton('Load unknown_libname_*')
         btn_lib.setObjectName("primary")
         btn_lib.clicked.connect(lambda: self.load_funcs(prefix='unknown_libname_', append=True))
-        tb.addWidget(btn_lib)
+        tb_row1.addWidget(btn_lib)
 
         prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
-        btn_fnb = QPushButton(f'Load {prefix}* (renamed functions)')
-        btn_fnb.setObjectName("primary")
-        btn_fnb.clicked.connect(lambda: self.load_funcs(prefix=prefix, append=True))
-        tb.addWidget(btn_fnb)
+        self.btn_fnb = QPushButton(f'Load {prefix}*')
+        self.btn_fnb.setObjectName("primary")
+        self.btn_fnb.clicked.connect(lambda: self.load_funcs(prefix=prefix, append=True))
+        self.btn_fnb.setVisible(getattr(CONFIG, 'use_bulk_prefix', True))
+        tb_row1.addWidget(self.btn_fnb)
+
+        btn_renamed = QPushButton('Load All Renamed')
+        btn_renamed.setToolTip("Load every function previously renamed by PseudoNote")
+        btn_renamed.setObjectName("primary")
+        btn_renamed.clicked.connect(lambda: self.load_funcs(prefix=None, append=True, mode='metadata'))
+        tb_row1.addWidget(btn_renamed)
         
-        lb = QPushButton('Load Current Function')
-        lb.clicked.connect(self.load_current)
-        tb.addWidget(lb)
+
         
-        tb.addSpacing(10)
-        tb.addWidget(QLabel('|'))
-        tb.addSpacing(10)
+        tb_row1.addSpacing(10)
+        tb_row1.addWidget(QLabel('|'))
+        tb_row1.addSpacing(10)
+
+        self.find_edit = QLineEdit()
+        self.find_edit.setPlaceholderText("Enter function names' substring...")
+        self.find_edit.setFixedWidth(300)
+        self.find_edit.returnPressed.connect(lambda: self.load_funcs(prefix=self.find_edit.text(), append=True, mode='search'))
+
+        self.find_btn = QPushButton("Load from functions list")
+        self.find_btn.setObjectName("primary")
+        self.find_btn.clicked.connect(lambda: self.load_funcs(prefix=self.find_edit.text(), append=True, mode='search'))
+        
+        tb_row1.addWidget(self.find_btn)
+        tb_row1.addWidget(self.find_edit)
+        
+        tb_row1.addStretch()
+        
+        settings_btn = QPushButton("Settings")
+        settings_btn.setToolTip("Open PseudoNote Settings")
+        settings_btn.setFixedWidth(100)
+        settings_btn.clicked.connect(self.open_settings)
+        tb_row1.addWidget(settings_btn)
+
+        tb_container.addWidget(tb_row1_widget)
+        # Row 2: Filter Table
+        tb_row2_widget = QWidget()
+        tb_row2_widget.setObjectName("RowContainer2")
+        tb_row2_widget.setStyleSheet("QWidget#RowContainer2 { background-color: transparent; }")
+        tb_row2 = QHBoxLayout(tb_row2_widget)
+        tb_row2.setContentsMargins(0, 0, 0, 0)
+        
+        tb_row2.addWidget(QLabel("Filter Table:"))
         
         self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText('Filter functions (name or address)...')
-        self.filter_edit.setFixedWidth(250)
+        self.filter_edit.setPlaceholderText('Search in current list...')
+        self.filter_edit.setFixedWidth(350)
         self.filter_edit.textChanged.connect(lambda t: self.model.set_filter(t) or self.update_count())
-        tb.addWidget(self.filter_edit)
+        tb_row2.addWidget(self.filter_edit)
         
-        tb.addStretch()
-
-        self.count_lbl = QLabel('0 functions loaded')
-        self.count_lbl.setObjectName("accent")
-        tb.addWidget(self.count_lbl)
+        tb_row2.addStretch()
+        tb_container.addWidget(tb_row2_widget)
         
-        layout.addWidget(tb_widget)
+        layout.addLayout(tb_container)
 
         # Main Data Table
         self.model = VirtualFuncModel(self)
@@ -956,6 +1010,17 @@ class BulkRenamer(QDialog):
         log_header.addWidget(log_lbl)
         log_header.addStretch()
         
+        # Selection Utils moved to header
+        ab = QPushButton('Select All')
+        ab.setFixedWidth(150)
+        ab.clicked.connect(lambda: self.model.toggle_all(True))
+        log_header.addWidget(ab)
+        
+        nb = QPushButton('Select None')
+        nb.setFixedWidth(150)
+        nb.clicked.connect(lambda: self.model.toggle_all(False))
+        log_header.addWidget(nb)
+
         # Unload button
         ub = QPushButton('Unload Table')
         ub.setToolTip("Clear the current list of functions")
@@ -963,7 +1028,7 @@ class BulkRenamer(QDialog):
         log_header.addWidget(ub)
 
         cb = QPushButton('Clear Log')
-        cb.setFixedWidth(120) # Increased width to avoid text cut-off
+        cb.setFixedWidth(120) 
         cb.clicked.connect(lambda: self.log.clear())
         log_header.addWidget(cb)
         bottom.addLayout(log_header)
@@ -1009,19 +1074,6 @@ class BulkRenamer(QDialog):
         actions.addWidget(self.stop_btn)
         
         actions.addStretch()
-        
-        # Selection Utils
-        ab = QPushButton('Select All')
-        ab.setFixedWidth(150)
-        ab.clicked.connect(lambda: self.model.toggle_all(True))
-        actions.addWidget(ab)
-        
-        nb = QPushButton('Select None')
-        nb.setFixedWidth(150)
-        nb.clicked.connect(lambda: self.model.toggle_all(False))
-        actions.addWidget(nb)
-        
-        actions.addSpacing(20)
         
         self.apply_btn = QPushButton('Apply Renames')
         self.apply_btn.setObjectName("success")
@@ -1086,16 +1138,14 @@ class BulkRenamer(QDialog):
     def update_count(self):
         v, t = self.model.rowCount(), self.model.total()
         sug = sum(1 for f in self.model.funcs if f.suggested)
-        txt = f'{v:,}/{t:,} functions'
-        if sug: txt += f' <span style="color:#4EC9B0">({sug} suggestions)</span>'
-        self.count_lbl.setText(txt)
         
         # Update Apply button: only enable if we have suggestions AND not busy
         if not self.workers and not self.is_loading:
             self.apply_btn.setEnabled(sug > 0)
 
-    def load_funcs(self, prefix='sub_', append=False):
+    def load_funcs(self, prefix='sub_', append=False, mode='prefix'):
         self.load_prefix = prefix
+        self.load_mode = mode
         if not append:
             self.model.clear()
             self.temp_funcs = []
@@ -1108,7 +1158,14 @@ class BulkRenamer(QDialog):
         self.is_loading = True
         self.progress.setVisible(True)
         self.progress.setRange(0,0)
-        self.update_status(f'Scanning for {prefix}*...')
+        
+        status_msg = f'Scanning for {prefix}*...'
+        if mode == 'metadata':
+            status_msg = 'Scanning for all renamed functions...'
+        elif mode == 'search':
+            status_msg = f'Searching for "{prefix}"...'
+            
+        self.update_status(status_msg)
         
         # UI State: Loading is considered a busy/analysing state for these buttons
         self.load_btn.setEnabled(False)
@@ -1132,7 +1189,22 @@ class BulkRenamer(QDialog):
                 
                 self.scanned += 1
                 name = idc.get_func_name(ea)
-                if not name or not name.startswith(self.load_prefix): continue
+                if not name: continue
+                
+                # Matching Logic
+                is_match = False
+                if self.load_mode == 'metadata':
+                    from pseudonote.idb_storage import load_from_idb
+                    marker = load_from_idb(ea, tag=81)
+                    is_match = (marker == "renamed_by_pseudonote")
+                else:
+                    if self.load_prefix:
+                        if self.load_mode == 'search':
+                            is_match = self.load_prefix.lower() in name.lower()
+                        else:
+                            is_match = name.startswith(self.load_prefix)
+                
+                if not is_match: continue
                 if not is_valid_seg(ea): continue
                 
                 self.temp_funcs.append(FuncData(ea, name))
@@ -1161,18 +1233,7 @@ class BulkRenamer(QDialog):
         self.analyze_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
-    def load_current(self):
-        ea = idc.get_screen_ea()
-        f = ida_funcs.get_func(ea)
-        if f:
-            name = idc.get_func_name(f.start_ea)
-            fd = FuncData(f.start_ea, name)
-            fd.code = get_code_fast(f.start_ea)
-            fd.strings = get_strings_fast(f.start_ea)
-            fd.calls = get_calls_fast(f.start_ea)
-            self.model.set_data([fd])
-            self.update_count()
-            self.add_log(f'Loaded current: {name}', 'ok')
+
 
 
     def get_existing(self):
@@ -1331,6 +1392,11 @@ class BulkRenamer(QDialog):
                 f.suggested = ''
                 f.status = 'Applied'
                 f.checked = False
+                
+                # Save metadata marker (tag 81) to track this function as "renamed by us"
+                from pseudonote.idb_storage import save_to_idb
+                save_to_idb(f.ea, "renamed_by_pseudonote", tag=81)
+                
                 indices.append(i)
 
         self.model.refresh_rows(indices)

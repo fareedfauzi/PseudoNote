@@ -110,30 +110,61 @@ class RenameFunctionHandler(idaapi.action_handler_t):
         if not cfunc or not vdui:
             print("[PseudoNote] Could not decompile the current function or get view.")
             return 0
+        prefix = ""
+        if CONFIG.use_rename_prefix:
+            prefix = CONFIG.function_prefix
+        
         prompt = (
             "Analyze the following C function code:\n"
             f"{str(cfunc)}\n"
             "Suggest a concise new name for this function. "
-            "Only reply with the new function name, prefixed with 'fn_'."
+            f"Only reply with the new function name, prefixed with '{prefix}' if appropriate."
         )
         def callback(response):
             if not response:
                 print("[PseudoNote] Rename Function: no response from AI.")
                 return
-            new_name = response.strip().split()[0]
+            # More robust extraction: strip backticks, whitespace, and take the first "word"
+            clean_resp = response.strip().replace("`", "").replace("'", "").replace("\"", "")
+            if not clean_resp:
+                print("[PseudoNote] Rename Function: AI response was empty after cleaning.")
+                return
+            new_name = clean_resp.split()[0]
+            
             func = idaapi.get_func(ea)
             if not func:
                 print("[PseudoNote] Could not find function at address.")
                 return
             old_name = idc.get_func_name(func.start_ea)
-            if new_name == old_name or not re.match(r'^fn_[A-Za-z_][A-Za-z0-9_]*$', new_name):
-                print(f"[PseudoNote] Invalid or unchanged name suggested: {new_name}")
-                return
+            
+            # Validation regex
+            # Use a specific prefix if enabled, otherwise just standard identifier
+            if prefix:
+                ident_re = rf'^{re.escape(prefix)}[A-Za-z_][A-Za-z0-9_]*$'
+            else:
+                ident_re = r'^[A-Za-z_][A-Za-z0-9_]*$'
+            
+            if new_name == old_name or not re.match(ident_re, new_name):
+                # Auto-apply prefix if user intended it but AI forgot
+                if CONFIG.use_rename_prefix and not new_name.startswith(prefix):
+                    new_name = prefix + new_name
+                
+                # Final validation
+                if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', new_name):
+                    print(f"[PseudoNote] Invalid name suggested: {new_name}")
+                    # Final attempt: try to find ANYTHING that looks like an identifier in the response
+                    m = re.search(r'[A-Za-z_][A-Za-z0-9_]*', clean_resp)
+                    if m:
+                        new_name = m.group(0)
+                        if prefix and not new_name.startswith(prefix):
+                            new_name = prefix + new_name
+                    else:
+                        return
+            
             success = idc.set_name(func.start_ea, new_name, idc.SN_AUTO)
             if success:
                 print(f"[PseudoNote] Function renamed to: {new_name}")
-                if vdui:
-                    vdui.refresh_view(True)
+                if vdui: vdui.refresh_view(True)
             else:
                 print(f"[PseudoNote] Failed to rename function to: {new_name}")
         AI_CLIENT.query_model_async(prompt, callback)
@@ -163,30 +194,60 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
         if not cfunc or not vdui:
             print("[PseudoNote] Could not decompile the current function or get view.")
             return 0
+        prefix = ""
+        if CONFIG.use_rename_prefix:
+            prefix = CONFIG.function_prefix
+            
         prompt = (
             "Analyze the following C function code in the context of malware reverse engineering:\n"
             f"{str(cfunc)}\n"
             "Suggest a concise new name for this function. "
-            "Only reply with the new function name, prefixed with 'fn_'."
+            f"Only reply with the new function name, prefixed with '{prefix}' if appropriate."
         )
         def callback(response):
             if not response:
                 print("[PseudoNote] Rename Function (Malware): no response from AI.")
                 return
-            new_name = response.strip().split()[0]
+            # More robust extraction: strip backticks, whitespace, and take the first "word"
+            clean_resp = response.strip().replace("`", "").replace("'", "").replace("\"", "")
+            if not clean_resp:
+                print("[PseudoNote] Rename Function (Malware): AI response was empty after cleaning.")
+                return
+            new_name = clean_resp.split()[0]
+
             func = idaapi.get_func(ea)
             if not func:
                 print("[PseudoNote] Could not find function at address.")
                 return
             old_name = idc.get_func_name(func.start_ea)
-            if new_name == old_name or not re.match(r'^fn_[A-Za-z_][A-Za-z0-9_]*$', new_name):
-                print(f"[PseudoNote] Invalid or unchanged name suggested: {new_name}")
-                return
+
+            # Validation regex
+            if prefix:
+                ident_re = rf'^{re.escape(prefix)}[A-Za-z_][A-Za-z0-9_]*$'
+            else:
+                ident_re = r'^[A-Za-z_][A-Za-z0-9_]*$'
+
+            if new_name == old_name or not re.match(ident_re, new_name):
+                # Auto-apply prefix if user intended it but AI forgot
+                if CONFIG.use_rename_prefix and not new_name.startswith(prefix):
+                    new_name = prefix + new_name
+                
+                # Final validation
+                if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', new_name):
+                    print(f"[PseudoNote] Invalid name suggested: {new_name}")
+                    # Final attempt: try to find ANYTHING that looks like an identifier in the response
+                    m = re.search(r'[A-Za-z_][A-Za-z0-9_]*', clean_resp)
+                    if m:
+                        new_name = m.group(0)
+                        if prefix and not new_name.startswith(prefix):
+                            new_name = prefix + new_name
+                    else:
+                        return
+
             success = idc.set_name(func.start_ea, new_name, idc.SN_AUTO)
             if success:
                 print(f"[PseudoNote] Function renamed to: {new_name}")
-                if vdui:
-                    vdui.refresh_view(True)
+                if vdui: vdui.refresh_view(True)
             else:
                 print(f"[PseudoNote] Failed to rename function to: {new_name}")
         AI_CLIENT.query_model_async(prompt, callback)
