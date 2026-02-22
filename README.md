@@ -21,7 +21,7 @@ Test the connection to the API before use the LLM feature.
 
 Once saved, a .ini file will be written to the installation folder. If it fails due to permission issues, the .ini file will be saved in the home directory.
 
-### 4. Use
+### 4. Usage
 **Right-Click**: See options in Pseudocode/Disassembly.
 
 <img width="1252" height="767" alt="image" src="https://github.com/user-attachments/assets/b303633e-dacf-4c1a-b8ca-8c6ae06c05f4" />
@@ -36,7 +36,9 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 7. Generate high-level, text-based execution tree graph flow.
 8. Insert section comments into the pseudocode (Only pseudocode).
 9. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
-10. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio. (Currently, only OpenAI and OpenAI-compatible providers have been fully tested.)
+10. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio.
+    - Currently, only OpenAI, LM Studio, and OpenAI-compatible providers have been fully tested.
+    - Anthropic, Gemini, DeepSeek, and Ollama have not yet been tested.
 11. Save all generated data directly into the IDA database (.idb).
 
 <img width="1535" height="821" alt="image" src="https://github.com/user-attachments/assets/514f7c28-c60b-4e81-a6f0-e03a867ab36e" />
