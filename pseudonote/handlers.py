@@ -526,6 +526,9 @@ def _pn_comment_callback(cfunc, pseudocode_lines, view, response):
         if not comment_text:
             continue
 
+        # Prepend a newline for better visual spacing (as requested by user)
+        comment_text = "\n" + comment_text
+
         target = idaapi.treeloc_t()
         target.ea = int(comment_address)
         target.itp = comment_placement

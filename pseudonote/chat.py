@@ -14,9 +14,13 @@ import ida_kernwin
 import ida_hexrays
 import idc
 
+import json
 from pseudonote.qt_compat import QtWidgets, QtCore, QtGui, Signal, qt_cast_flags
 from pseudonote.config import CONFIG, LOGGER
 import pseudonote.ai_client as _ai_mod
+from pseudonote.idb_storage import save_to_idb, load_from_idb
+
+CHAT_HISTORY_TAG = 90
 
 def get_ida_colors():
     """Get theme-aware colors from IDA's palette."""
@@ -264,9 +268,24 @@ class IDAChatForm(ida_kernwin.PluginForm):
         self.address = address
         self.function_name = function_name
         self.decompiled_code = decompiled_code
-        self.history = [
-            {"role": "system", "content": f"You are a helpful reverse-engineering assistant analyzes `{function_name}`. Source:\n\n```c\n{decompiled_code}\n```"},
-        ]
+        
+        # System prompt always reflects the current state of decompilation
+        self.system_prompt = {"role": "system", "content": f"You are a helpful reverse-engineering assistant analyzes `{function_name}`. Source:\n\n```c\n{decompiled_code}\n```"}
+        
+        # Load messages from IDB
+        self.history = []
+        saved_history = load_from_idb(self.address, tag=CHAT_HISTORY_TAG)
+        if saved_history:
+            try:
+                self.history = json.loads(saved_history)
+            except Exception as e:
+                LOGGER.error(f"Failed to load chat history: {e}")
+        
+        if not self.history:
+            self.history = [self.system_prompt]
+        else:
+            # Sync the system prompt to the first element
+            self.history[0] = self.system_prompt
 
     def OnCreate(self, form):
         self.parent = self.FormToPyQtWidget(form)
@@ -329,13 +348,17 @@ class IDAChatForm(ida_kernwin.PluginForm):
         input_layout.addWidget(self.input_box)
         layout.addWidget(input_container)
 
-        # Initial message
-        welcome_msg = (
-            f"I've analyzed this function `{self.function_name}`. How can I help you understand its logic?\n\n"
-            "*Note: I am an analysis assistant. I cannot directly perform IDA actions like renaming, "
-            "commenting, or patching code in the IDB.*"
-        )
-        self.add_message(welcome_msg, is_user=False)
+        # Initial or Restored messages
+        if len(self.history) <= 1:
+            welcome_msg = (
+                f"I've analyzed this function `{self.function_name}`. How can I help you understand its logic?\n\n"
+                "*Note: I am an analysis assistant. I cannot directly perform IDA actions like renaming, "
+                "commenting, or patching code in the IDB.*"
+            )
+            self.add_message(welcome_msg, is_user=False)
+        else:
+            for msg in self.history[1:]: # Skip system prompt
+                self.add_message(msg['content'], is_user=(msg['role'] == 'user'))
 
     def add_message(self, text, is_user=True):
         bubble = ChatBubble(text, is_user)
@@ -344,6 +367,13 @@ class IDAChatForm(ida_kernwin.PluginForm):
 
     def scroll_to_bottom(self):
         self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum())
+
+    def save_history(self):
+        """Persist chat history to IDB."""
+        try:
+            save_to_idb(self.address, json.dumps(self.history), tag=CHAT_HISTORY_TAG)
+        except Exception as e:
+            LOGGER.error(f"Failed to save chat history: {e}")
 
     def clear_chat(self):
         if not ida_kernwin.ask_yn(ida_kernwin.ASKBTN_NO, "Clear chat?") == idaapi.ASKBTN_YES:
@@ -354,11 +384,13 @@ class IDAChatForm(ida_kernwin.PluginForm):
                 item.widget().deleteLater()
         self.scroll_layout.addStretch()
         self.history = [self.history[0]]
+        self.save_history()
         self.add_message("Chat cleared.", is_user=False)
 
     def send_message(self, text):
         self.add_message(text, is_user=True)
         self.history.append({"role": "user", "content": text})
+        self.save_history()
         
         AI_CLIENT = _ai_mod.AI_CLIENT
         if not AI_CLIENT:
@@ -377,6 +409,7 @@ class IDAChatForm(ida_kernwin.PluginForm):
         if response:
             self.history.append({"role": "assistant", "content": response})
             self.add_message(response, is_user=False)
+            self.save_history()
         else:
             self.add_message("Error: No response from AI.", is_user=False)
 
