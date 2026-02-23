@@ -107,7 +107,10 @@ class SimpleAI:
                 if self.provider in ["openai", "deepseek", "ollama", "lmstudio", "custom"]:
                     if not self.client: raise ValueError(f"Client for {self.provider} not initialized.")
 
-                    messages = [{"role": "user", "content": prompt}]
+                    if isinstance(prompt, list):
+                        messages = prompt
+                    else:
+                        messages = [{"role": "user", "content": prompt}]
                     model = self.config.model
                     if self.provider == "ollama" and self.config.ollama_model: model = self.config.ollama_model
                     if self.provider == "custom" and self.config.custom_model: model = self.config.custom_model
@@ -164,17 +167,39 @@ class SimpleAI:
 
                 elif self.provider == "anthropic":
                      if not self.client: raise ValueError("Anthropic client not initialized.")
+                     
+                     if isinstance(prompt, list):
+                         messages = prompt
+                     else:
+                         messages = [{"role": "user", "content": prompt}]
+                         
                      message = self.client.messages.create(
                         model=self.config.model,
                         max_tokens=4096,
-                        messages=[{"role": "user", "content": prompt}]
+                        messages=messages
                      )
                      content = message.content[0].text if hasattr(message.content[0], 'text') else str(message.content[0])
 
                 elif self.provider == "gemini":
                      if not self.client: raise ValueError("Gemini not configured.")
                      model = genai.GenerativeModel(self.config.model)
-                     response = model.generate_content(prompt)
+                     
+                     if isinstance(prompt, list):
+                         # messages is list of {"role": "user"|"assistant", "content": text}
+                         history = []
+                         # Convert OAI format to Gemini format
+                         # OAI Roles: user, assistant, system
+                         # Gemini Roles: user, model
+                         for m in prompt:
+                             role = m.get("role", "user")
+                             if role == "assistant": role = "model"
+                             if role == "system": continue # Gemini handles system separately, skipping for now
+                             history.append({"role": role, "parts": [m.get("content", "")]})
+                         
+                         chat = model.start_chat(history=history[:-1])
+                         response = chat.send_message(history[-1]["parts"][0])
+                     else:
+                         response = model.generate_content(prompt)
                      content = response.text
 
                 LOGGER.log(f"Received response from {self.provider} ({len(content)} chars).")

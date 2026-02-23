@@ -42,6 +42,36 @@ def set_tab_stop_width(editor, width):
         editor.setTabStopWidth(width)
 
 
+def qt_cast_flags(flags, flag_type):
+    """Cast flags safely. Handle PySide6 bitwise operation warnings."""
+    def to_int(f):
+        if hasattr(f, 'value'): # PySide6
+            return f.value
+        try:
+            return int(f)
+        except:
+            return f
+
+    if isinstance(flags, (list, tuple)):
+        res = 0
+        for f in flags:
+            val = to_int(f)
+            if isinstance(val, int):
+                res |= val
+        flags = res
+    else:
+        flags = to_int(flags)
+        
+    if flag_type is not None:
+        try:
+            # In PySide6, calling the flag type with int returns the flag object
+            return flag_type(flags)
+        except:
+            # Fallback to int if the type is not a proper Enum/Flag or fails
+            pass
+    return flags
+
+
 # ---------- QRegExp compatibility shim for PySide6 / PyQt6 ----------
 if QtWidgets and not hasattr(QtCore, "QRegExp"):
     class QRegExpWrapper(QtCore.QRegularExpression):

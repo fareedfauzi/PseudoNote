@@ -16,6 +16,7 @@ import ida_lines
 from pseudonote.qt_compat import QtWidgets, QtGui
 from pseudonote.config import CONFIG, LOGGER
 import pseudonote.ai_client as _ai_mod
+import pseudonote.chat as _chat
 
 
 def _get_ai_client():
@@ -823,6 +824,22 @@ class BulkRenameHandler(idaapi.action_handler_t):
             print(f"[PseudoNote] Error launching Bulk Renamer: {e}")
             import traceback
             traceback.print_exc()
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+# ---------------------------------------------------------------------------
+# Ask AI (Chat) Handler
+# ---------------------------------------------------------------------------
+class AskAIHandler(idaapi.action_handler_t):
+    """Open a chat interface to ask questions about the current function."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        _chat.show_chat(idaapi.get_screen_ea())
         return 1
 
     def update(self, ctx):

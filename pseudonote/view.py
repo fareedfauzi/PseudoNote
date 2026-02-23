@@ -1914,6 +1914,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
             # 'Ask AI' popup action removed due to instability
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyze_struct", "PseudoNote/")

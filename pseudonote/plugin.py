@@ -26,6 +26,7 @@ from pseudonote.handlers import (
     StructAnalysisHandler,
     BulkRenameHandler,
     SettingsHandler,
+    AskAIHandler,
 )
 
 # These will be imported lazily to avoid circular imports
@@ -217,6 +218,18 @@ class PseudoNotePlugin(idaapi.plugin_t):
         )
         idaapi.register_action(bulk_rename_desc)
 
+        # Ask AI Chat Action
+        ask_chat_desc = idaapi.action_desc_t(
+            "pseudonote:ask_chat",
+            "Ask Chat (AI)",
+            AskAIHandler(),
+            "Ctrl+Alt+A",
+            "Open a chat to ask AI about the current function",
+            124
+        )
+        idaapi.register_action(ask_chat_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat", idaapi.SETMENU_APP)
+
         self.ctx_hooks = vm.ContextMenuHooks()
         self.ctx_hooks.hook()
 
@@ -238,6 +251,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Function Signature", "pseudonote:suggest_function_signature")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Comments", "pseudonote:add_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
 
         # Unregister all actions
         for action_id in [
@@ -248,6 +262,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:analyze_struct", "pseudonote:bulk_rename",
             "pseudonote:highlight_on", "pseudonote:highlight_off",
             "pseudonote:disasm_highlight_on", "pseudonote:disasm_highlight_off",
+            "pseudonote:ask_chat",
         ]:
             idaapi.unregister_action(action_id)
 
