@@ -37,20 +37,41 @@ def _pn_rename_callback(address, view, response):
     try:
         names = json.loads(response)
     except Exception as e:
-        print(f"[PseudoNote] Rename Variables: failed to parse JSON response: {e}")
-        return
+        # Try to extract JSON if it's wrapped in markdown or other text
+        try:
+            start = response.find('{')
+            end = response.rfind('}')
+            if start != -1 and end != -1:
+                names = json.loads(response[start:end+1])
+            else:
+                raise e
+        except:
+            print(f"[PseudoNote] Rename Variables: failed to parse JSON response: {e}")
+            return
 
     function_addr = idaapi.get_func(address).start_ea
     replaced = []
     for n in names:
+        success = False
+        # Try as local variable first
         if idaapi.IDA_SDK_VERSION < 760:
             lvars = {lvar.name: lvar for lvar in view.cfunc.lvars}
             if n in lvars:
                 if view.rename_lvar(lvars[n], names[n], True):
-                    replaced.append(n)
+                    success = True
         else:
             if ida_hexrays.rename_lvar(function_addr, n, names[n]):
-                replaced.append(n)
+                success = True
+        
+        # If not a local variable, try as a global name
+        if not success:
+            ea = idc.get_name_ea_simple(n)
+            if ea != idaapi.BADADDR:
+                if idc.set_name(ea, names[n], idc.SN_AUTO):
+                    success = True
+        
+        if success:
+            replaced.append(n)
 
     comment = idc.get_func_cmt(address, 0)
     if comment and len(replaced) > 0:
@@ -60,7 +81,7 @@ def _pn_rename_callback(address, view, response):
 
     if view:
         view.refresh_view(True)
-    print(f"[PseudoNote] Rename Variables: {len(replaced)} variable(s) renamed.")
+    print(f"[PseudoNote] Rename Variables: {len(replaced)} item(s) renamed.")
 
 
 class RenameVariablesHandler(idaapi.action_handler_t):
@@ -80,7 +101,7 @@ class RenameVariablesHandler(idaapi.action_handler_t):
             return 0
         prompt = (
             "You are an expert reverse engineer. Review the C function code provided below:\n\n{decompiler_output}\n\n"
-            "Identify variables with generic or unhelpful names (e.g., v1, a2, result). "
+            "Identify variables with generic or unhelpful names (e.g., v1, a2, result, qword_1234, dword_5678). "
             "Propose more descriptive names based on their usage, context, and data flow. "
             "Output ONLY a valid JSON object mapping the original variable names (keys) to the suggested new names (values). "
             "Do NOT include any explanations or markdown formatting outside the JSON."
@@ -778,124 +799,6 @@ class StructAnalysisHandler(idaapi.action_handler_t):
         if ctx.widget_type == idaapi.BWN_PSEUDOCODE:
             return idaapi.AST_ENABLE_FOR_WIDGET
         return idaapi.AST_DISABLE_FOR_WIDGET
-
-
-# ---------------------------------------------------------------------------
-# Ask AI Custom Prompt Handler (Pseudocode view only) - DISABLED
-# ---------------------------------------------------------------------------
-class AskAICustomHandler(idaapi.action_handler_t):
-    """This handler has been disabled per user request due to stability issues.
-    Keeping a noop handler prevents registration errors elsewhere in the plugin."""
-    def __init__(self):
-        idaapi.action_handler_t.__init__(self)
-
-    def activate(self, ctx):
-        ida_kernwin.warning("'Ask AI' feature has been disabled due to stability issues.")
-        print("[PseudoNote] Ask AI feature disabled by user request.")
-        return 0
-
-    def update(self, ctx):
-        return idaapi.AST_DISABLE_FOR_WIDGET
-        
-    def handle_response(self, response, target_name, vdui, lvar_name):
-        if not response:
-            print("[PseudoNote] AI Analysis failed or returned empty.")
-            return
-            
-        # Robustly extract code block
-        code_match = re.search(r"```(?:c|cpp|C)?\n(.*?)\n```", response, re.DOTALL)
-        
-        if code_match:
-            clean_code = code_match.group(1).strip()
-        else:
-            # Fallback
-            struct_match = re.search(r"(typedef\s+)?struct\s+\w+\s*\{.*?\};", response, re.DOTALL)
-            if struct_match:
-                clean_code = struct_match.group(0).strip()
-            else:
-                clean_code = response.strip()
-
-        # Define Callback for applying type
-        def apply_type_callback(struct_name):
-             if not vdui or not lvar_name: return
-             
-             import ida_typeinf
-             idati = ida_typeinf.get_idati()
-             tif = ida_typeinf.tinfo_t()
-             
-             if tif.get_named_type(idati, struct_name):
-                 # Find the lvar again by name (in case index shifted)
-                 cfunc = vdui.cfunc
-                 found_lvar = None
-                 for lv in cfunc.get_lvars():
-                     if lv.name == lvar_name:
-                         found_lvar = lv
-                         break
-                 
-                 if found_lvar:
-                     success = False
-                     is_ptr = False
-                     
-                     # Try direct type first
-                     if vdui.set_lvar_type(found_lvar, tif):
-                         success = True
-                     else:
-                         # Try pointer type
-                         ptif = ida_typeinf.tinfo_t()
-                         ptif.create_ptr(tif)
-                         if vdui.set_lvar_type(found_lvar, ptif):
-                             success = True
-                             is_ptr = True
-                     
-                     if success:
-                         print(f"[PseudoNote] Applied new type to {lvar_name}.")
-                         vdui.refresh_view(True) # Force refresh to update cfunc
-                         
-                         # --- Auto-Rename Logic ---
-                         # Derive base name from struct, e.g. "Struct_Student" -> "Student"
-                         base_name = struct_name
-                         if base_name.lower().startswith("struct_"):
-                             base_name = base_name[7:]
-                         elif base_name.lower().startswith("struct"):
-                             base_name = base_name[6:]
-                         
-                         # Cleanup and formatting
-                         base_name = base_name.strip("_")
-                         if not base_name: base_name = "obj"
-                         
-                         base_name = base_name.lower()
-                         
-                         new_name = ("p_" if is_ptr else "") + base_name
-                         
-                         # We MUST find the lvar again because set_lvar_type/refresh invalidated old object
-                         cfunc = vdui.cfunc
-                         lvar_to_rename = None
-                         for lv in cfunc.get_lvars():
-                             # We search by the OLD name (lvar_name), because rename hasn't happened yet
-                             if lv.name == lvar_name:
-                                 lvar_to_rename = lv
-                                 break
-                        
-                         if lvar_to_rename:
-                             # 1 = make name unique if taken
-                             vdui.rename_lvar(lvar_to_rename, new_name, 1)
-                             print(f"[PseudoNote] Renamed '{lvar_name}' to '{new_name}'.")
-                         else:
-                             print(f"[PseudoNote] Could not find '{lvar_name}' to rename (maybe it optimized away?).")
-
-                     else:
-                         print(f"[PseudoNote] Failed to apply type to {lvar_name}. It might be incompatible.")
-                 else:
-                     print(f"[PseudoNote] Variable {lvar_name} not found in current view.")
-             else:
-                 print(f"[PseudoNote] Type {struct_name} not found in Local Types.")
-
-        def show_ui():
-            dlg = StructAnalysisDialog(clean_code, on_apply_callback=apply_type_callback if lvar_name else None)
-            dlg.exec_()
-            
-        ida_kernwin.execute_sync(show_ui, ida_kernwin.MFF_FAST)
-
 
 # ---------------------------------------------------------------------------
 # Bulk Rename Handler

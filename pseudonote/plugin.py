@@ -187,8 +187,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(comment_handler_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Add Comments", "pseudonote:add_comments", idaapi.SETMENU_APP)
 
-        # 'Ask AI' custom prompt action removed due to stability concerns.
-
         delete_comments_desc = idaapi.action_desc_t(
             "pseudonote:delete_comments",
             "Delete Comments",
