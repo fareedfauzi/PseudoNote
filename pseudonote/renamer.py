@@ -237,7 +237,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 }
 """
 
-SKIP_SEGS = {'.plt','.plt.got','.plt.sec','extern','.extern','.got','.got.plt','.init','.fini','.dynsym','.dynstr','LOAD','.interp','.rela.dyn','.rela.plt','.hash','.gnu.hash','.note','.note.gnu.build-id','.note.ABI-tag'}
+SKIP_SEGS = {'.plt','.plt.got','.plt.sec','extern','.extern','.got','.got.plt','.init','.fini','.dynsym','.dynstr','.interp','.rela.dyn','.rela.plt','.hash','.gnu.hash','.note','.note.gnu.build-id','.note.ABI-tag'}
 SYS_PREFIX = ('__cxa_','__gxx_','__gnu_','__libc_','__ctype_','_GLOBAL_','_init','_fini','_start','atexit','malloc','free','memcpy','memset','strlen','printf','scanf','fprintf','sprintf','operator','std::','boost::','__stack_chk','__security','_security','__report','__except','__imp_','__x86.','__do_global')
 SYS_MODULES = ('kernel32.','ntdll.','user32.','advapi32.','msvcrt.','ucrtbase.','ws2_32.','libc.so','libm.so','libpthread','foundation.','corefoundation.','uikit.')
 
@@ -279,8 +279,14 @@ def is_valid_seg(ea):
     seg = idaapi.getseg(ea)
     if not seg: return False
     name = idaapi.get_segm_name(seg)
-    if not name or name in SKIP_SEGS: return False
-    return name.startswith('.text') or name in ('CODE','.code') or ('.' not in name and seg.perm & idaapi.SEGPERM_EXEC)
+    if not name: return True # If it's a function but the segment has no name, allow it
+    
+    # Only skip segments that are clearly NOT user code (Imports/Stubs)
+    nl = name.lower()
+    if any(x in nl for x in ('.plt', 'extern', '.got', '.note', '.init', '.fini', '.interp', '.hash')):
+        return False
+
+    return True
 
 def is_sys_func(name):
     nl = name.lower()
@@ -301,7 +307,7 @@ def get_xref_count(ea):
         if c > 150: break
     return c
 
-def get_code_fast(ea, max_len=1200):
+def get_code_fast(ea, max_len=1200, asm_max=25):
     result = [None]
     def _get_code():
         try:
@@ -316,7 +322,7 @@ def get_code_fast(ea, max_len=1200):
             return
         lines = []
         cur = f.start_ea
-        while cur < f.end_ea and len(lines) < 25:
+        while cur < f.end_ea and len(lines) < asm_max:
             lines.append(idc.GetDisasm(cur))
             cur = idc.next_head(cur, f.end_ea)
         result[0] = '\n'.join(lines)[:max_len]
@@ -488,7 +494,7 @@ def clean_name(name, existing=None):
     
     # Add prefix as requested
     if getattr(CONFIG, 'use_bulk_prefix', True):
-        prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
+        prefix = getattr(CONFIG, 'rename_prefix', 'bulkren_')
         if not name.startswith(prefix):
             name = f"{prefix}{name}"
 
@@ -501,9 +507,12 @@ def clean_name(name, existing=None):
     return name
 
 class FuncData:
-    __slots__ = ['ea','name','suggested','status','checked','code','strings','calls']
+    __slots__ = ['ea','name','demangled','suggested','status','checked','code','strings','calls']
     def __init__(self, ea, name):
         self.ea, self.name, self.suggested, self.status, self.checked = ea, name, '', 'Pending', True
+        self.demangled = None
+        if name.startswith('??') or name.startswith('_Z'):
+            self.demangled = ida_name.demangle_name(name, 0)
         self.code = self.strings = self.calls = None
 
 class ResultSignal(QThread):
@@ -533,7 +542,15 @@ class VirtualFuncModel(QAbstractTableModel):
             self.filtered = list(range(len(self.funcs)))
         else:
             ft = self.filter_text.lower()
-            self.filtered = [i for i,f in enumerate(self.funcs) if ft in f.name.lower() or ft in f'{f.ea:x}' or (f.suggested and ft in f.suggested.lower())]
+            res = []
+            for i, f in enumerate(self.funcs):
+                if ft in f.name.lower() or ft in f'{f.ea:x}':
+                    res.append(i)
+                elif f.demangled and ft in f.demangled.lower():
+                    res.append(i)
+                elif f.suggested and ft in f.suggested.lower():
+                    res.append(i)
+            self.filtered = res
 
     def set_filter(self, t):
         self.beginResetModel()
@@ -553,7 +570,8 @@ class VirtualFuncModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             # Column 0 is checkbox now, handled by CheckStateRole
             if c==1: return f'{f.ea:X}'
-            elif c==2: return f.name
+            elif c==2:
+                return self.funcs[self.filtered[idx.row()]].demangled or f.name
             elif c==3: return f.suggested
             elif c==4: return f.status
             
@@ -637,7 +655,7 @@ class AnalyzeWorker(QThread):
         self.existing = set(existing)
         self.sys_prompt = sys_prompt
         self.batch_size = batch_size
-        self.batch_size = batch_size
+        self.cooldown_seconds = cfg.get('cooldown_seconds', 22)
         self.running = True
         self.needs_cooldown = False
 
@@ -661,7 +679,7 @@ class AnalyzeWorker(QThread):
             
             if self.needs_cooldown:
                 self.log.emit('Rate limit reached. Cooling down...', 'info')
-                for s in range(22, 0, -1):
+                for s in range(self.cooldown_seconds, 0, -1):
                     if not self.running: break
                     self.update_status.emit(f'Cooling down ({s}s)')
                     time.sleep(1)
@@ -677,7 +695,8 @@ class AnalyzeWorker(QThread):
         for idx, func in batch:
             if not func.code:
                 # self.log.emit(f"Getting code for {hex(func.ea)}...", 'info')
-                func.code = get_code_fast(func.ea, 800)
+                asm_max = self.cfg.get('asm_max_lines', 25)
+                func.code = get_code_fast(func.ea, 800, asm_max=asm_max)
                 func.strings = get_strings_fast(func.ea)
                 func.calls = get_calls_fast(func.ea)
             
@@ -819,14 +838,15 @@ class BulkRenamer(QDialog):
 
     def open_settings(self):
         from pseudonote.view import SettingsDialog
-        d = SettingsDialog(self.pn_config, self)
+        # Hide extra tabs (Appearance, Rename, Logs) in Bulk Renamer settings
+        d = SettingsDialog(self.pn_config, self, hide_extra_tabs=True)
         if d.exec_():
             # Refresh local config from updated pn_config
             self.cfg = self.build_cfg(self.pn_config)
             
             # Update Bulk Load button visibility and text
             use_prefix = getattr(CONFIG, 'use_bulk_prefix', True)
-            prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
+            prefix = getattr(CONFIG, 'rename_prefix', 'bulkren_')
             self.btn_fnb.setVisible(use_prefix)
             if use_prefix:
                 self.btn_fnb.setText(f'Load {prefix}* (renamed functions)')
@@ -843,7 +863,9 @@ class BulkRenamer(QDialog):
             'provider': c.active_provider,
             'batch_size': getattr(c, 'batch_size', 10),
             'parallel_workers': getattr(c, 'parallel_workers', 1),
-            'rename_prefix': getattr(c, 'rename_prefix', 'fn_b_'),
+            'rename_prefix': getattr(c, 'rename_prefix', 'bulkren_'),
+            'cooldown_seconds': getattr(c, 'cooldown_seconds', 22),
+            'asm_max_lines': getattr(c, 'asm_max_lines', 25),
             'use_custom_prompt': False,
             'custom_prompt': ''
         }
@@ -903,6 +925,7 @@ class BulkRenamer(QDialog):
         tb_row1.setContentsMargins(0, 0, 0, 0)
         
         self.load_btn = QPushButton('Load sub_*')
+        self.load_btn.setAutoDefault(False)
         self.load_btn.setObjectName("primary")
         self.load_btn.clicked.connect(lambda: self.load_funcs(prefix='sub_', append=True))
         tb_row1.addWidget(self.load_btn)
@@ -912,14 +935,19 @@ class BulkRenamer(QDialog):
         btn_lib.clicked.connect(lambda: self.load_funcs(prefix='unknown_libname_', append=True))
         tb_row1.addWidget(btn_lib)
 
-        prefix = getattr(CONFIG, 'rename_prefix', 'fn_b_')
+        btn_all = QPushButton('Load all functions')
+        btn_all.setObjectName("primary")
+        btn_all.clicked.connect(lambda: self.load_funcs(prefix=None, append=True, mode='all'))
+        tb_row1.addWidget(btn_all)
+
+        prefix = getattr(CONFIG, 'rename_prefix', 'bulkren_')
         self.btn_fnb = QPushButton(f'Load {prefix}*')
         self.btn_fnb.setObjectName("primary")
         self.btn_fnb.clicked.connect(lambda: self.load_funcs(prefix=prefix, append=True))
         self.btn_fnb.setVisible(getattr(CONFIG, 'use_bulk_prefix', True))
         tb_row1.addWidget(self.btn_fnb)
 
-        btn_renamed = QPushButton('Load All Renamed')
+        btn_renamed = QPushButton('Load all bulk renamed')
         btn_renamed.setToolTip("Load every function previously renamed by PseudoNote")
         btn_renamed.setObjectName("primary")
         btn_renamed.clicked.connect(lambda: self.load_funcs(prefix=None, append=True, mode='metadata'))
@@ -932,11 +960,13 @@ class BulkRenamer(QDialog):
         tb_row1.addSpacing(10)
 
         self.find_edit = QLineEdit()
-        self.find_edit.setPlaceholderText("Enter function names' substring...")
-        self.find_edit.setFixedWidth(300)
-        self.find_edit.returnPressed.connect(lambda: self.load_funcs(prefix=self.find_edit.text(), append=True, mode='search'))
+        self.find_edit.setPlaceholderText("Enter function substrings...")
+        self.find_edit.setFixedWidth(250)
+        # Use a method to handle return so we can ensure focus and consumption
+        self.find_edit.returnPressed.connect(self.on_find_edit_return)
 
-        self.find_btn = QPushButton("Load from functions list")
+        self.find_btn = QPushButton("Load from binary")
+        self.find_btn.setAutoDefault(False)
         self.find_btn.setObjectName("primary")
         self.find_btn.clicked.connect(lambda: self.load_funcs(prefix=self.find_edit.text(), append=True, mode='search'))
         
@@ -979,7 +1009,7 @@ class BulkRenamer(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QTableView.ExtendedSelection)
-        self.table.doubleClicked.connect(self.jump_to)
+        # self.table.doubleClicked.connect(self.jump_to) # Disabled as requested
         # self.table.clicked.connect(self.on_click) # No longer needed, real checkboxes used
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
@@ -1076,6 +1106,7 @@ class BulkRenamer(QDialog):
         actions.addStretch()
         
         self.apply_btn = QPushButton('Apply Renames')
+        self.apply_btn.setAutoDefault(False)
         self.apply_btn.setObjectName("success")
         self.apply_btn.setMinimumHeight(32)
         self.apply_btn.setMinimumWidth(150)
@@ -1087,8 +1118,15 @@ class BulkRenamer(QDialog):
         layout.addLayout(bottom)
 
     def on_table_context_menu(self, pos):
+        idx = self.table.indexAt(pos)
         menu = QMenu(self)
         menu.setStyleSheet(STYLES)
+        
+        if idx.isValid():
+            jump_act = menu.addAction("🔍 Open function in view")
+            jump_act.triggered.connect(lambda: self.jump_to(idx))
+            menu.addSeparator()
+
         act = menu.addAction("⚙️ Configure Settings...")
         act.triggered.connect(self.open_settings)
         
@@ -1164,6 +1202,8 @@ class BulkRenamer(QDialog):
             status_msg = 'Scanning for all renamed functions...'
         elif mode == 'search':
             status_msg = f'Searching for "{prefix}"...'
+        elif mode == 'all':
+            status_msg = 'Scanning for all functions...'
             
         self.update_status(status_msg)
         
@@ -1197,10 +1237,26 @@ class BulkRenamer(QDialog):
                     from pseudonote.idb_storage import load_from_idb
                     marker = load_from_idb(ea, tag=81)
                     is_match = (marker == "renamed_by_pseudonote")
+                elif self.load_mode == 'all':
+                    is_match = True
                 else:
                     if self.load_prefix:
+                        lp = self.load_prefix.lower()
                         if self.load_mode == 'search':
-                            is_match = self.load_prefix.lower() in name.lower()
+                            # Match by name substring
+                            is_match = lp in name.lower()
+                            # Match by demangled name if available
+                            if not is_match:
+                                demangled = ida_name.demangle_name(name, 0)
+                                if demangled and lp in demangled.lower():
+                                    is_match = True
+                            # Match by address (hex)
+                            if not is_match:
+                                eas_str = f'{ea:x}'
+                                if lp.startswith('0x'):
+                                    is_match = lp[2:] == eas_str
+                                else:
+                                    is_match = lp == eas_str
                         else:
                             is_match = name.startswith(self.load_prefix)
                 
@@ -1376,6 +1432,15 @@ class BulkRenamer(QDialog):
     def jump_to(self, idx):
         f = self.model.get_func(idx.row())
         if f: idaapi.jumpto(f.ea)
+
+    def on_find_edit_return(self):
+        # Prevent focus loss or propagation that might cause IDA to jump
+        # By explicitly handling this and keeping focus, we avoid triggering global shortcuts
+        txt = self.find_edit.text().strip()
+        if txt:
+            self.load_funcs(prefix=txt, append=True, mode='search')
+        # Consume the focus so Enter doesn't hit a default button
+        self.find_edit.setFocus()
 
     def apply_renames(self):
         items = self.model.get_with_suggestions()

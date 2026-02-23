@@ -163,6 +163,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(rename_vars_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Rename Variables", "pseudonote:rename_variables", idaapi.SETMENU_APP)
 
+
         # Suggest Function Signature Action
         sugg_sig_desc = idaapi.action_desc_t(
             "pseudonote:suggest_function_signature",
@@ -185,6 +186,8 @@ class PseudoNotePlugin(idaapi.plugin_t):
         )
         idaapi.register_action(comment_handler_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Add Comments", "pseudonote:add_comments", idaapi.SETMENU_APP)
+
+        # 'Ask AI' custom prompt action removed due to stability concerns.
 
         delete_comments_desc = idaapi.action_desc_t(
             "pseudonote:delete_comments",

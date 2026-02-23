@@ -11,6 +11,7 @@ import idaapi
 import ida_kernwin
 import ida_hexrays
 import idc
+import ida_lines
 
 from pseudonote.qt_compat import QtWidgets, QtGui
 from pseudonote.config import CONFIG, LOGGER
@@ -19,6 +20,10 @@ import pseudonote.ai_client as _ai_mod
 
 def _get_ai_client():
     return _ai_mod.AI_CLIENT
+
+# Conversation history cache for Ask AI chat (keyed by address or other convo id)
+# Stores list of tuples: (role: 'user'|'ai', text)
+ASK_AI_HISTORY = {}
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +164,12 @@ class RenameFunctionHandler(idaapi.action_handler_t):
                         if prefix and not new_name.startswith(prefix):
                             new_name = prefix + new_name
                     else:
+                        ida_kernwin.warning(f"AI suggested the current function name or an invalid name.\n\nNothing to change.")
                         return
             
+            if new_name == old_name:
+                ida_kernwin.warning(f"AI suggested the current function name:\n\n{old_name}\n\nNothing to change.")
+                return
             success = idc.set_name(func.start_ea, new_name, idc.SN_AUTO)
             if success:
                 print(f"[PseudoNote] Function renamed to: {new_name}")
@@ -242,7 +251,12 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
                         if prefix and not new_name.startswith(prefix):
                             new_name = prefix + new_name
                     else:
+                        ida_kernwin.warning(f"AI suggested the current function name or an invalid name.\n\nNothing to change.")
                         return
+            
+            if new_name == old_name:
+                ida_kernwin.warning(f"AI suggested the current function name:\n\n{old_name}\n\nNothing to change.")
+                return
 
             success = idc.set_name(func.start_ea, new_name, idc.SN_AUTO)
             if success:
@@ -256,6 +270,9 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
 
     def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -297,27 +314,71 @@ class SuggestFunctionSignatureHandler(idaapi.action_handler_t):
                 print("[PseudoNote] Suggest Signature: no response from AI.")
                 return
             
-            # Extract signature
-            clean_sig = response.strip()
-            # Remove markdown code blocks
-            match = re.search(r"```(?:c|cpp)?\s*(.*?)\s*```", clean_sig, re.DOTALL)
-            if match:
-                clean_sig = match.group(1).strip()
-            
-            # Remove trailing semicolon or braces
-            clean_sig = clean_sig.split('{')[0].strip().rstrip(';')
+            try:
+                # Extract signature
+                clean_sig = response.strip()
+                # Remove markdown code blocks
+                match = re.search(r"```(?:c|cpp)?\s*(.*?)\s*```", clean_sig, re.DOTALL)
+                if match:
+                    clean_sig = match.group(1).strip()
+                
+                # Strip single backticks or quotes if AI wrapped it
+                clean_sig = clean_sig.strip("`'\" ")
+                
+                # Remove trailing semicolon or braces
+                clean_sig = clean_sig.split('{')[0].strip().rstrip(';')
 
-            msg = f"AI Suggested Signature:\n\n{clean_sig}\n\nApply this signature?"
-            # ask_yn returns 1 (Yes), 0 (No), -1 (Cancel)
-            resp = ida_kernwin.ask_yn(1, msg)
-            
-            if resp == 1:
-                # Apply - append semicolon for SetType
-                if idc.SetType(cfunc.entry_ea, clean_sig + ";"):
-                    print(f"[PseudoNote] Applied signature: {clean_sig}")
-                    vdui.refresh_view(True)
-                else:
-                    print(f"[PseudoNote] Failed to apply signature: {clean_sig}. Check syntax.")
+                # Use address to get current state (safer than stale objects)
+                func = idaapi.get_func(ea)
+                if not func: return
+                
+                # Attempt to get current type using standard idc.get_type
+                current_decl = None
+                try:
+                    current_decl = idc.get_type(func.start_ea)
+                except:
+                    pass
+                
+                def normalize(s):
+                    if not s: return ""
+                    # Remove comments
+                    s = re.sub(r'/\*.*?\*/', '', s, flags=re.DOTALL)
+                    s = re.sub(r'//.*', '', s)
+                    # Collapse whitespace
+                    s = " ".join(s.split())
+                    # Normalize common C tokens spacing
+                    s = s.replace(" *", "*").replace("* ", "*")
+                    s = s.replace(" (", "(").replace("( ", "(")
+                    s = s.replace(" ,", ",").replace(", ", ",")
+                    return s.strip().rstrip(';').lower()
+
+                n_new = normalize(clean_sig)
+                n_old = normalize(current_decl) if current_decl else ""
+                
+                if n_new and n_old and n_new == n_old:
+                    print(f"[PseudoNote] Suggest Signature: AI suggested the same signature as current. Skipping.")
+                    ida_kernwin.warning("AI suggested the same signature as current.\n\nNothing to change.")
+                    return
+
+                msg = f"AI Suggested Signature:\n\n{clean_sig}\n\nApply this signature?"
+                # ask_yn returns 1 (Yes), 0 (No), -1 (Cancel)
+                resp = ida_kernwin.ask_yn(1, msg)
+                
+                if resp == 1:
+                    # Apply - append semicolon for SetType
+                    if idc.SetType(func.start_ea, clean_sig + ";"):
+                        print(f"[PseudoNote] Applied signature: {clean_sig}")
+                        # Re-get view if possible
+                        curr_v = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_widget())
+                        if curr_v: curr_v.refresh_view(True)
+                        else:
+                            # Fallback view refresh
+                            v = ida_hexrays.get_widget_vdui(ctx.widget)
+                            if v: v.refresh_view(True)
+                    else:
+                        print(f"[PseudoNote] Failed to apply signature: {clean_sig}. Check syntax.")
+            except Exception as e:
+                print(f"[PseudoNote] Error in Suggest Signature callback: {e}")
         
         AI_CLIENT.query_model_async(prompt, callback)
         print("[PseudoNote] Suggest Function Signature request sent...")
@@ -713,8 +774,27 @@ class StructAnalysisHandler(idaapi.action_handler_t):
         return 1
 
     def update(self, ctx):
+        """Enable this action only for the Pseudocode view (where structure analysis is supported)."""
         if ctx.widget_type == idaapi.BWN_PSEUDOCODE:
             return idaapi.AST_ENABLE_FOR_WIDGET
+        return idaapi.AST_DISABLE_FOR_WIDGET
+
+
+# ---------------------------------------------------------------------------
+# Ask AI Custom Prompt Handler (Pseudocode view only) - DISABLED
+# ---------------------------------------------------------------------------
+class AskAICustomHandler(idaapi.action_handler_t):
+    """This handler has been disabled per user request due to stability issues.
+    Keeping a noop handler prevents registration errors elsewhere in the plugin."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        ida_kernwin.warning("'Ask AI' feature has been disabled due to stability issues.")
+        print("[PseudoNote] Ask AI feature disabled by user request.")
+        return 0
+
+    def update(self, ctx):
         return idaapi.AST_DISABLE_FOR_WIDGET
         
     def handle_response(self, response, target_name, vdui, lvar_name):

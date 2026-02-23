@@ -53,7 +53,8 @@ class SimpleAI:
         LOGGER.log(info)
 
     def init_client(self):
-        http_client = httpx.Client(proxy=self.config.proxy) if self.config.proxy else None
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
+        http_client = httpx.Client(proxy=self.config.proxy, timeout=timeout) if self.config.proxy else httpx.Client(timeout=timeout)
 
         # Helper to clean URLs
         def clean_url(u):
@@ -179,7 +180,12 @@ class SimpleAI:
                 LOGGER.log(f"Received response from {self.provider} ({len(content)} chars).")
 
                 if not content.strip():
-                    LOGGER.log(f"DEBUG: Empty response from {self.provider}. Response object: {response}")
+                    try:
+                        LOGGER.log(
+                            f"DEBUG: Empty response from {self.provider}. Response object: {locals().get('response', None)}"
+                        )
+                    except:
+                        pass
 
                 ida_kernwin.execute_sync(
                     functools.partial(callback, response=content),
@@ -195,7 +201,7 @@ class SimpleAI:
         threading.Thread(target=thread_target).start()
 
     def test_connection(self):
-        prompt = "test connection. please reply with the word 'pong' so I know you are active."
+        prompt = "Reply with exactly: pong"
         try:
             if self.provider in ["openai", "deepseek", "ollama", "lmstudio", "custom"]:
                 if not self.client: return False, "Client not initialized."
@@ -204,11 +210,11 @@ class SimpleAI:
                 if self.provider == "ollama" and self.config.ollama_model: model = self.config.ollama_model
                 if self.provider == "custom" and self.config.custom_model: model = self.config.custom_model
 
-                is_reasoning = any(x in model.lower() for x in ["o1", "o3", "r1", "reasoner", "reasoning", "thought"])
+                is_reasoning = any(x in model.lower() for x in ["o1", "o3", "r1", "gpt-5", "reasoner", "reasoning", "thought"])
                 valid_args = {"model": model, "messages": [{"role": "user", "content": prompt}]}
                 
                 if is_reasoning:
-                    valid_args["max_completion_tokens"] = 30 
+                    valid_args["max_completion_tokens"] = 128
                 else:
                     valid_args["max_tokens"] = 30
                     valid_args["temperature"] = 0

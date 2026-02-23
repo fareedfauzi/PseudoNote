@@ -65,12 +65,14 @@ class Config:
         # Analysis Defaults
         self.batch_size = 10
         self.parallel_workers = 1
-        self.rename_prefix = "fn_b_"
+        self.rename_prefix = "bulkren_"
+        self.cooldown_seconds = 22
         self.function_prefix = "fn_"
         self.use_rename_prefix = True
         self.use_bulk_prefix = True
         self.filter_system = True
         self.filter_empty = True
+        self.asm_max_lines = 25
 
         self.load()
 
@@ -178,12 +180,14 @@ class Config:
         if parser.has_section("Analysis"):
             self.batch_size = parser.getint("Analysis", "BATCH_SIZE", fallback=10)
             self.parallel_workers = parser.getint("Analysis", "WORKERS", fallback=1)
-            self.rename_prefix = parser.get("Analysis", "RENAME_PREFIX", fallback="fn_b_")
+            self.rename_prefix = parser.get("Analysis", "RENAME_PREFIX", fallback="bulkren_")
             self.function_prefix = parser.get("Analysis", "FUNCTION_PREFIX", fallback="fn_")
             self.use_rename_prefix = parser.getboolean("Analysis", "USE_PREFIX", fallback=True)
             self.use_bulk_prefix = parser.getboolean("Analysis", "USE_BULK_PREFIX", fallback=True)
             self.filter_system = parser.getboolean("Analysis", "FILTER_SYS", fallback=True)
             self.filter_empty = parser.getboolean("Analysis", "FILTER_EMPTY", fallback=True)
+            self.cooldown_seconds = parser.getint("Analysis", "COOLDOWN_SECONDS", fallback=22)
+            self.asm_max_lines = parser.getint("Analysis", "ASM_MAX_LINES", fallback=25)
 
     def save(self):
         parser = configparser.ConfigParser()
@@ -248,6 +252,8 @@ class Config:
         parser.set("Analysis", "USE_BULK_PREFIX", str(self.use_bulk_prefix))
         parser.set("Analysis", "FILTER_SYS", str(self.filter_system))
         parser.set("Analysis", "FILTER_EMPTY", str(self.filter_empty))
+        parser.set("Analysis", "COOLDOWN_SECONDS", str(self.cooldown_seconds))
+        parser.set("Analysis", "ASM_MAX_LINES", str(self.asm_max_lines))
 
         # Try saving. Handle Permission Denied (e.g. Program Files) by falling back to user home.
         success = False

@@ -99,9 +99,10 @@ class SavedNotesHandler(idaapi.action_handler_t):
 
 if QtWidgets:
     class SettingsDialog(QtWidgets.QDialog):
-        def __init__(self, config, parent=None):
+        def __init__(self, config, parent=None, hide_extra_tabs=False):
             super().__init__(parent)
             self.config = config
+            self.hide_extra_tabs = hide_extra_tabs
             self.setWindowTitle("PseudoNote Settings")
             self.resize(700, 500)
             self.providers = ["OpenAI", "Anthropic", "DeepSeek", "Gemini", "Ollama", "LMStudio", "OpenAICompatible"]
@@ -133,18 +134,25 @@ if QtWidgets:
             self.provider_tab = QtWidgets.QWidget()
             self.init_provider_tab()
             self.tabs.addTab(self.provider_tab, "AI Providers")
+            
             self.appearance_tab = QtWidgets.QWidget()
             self.init_appearance_tab()
-            self.tabs.addTab(self.appearance_tab, "Pane Appearance")
+            if not self.hide_extra_tabs:
+                self.tabs.addTab(self.appearance_tab, "Pane Appearance")
+                
             self.bulk_tab = QtWidgets.QWidget()
             self.init_bulk_tab()
             self.tabs.addTab(self.bulk_tab, "Bulk Renamer")
+            
             self.renaming_tab = QtWidgets.QWidget()
             self.init_rename_tab()
-            self.tabs.addTab(self.renaming_tab, "Function rename")
+            if not self.hide_extra_tabs:
+                self.tabs.addTab(self.renaming_tab, "Function rename")
+                
             self.log_tab = QtWidgets.QWidget()
             self.init_log_tab()
-            self.tabs.addTab(self.log_tab, "Debug Logs")
+            if not self.hide_extra_tabs:
+                self.tabs.addTab(self.log_tab, "Debug Logs")
             main_layout.addWidget(self.tabs)
             val_save = QtWidgets.QDialogButtonBox.Save
             val_cancel = QtWidgets.QDialogButtonBox.Cancel
@@ -239,7 +247,7 @@ if QtWidgets:
         def init_bulk_tab(self):
             layout = QtWidgets.QVBoxLayout()
             
-            grp = QtWidgets.QGroupBox("Bulk Renamer Optimization")
+            grp = QtWidgets.QGroupBox("Batching and Performance")
             fl = QtWidgets.QFormLayout()
             
             self.batch_spin = QtWidgets.QSpinBox()
@@ -250,15 +258,25 @@ if QtWidgets:
             self.workers_spin = QtWidgets.QSpinBox()
             self.workers_spin.setRange(1, 10)
             self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 1))
-            fl.addRow("Parallel Batch Workers:", self.workers_spin)
+            fl.addRow("Batch Workers (Multi-Threads):", self.workers_spin)
+            
+            self.cooldown_spin = QtWidgets.QSpinBox()
+            self.cooldown_spin.setRange(0, 300)
+            self.cooldown_spin.setValue(getattr(self.config, 'cooldown_seconds', 22))
+            fl.addRow("Cooling Down Seconds:", self.cooldown_spin)
+            
+            self.asm_max_spin = QtWidgets.QSpinBox()
+            self.asm_max_spin.setRange(5, 500)
+            self.asm_max_spin.setValue(getattr(self.config, 'asm_max_lines', 25))
+            fl.addRow("Max Assembly Lines (Fallback):", self.asm_max_spin)
             
             self.disable_bulk_prefix_cb = QtWidgets.QCheckBox("Disable prefix")
             self.disable_bulk_prefix_cb.setChecked(not getattr(self.config, 'use_bulk_prefix', True))
             fl.addRow("", self.disable_bulk_prefix_cb)
             
             self.prefix_edit = QtWidgets.QLineEdit()
-            self.prefix_edit.setText(getattr(self.config, 'rename_prefix', 'fn_b_'))
-            self.prefix_edit.setPlaceholderText("fn_b_")
+            self.prefix_edit.setText(getattr(self.config, 'rename_prefix', 'bulkren_'))
+            self.prefix_edit.setPlaceholderText("bulkren_")
             fl.addRow("Rename Prefix:", self.prefix_edit)
             
             # Gray out logic for bulk
@@ -427,7 +445,9 @@ if QtWidgets:
             c.batch_size = self.batch_spin.value()
             c.parallel_workers = self.workers_spin.value()
             c.use_bulk_prefix = not self.disable_bulk_prefix_cb.isChecked()
-            c.rename_prefix = self.prefix_edit.text().strip() or "fn_b_"
+            c.rename_prefix = self.prefix_edit.text().strip() or "bulkren_"
+            c.cooldown_seconds = self.cooldown_spin.value()
+            c.asm_max_lines = self.asm_max_spin.value()
             
             # Save Function Rename
             c.use_rename_prefix = not self.disable_prefix_cb.isChecked()
@@ -526,7 +546,7 @@ if QtWidgets:
             self.code_theme_toggle_btn = QtWidgets.QPushButton("☀")
             self.code_theme_toggle_btn.setFixedSize(24, 24)
             self.code_theme_toggle_btn.setToolTip("Toggle Light/Dark Mode for Code")
-            self.code_theme_toggle_btn.setStyleSheet("QPushButton { border: none; color: #CCCCCC; background: transparent; font-size: 16px; } QPushButton:hover { color: #FFFFFF; background-color: #3E3E42; border-radius: 3px; }")
+            self.code_theme_toggle_btn.setStyleSheet("QPushButton { border: none; color: #CCCCCC; background: transparent; font-size: 16px; } QPushButton:hover { color: #FFFFFF; background-color: #3E3E42; border-radius: 3px; } QToolTip { color: #ffffff; background-color: #2D2D2D; border: 1px solid #3E3E42; }")
             self.code_theme_toggle_btn.clicked.connect(self.on_toggle_code_theme)
             ch_layout.addWidget(self.code_theme_toggle_btn)
 
@@ -534,7 +554,7 @@ if QtWidgets:
             self.settings_btn.setFixedSize(24, 24)
             self.settings_btn.setToolTip("Configure AI Provider")
             self.settings_btn.clicked.connect(self.on_settings)
-            self.settings_btn.setStyleSheet("QPushButton { border: none; color: #CCCCCC; background: transparent; font-size: 16px; } QPushButton:hover { color: #FFFFFF; background-color: #3E3E42; border-radius: 3px; }")
+            self.settings_btn.setStyleSheet("QPushButton { border: none; color: #CCCCCC; background: transparent; font-size: 16px; } QPushButton:hover { color: #FFFFFF; background-color: #3E3E42; border-radius: 3px; } QToolTip { color: #ffffff; background-color: #2D2D2D; border: 1px solid #3E3E42; }")
             ch_layout.addWidget(self.settings_btn)
 
             c_header.setLayout(ch_layout)
@@ -664,7 +684,7 @@ if QtWidgets:
             self.theme_toggle_btn = QtWidgets.QPushButton("☀")
             self.theme_toggle_btn.setFixedSize(24, 24)
             self.theme_toggle_btn.setToolTip("Toggle Light/Dark Mode for Notes")
-            self.theme_toggle_btn.setStyleSheet("QPushButton { border: none; color: #CCCCCC; background: transparent; font-size: 16px; } QPushButton:hover { color: #FFFFFF; background-color: #3E3E42; border-radius: 3px; }")
+            self.theme_toggle_btn.setStyleSheet("QPushButton { border: none; color: #CCCCCC; background: transparent; font-size: 16px; } QPushButton:hover { color: #FFFFFF; background-color: #3E3E42; border-radius: 3px; } QToolTip { color: #ffffff; background-color: #2D2D2D; border: 1px solid #3E3E42; }")
             self.theme_toggle_btn.clicked.connect(self.on_toggle_notes_theme)
             nh_layout.addWidget(self.theme_toggle_btn)
 
@@ -1891,11 +1911,12 @@ class ContextMenuHooks(idaapi.UI_Hooks):
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_variables", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
+            # 'Ask AI' popup action removed due to instability
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyze_struct", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_comments", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_comments", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")

@@ -52,8 +52,7 @@ def _create_highlight_hooks():
                     line = sl.line
                     clean_line = ida_lines.tag_remove(line).strip()
                     if _highlight_func_call_pattern.search(clean_line) or \
-                       _highlight_prefix_pattern.search(clean_line) or \
-                       "goto" in clean_line:
+                       _highlight_prefix_pattern.search(clean_line):
                         sl.bgcolor = HIGHLIGHT_COLOR
             return
 
@@ -78,7 +77,7 @@ class GraphLinearHighlightHooks(idaapi.IDB_Hooks):
     def _highlight_disassembly_calls(self, ea):
         disasm_line = ida_lines.generate_disasm_line(ea, 0)
         lower_line = disasm_line.lower()
-        if "call" in lower_line or "jmp" in lower_line or _highlight_prefix_pattern.search(disasm_line):
+        if "call" in lower_line or _highlight_prefix_pattern.search(disasm_line):
             idaapi.set_item_color(ea, HIGHLIGHT_COLOR)
 
     def _remove_highlight(self, ea):
