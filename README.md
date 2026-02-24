@@ -56,7 +56,7 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 <img width="1534" height="867" alt="image" src="https://github.com/user-attachments/assets/03a684d2-bef3-49d0-a0d4-35173b409e09" />
 
 ### Bulk function renamer pane
-<img width="1202" height="882" alt="image" src="https://github.com/user-attachments/assets/bd202b28-d534-4293-946c-b4e960331e5e" />
+<img width="1202" height="882" alt="image" src="https://github.com/user-attachments/assets/9a45e458-899d-436d-a525-e028e5df432e" />
 
 ### Call highlighter (IDA view and Pseudocode)
 <img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
