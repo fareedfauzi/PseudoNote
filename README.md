@@ -36,11 +36,12 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 8. Analyst Notes - Integrated Markdown editor with live preview with markdown toolbar.
 9. Generate high-level, text-based execution tree graph flow.
 10. Insert section comments into the pseudocode and IDA-view assembly.
-11. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
-12. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio.
+    - In the IDA disassembly view, there is also an option to use the currently highlighted/selected range. That selected range will be sent to the LLM. (Suitable for shellcode analysis.)
+12. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
+13. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio.
     - Currently, only OpenAI, LM Studio, and OpenAI-compatible providers have been fully tested.
     - Anthropic, Gemini, DeepSeek, and Ollama have not yet been tested.
-13. Save all generated data directly into the IDA database (.idb).
+14. Save all generated data directly into the IDA database (.idb).
 
 # GUI
 ### Pseudonote Pane
