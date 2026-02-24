@@ -24,7 +24,14 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 ### 4. Usage
 **Right-Click**: See options in Pseudocode/Disassembly.
 
+Pseudocode view:
+
 <img width="1511" height="819" alt="image" src="https://github.com/user-attachments/assets/45523f17-8010-47c1-bd6e-8f54af576028" />
+
+IDA view:
+
+<img width="1145" height="930" alt="image" src="https://github.com/user-attachments/assets/0dc19be7-3dd5-49f0-8ed4-cadc16f87e09" />
+
 
 # Features
 1. Convert HexRay's Pseudocode or Assembly into high-level languages such as C. Python, Rust, and others.
@@ -35,12 +42,13 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 7. Automatically generate C function prototypes and type definitions.
 8. Analyst Notes - Integrated Markdown editor with live preview with markdown toolbar.
 9. Generate high-level, text-based execution tree graph flow.
-10. Insert section comments into the pseudocode (Only pseudocode for now).
-11. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
-12. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio.
+10. Insert section comments into the pseudocode and IDA-view assembly.
+    - In the IDA disassembly view, there is also an option to use the currently highlighted/selected range. That selected range will be sent to the LLM (Suitable for shellcode analysis).
+12. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
+13. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio.
     - Currently, only OpenAI, LM Studio, and OpenAI-compatible providers have been fully tested.
     - Anthropic, Gemini, DeepSeek, and Ollama have not yet been tested.
-13. Save all generated data directly into the IDA database (.idb).
+14. Save all generated data directly into the IDA database (.idb).
 
 # GUI
 ### Pseudonote Pane
@@ -49,7 +57,6 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 ### Demo: Converting IDA-view/Pseudocode to readable C code
 ![chrome_lEV4Uyor9A](https://github.com/user-attachments/assets/5d7376a6-5156-446f-9725-692b4d7d449c)
 
-
 ### Saved notes 
 <img width="729" height="155" alt="image" src="https://github.com/user-attachments/assets/5fa827e1-86cd-409e-8517-7d1e194dd120" />
 
@@ -57,6 +64,13 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 <img width="1534" height="867" alt="image" src="https://github.com/user-attachments/assets/03a684d2-bef3-49d0-a0d4-35173b409e09" />
 
 ### Bulk function renamer pane
-<img width="1202" height="882" alt="image" src="https://github.com/user-attachments/assets/bd202b28-d534-4293-946c-b4e960331e5e" />
+<img width="1202" height="882" alt="image" src="https://github.com/user-attachments/assets/9a45e458-899d-436d-a525-e028e5df432e" />
+
+### Call highlighter (IDA view and Pseudocode)
+<img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
+
+### Basic shellcode static analysis
+- Tested only on msvenom generated shellcode
+<img width="1528" height="915" alt="image" src="https://github.com/user-attachments/assets/e4230ec5-5dc9-4070-bbf3-4f283d1fb6ae" />
 
 
