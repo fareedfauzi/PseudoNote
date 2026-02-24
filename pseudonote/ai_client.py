@@ -5,12 +5,31 @@ AI client for PseudoNote - handles communication with AI providers.
 
 import threading
 import functools
+import time
 
 import ida_kernwin
 
 from pseudonote.qt_compat import openai, httpx, anthropic, genai
 from pseudonote.config import CONFIG, LOGGER
 
+
+# Global state for UI to check
+_ai_busy_count = 0
+AI_CANCEL_REQUESTED = False
+
+class AIBusyStatus:
+    def __bool__(self):
+        return _ai_busy_count > 0
+    def __int__(self):
+        return _ai_busy_count
+    def __repr__(self):
+        return str(_ai_busy_count > 0)
+    def __eq__(self, other):
+        if isinstance(other, bool):
+            return (_ai_busy_count > 0) == other
+        return super().__eq__(other)
+
+AI_BUSY = AIBusyStatus()
 
 class SimpleAI:
     def __init__(self, config):
@@ -53,7 +72,7 @@ class SimpleAI:
         LOGGER.log(info)
 
     def init_client(self):
-        timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
+        timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
         http_client = httpx.Client(proxy=self.config.proxy, timeout=timeout) if self.config.proxy else httpx.Client(timeout=timeout)
 
         # Helper to clean URLs
@@ -96,13 +115,31 @@ class SimpleAI:
             genai.configure(api_key=self.config.gemini_key)
             self.client = "gemini_configured"
 
-    def query_model_async(self, prompt, callback, additional_options=None):
+    def query_model_async(self, prompt, callback, additional_options=None, on_chunk=None, on_status=None):
+        """
+        Query AI model asynchronously. 
+        on_chunk(text) is called for each streamed part if streaming is supported.
+        on_status(count, text) is called for status updates.
+        callback(response, finish_reason) is called when finished.
+        """
+        global AI_BUSY, AI_CANCEL_REQUESTED
         if additional_options is None: additional_options = {}
 
         def thread_target():
-            content = ""
+            global _ai_busy_count, AI_CANCEL_REQUESTED
+            _ai_busy_count += 1
+            AI_CANCEL_REQUESTED = False
+            full_content = ""
+            finish_reason = "stop"
+            
             try:
-                LOGGER.log(f"Sending request to {self.provider}...")
+                LOGGER.log(f"Sending request to {self.provider} (Streaming: {on_chunk is not None})...")
+                
+                # Update UI that we are sending the request
+                if on_status:
+                    try:
+                        ida_kernwin.execute_sync(lambda: on_status(0, "Sending request..."), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
+                    except: pass
 
                 if self.provider in ["openai", "deepseek", "ollama", "lmstudio", "custom"]:
                     if not self.client: raise ValueError(f"Client for {self.provider} not initialized.")
@@ -116,7 +153,6 @@ class SimpleAI:
                     if self.provider == "custom" and self.config.custom_model: model = self.config.custom_model
 
                     valid_args = {"model": model, "messages": messages}
-                    # Reasoning models (OpenAI o1/o3, DeepSeek R1/Reasoner, some Qwen/Llama variants)
                     is_reasoning = any(x in model.lower() for x in ["o1", "o3", "r1", "gpt-5", "reasoner", "reasoning", "thought"])
                     
                     if "max_completion_tokens" in additional_options:
@@ -131,39 +167,52 @@ class SimpleAI:
                             continue
                         valid_args[k] = v
 
-                    response = self.client.chat.completions.create(**valid_args)
-                    msg = response.choices[0].message if response.choices else None
-                    if msg:
-                        # 1. Try standard content attribute
-                        content = getattr(msg, 'content', "") or ""
+                    if on_chunk:
+                        valid_args["stream"] = True
+                        stream = self.client.chat.completions.create(**valid_args)
                         
-                        # 2. Try reasoning fields
-                        reasoning = getattr(msg, 'reasoning_content', "") or getattr(msg, 'reasoning', "") or ""
-                        if not content.strip() and reasoning.strip():
-                            content = reasoning
+                        buffer = ""
+                        last_update = time.time()
                         
-                        # 3. Fallback for legacy or non-standard provider responses (text attribute)
-                        if not content.strip():
-                            content = getattr(msg, 'text', "") or ""
+                        for chunk in stream:
+                            if AI_CANCEL_REQUESTED: 
+                                finish_reason = "cancelled"
+                                break
+                            
+                            delta = chunk.choices[0].delta if chunk.choices else None
+                            if not delta: continue
+                            
+                            content = getattr(delta, 'content', "") or ""
+                            # Reasoning fallback for stream
+                            reasoning = getattr(delta, 'reasoning_content', "") or getattr(delta, 'reasoning', "") or ""
+                            if not content and reasoning: content = reasoning
+                            
+                            if content:
+                                full_content += content
+                                buffer += content
+                                # Buffer updates to keep IDA thread responsive
+                                if time.time() - last_update > 0.05 or len(buffer) > 100:
+                                    def _do_update(txt): on_chunk(txt)
+                                    ida_kernwin.execute_sync(functools.partial(_do_update, buffer), ida_kernwin.MFF_WRITE)
+                                    buffer = ""
+                                    last_update = time.time()
+                            
+                            fin = getattr(chunk.choices[0], 'finish_reason', None)
+                            if fin: finish_reason = fin
                         
-                        # 4. Dictionary-style access fallback
-                        if not content.strip():
-                            try:
-                                if isinstance(msg, dict):
-                                    content = msg.get('content') or msg.get('text') or msg.get('reasoning_content') or ""
-                                elif hasattr(msg, 'get'):
-                                    content = msg.get('content', "") or msg.get('text', "") or ""
-                            except: pass
-
-                        # Check for refusal
-                        refusal = getattr(msg, 'refusal', None)
-                        if refusal:
-                            LOGGER.log(f"Model refused request: {refusal}")
-                            if not content:
-                                content = f"Error: Model refused request. {refusal}"
+                        # Flush remaining
+                        if buffer:
+                            ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
                     else:
-                        LOGGER.log(f"Warning: No choices in response: {response}")
-                        content = ""
+                        response = self.client.chat.completions.create(**valid_args)
+                        msg = response.choices[0].message if response.choices else None
+                        if msg:
+                            full_content = getattr(msg, 'content', "") or ""
+                            reasoning = getattr(msg, 'reasoning_content', "") or getattr(msg, 'reasoning', "") or ""
+                            if not full_content.strip() and reasoning.strip(): full_content = reasoning
+                            finish_reason = getattr(response.choices[0], 'finish_reason', 'stop')
+                        else:
+                            full_content = ""
 
                 elif self.provider == "anthropic":
                      if not self.client: raise ValueError("Anthropic client not initialized.")
@@ -173,47 +222,151 @@ class SimpleAI:
                      else:
                          messages = [{"role": "user", "content": prompt}]
                          
-                     message = self.client.messages.create(
-                        model=self.config.model,
-                        max_tokens=4096,
-                        messages=messages
-                     )
-                     content = message.content[0].text if hasattr(message.content[0], 'text') else str(message.content[0])
+                     max_toks = additional_options.get("max_completion_tokens", 4096)
+                     if on_chunk:
+                         with self.client.messages.stream(
+                             model=self.config.model,
+                             max_tokens=max_toks,
+                             messages=messages
+                         ) as stream:
+                             buffer = ""
+                             last_update = time.time()
+                             for text in stream.text_stream:
+                                 if AI_CANCEL_REQUESTED:
+                                     finish_reason = "cancelled"
+                                     break
+                                 full_content += text
+                                 buffer += text
+                                 if time.time() - last_update > 0.05 or len(buffer) > 100:
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                     buffer = ""
+                                     last_update = time.time()
+                             if buffer:
+                                 ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                             
+                             msg = stream.get_final_message()
+                             finish_reason = getattr(msg, 'stop_reason', 'stop')
+                             if finish_reason == 'max_tokens': finish_reason = 'length'
+                     else:
+                        message = self.client.messages.create(
+                            model=self.config.model,
+                            max_tokens=max_toks,
+                            messages=messages
+                        )
+                        full_content = message.content[0].text if hasattr(message.content[0], 'text') else str(message.content[0])
+                        finish_reason = getattr(message, 'stop_reason', 'stop')
+                        if finish_reason == 'max_tokens': finish_reason = 'length'
 
                 elif self.provider == "gemini":
                      if not self.client: raise ValueError("Gemini not configured.")
                      model = genai.GenerativeModel(self.config.model)
                      
+                     generation_config = {}
+                     if "max_completion_tokens" in additional_options:
+                         generation_config["max_output_tokens"] = additional_options["max_completion_tokens"]
+                     if "temperature" in additional_options:
+                         generation_config["temperature"] = additional_options["temperature"]
+                     if "top_p" in additional_options:
+                         generation_config["top_p"] = additional_options["top_p"]
+
                      if isinstance(prompt, list):
-                         # messages is list of {"role": "user"|"assistant", "content": text}
                          history = []
-                         # Convert OAI format to Gemini format
-                         # OAI Roles: user, assistant, system
-                         # Gemini Roles: user, model
                          for m in prompt:
                              role = m.get("role", "user")
                              if role == "assistant": role = "model"
-                             if role == "system": continue # Gemini handles system separately, skipping for now
+                             if role == "system": continue 
                              history.append({"role": role, "parts": [m.get("content", "")]})
                          
                          chat = model.start_chat(history=history[:-1])
-                         response = chat.send_message(history[-1]["parts"][0])
+                         if on_chunk:
+                             response_stream = chat.send_message(history[-1]["parts"][0], stream=True, generation_config=generation_config)
+                             buffer = ""
+                             last_update = time.time()
+                             for chunk in response_stream:
+                                 if AI_CANCEL_REQUESTED:
+                                     finish_reason = "cancelled"
+                                     break
+                                 full_content += chunk.text
+                                 buffer += chunk.text
+                                 if time.time() - last_update > 0.05 or len(buffer) > 100:
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                     buffer = ""
+                                     last_update = time.time()
+                             if buffer:
+                                 ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                             
+                             # Gemini finish reason
+                             try:
+                                 fr = response_stream.last.candidates[0].finish_reason
+                                 if fr == 2: finish_reason = "length" # 2 is MAX_TOKENS in some versions of the SDK
+                                 else: finish_reason = "stop"
+                             except: finish_reason = "stop"
+                         else:
+                            response = chat.send_message(history[-1]["parts"][0], generation_config=generation_config)
+                            full_content = response.text
+                            try:
+                                fr = response.candidates[0].finish_reason
+                                if fr == 2: finish_reason = "length"
+                                else: finish_reason = "stop"
+                            except: finish_reason = "stop"
                      else:
-                         response = model.generate_content(prompt)
-                     content = response.text
+                         if on_chunk:
+                             response_stream = model.generate_content(prompt, stream=True, generation_config=generation_config)
+                             buffer = ""
+                             last_update = time.time()
+                             for chunk in response_stream:
+                                 if AI_CANCEL_REQUESTED:
+                                     finish_reason = "cancelled"
+                                     break
+                                 full_content += chunk.text
+                                 buffer += chunk.text
+                                 if time.time() - last_update > 0.05 or len(buffer) > 100:
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                     buffer = ""
+                                     last_update = time.time()
+                             if buffer:
+                                 ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                             
+                             try:
+                                 fr = response_stream.last.candidates[0].finish_reason
+                                 if fr == 2: finish_reason = "length"
+                                 else: finish_reason = "stop"
+                             except: finish_reason = "stop"
+                         else:
+                             response = model.generate_content(prompt, generation_config=generation_config)
+                             full_content = response.text
+                             try:
+                                 fr = response.candidates[0].finish_reason
+                                 if fr == 2: finish_reason = "length"
+                                 else: finish_reason = "stop"
+                             except: finish_reason = "stop"
 
-                LOGGER.log(f"Received response from {self.provider} ({len(content)} chars).")
 
-                if not content.strip():
+                LOGGER.log(f"Received response from {self.provider} ({len(full_content)} chars, reason: {finish_reason}).")
+
+                # Wrap callback to ensure we pass response AND finish_reason
+                def wrapped_callback(resp, reason):
+                    import inspect
                     try:
-                        LOGGER.log(
-                            f"DEBUG: Empty response from {self.provider}. Response object: {locals().get('response', None)}"
-                        )
-                    except:
-                        pass
+                        # Extract the actual function if it's a partial
+                        base_func = callback.func if isinstance(callback, functools.partial) else callback
+                        sig = inspect.signature(base_func)
+                        
+                        # Check if it accepts finish_reason or **kwargs
+                        has_reason = "finish_reason" in sig.parameters
+                        has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                        
+                        if has_reason or has_kwargs:
+                            callback(response=resp, finish_reason=reason)
+                        else:
+                            callback(response=resp)
+                    except Exception:
+                        # Fallback for objects that don't support inspection
+                        try: callback(response=resp, finish_reason=reason)
+                        except: callback(response=resp)
 
                 ida_kernwin.execute_sync(
-                    functools.partial(callback, response=content),
+                    functools.partial(wrapped_callback, resp=full_content, reason=finish_reason),
                     ida_kernwin.MFF_WRITE
                 )
             except Exception as e:
@@ -222,6 +375,8 @@ class SimpleAI:
                     functools.partial(callback, response=None),
                     ida_kernwin.MFF_WRITE
                 )
+            finally:
+                _ai_busy_count -= 1
 
         threading.Thread(target=thread_target).start()
 
@@ -255,7 +410,6 @@ class SimpleAI:
                 reasoning = getattr(msg, 'reasoning_content', "") or getattr(msg, 'reasoning', "") or ""
                 refusal = getattr(msg, 'refusal', None)
                 
-                # Check for content in message dictionary (fallback)
                 if not content and not reasoning:
                     try:
                         if hasattr(msg, 'get'):

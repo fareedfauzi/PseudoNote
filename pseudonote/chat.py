@@ -331,11 +331,37 @@ class IDAChatForm(ida_kernwin.PluginForm):
         self.scroll.setWidget(self.scroll_content)
         layout.addWidget(self.scroll, stretch=1)
 
-        # "Asking AI" Indicator
-        self.typing_indicator = QtWidgets.QLabel("  Asking AI...")
-        self.typing_indicator.setStyleSheet(f"color: {colors['highlight']}; font-style: italic; font-weight: bold; margin-bottom: 4px; margin-left: 20px;")
-        self.typing_indicator.setVisible(False)
-        layout.addWidget(self.typing_indicator)
+        # "Asking AI" Indicator with Progress Bar
+        self.typing_container = QtWidgets.QFrame()
+        self.typing_container.setMinimumHeight(40)
+        self.typing_container.setStyleSheet(f"background-color: {colors['alt_base']}; border-top: 1px solid {colors['mid']};")
+        indicator_layout = QtWidgets.QHBoxLayout(self.typing_container)
+        indicator_layout.setContentsMargins(15, 0, 15, 0)
+        indicator_layout.setSpacing(10)
+
+        self.typing_indicator = QtWidgets.QLabel("Thinking...")
+        self.typing_indicator.setStyleSheet(f"color: {colors['highlight']}; font-style: italic; font-weight: bold; font-size: 11px;")
+        indicator_layout.addWidget(self.typing_indicator)
+
+        self.chat_progress = QtWidgets.QProgressBar()
+        self.chat_progress.setRange(0, 0) # Marquee
+        self.chat_progress.setFixedHeight(4)
+        self.chat_progress.setTextVisible(False)
+        self.chat_progress.setStyleSheet(f"""
+            QProgressBar {{ background-color: {colors['window']}; border: none; border-radius: 2px; }}
+            QProgressBar::chunk {{ background-color: {colors['highlight']}; border-radius: 2px; }}
+        """)
+        indicator_layout.addWidget(self.chat_progress, 1)
+
+        self.progress_details = QtWidgets.QLabel("")
+        self.progress_details.setStyleSheet(f"color: {colors['text']}; font-size: 10px; font-family: monospace;")
+        indicator_layout.addWidget(self.progress_details)
+
+        self.typing_container.setVisible(False)
+        layout.addWidget(self.typing_container)
+        
+        # Internal state for tracking chunks
+        self._received_chars = 0
 
         # Input Area
         input_container = QtWidgets.QFrame()
@@ -358,7 +384,9 @@ class IDAChatForm(ida_kernwin.PluginForm):
             self.add_message(welcome_msg, is_user=False)
         else:
             for msg in self.history[1:]: # Skip system prompt
-                self.add_message(msg['content'], is_user=(msg['role'] == 'user'))
+                content = msg.get('content', '')
+                role = msg.get('role', '')
+                self.add_message(content, is_user=(role == 'user'))
 
     def add_message(self, text, is_user=True):
         bubble = ChatBubble(text, is_user)
@@ -398,11 +426,48 @@ class IDAChatForm(ida_kernwin.PluginForm):
             return
 
         self.input_box.setEnabled(False)
-        self.typing_indicator.setVisible(True)
-        AI_CLIENT.query_model_async(self.history, self.handle_response)
+        self.typing_container.setVisible(True)
+        self._received_chars = 0
+        self.progress_details.setText("Connecting...")
+        
+        # Ensure UI updates immediately
+        QtWidgets.QApplication.processEvents()
 
-    def handle_response(self, response):
-        self.typing_indicator.setVisible(False)
+        def on_chunk(text):
+            self._received_chars += len(text)
+            self.progress_details.setText(f"Streaming: {self._received_chars} chars")
+
+        AI_CLIENT.query_model_async(self.history, self.handle_response, on_chunk=on_chunk)
+
+    def handle_response(self, response, **kwargs):
+        finish_reason = kwargs.get("finish_reason", "stop")
+        
+        if finish_reason == "length" and response:
+            # We don't hide typing indicator if continuing
+            self.progress_details.setText(f"Continuing... ({len(response)} chars so far)")
+            QtWidgets.QApplication.processEvents()
+            
+            AI_CLIENT = _ai_mod.AI_CLIENT
+            
+            # Temporary history for continuation prompt
+            # We don't want to pollute real history yet
+            cont_history = self.history + [{"role": "assistant", "content": response}]
+            cont_prompt = "The previous response was cut off. Please continue from exactly where you left off. Do not repeat what you already said."
+            cont_history.append({"role": "user", "content": cont_prompt})
+            
+            def on_c_chunk(text):
+                self._received_chars += len(text)
+                self.progress_details.setText(f"Streaming (Continued): {self._received_chars} chars")
+
+            def on_c_fin(new_resp, **c_kwargs):
+                full_resp = response + (new_resp or "")
+                self.handle_response(full_resp, **c_kwargs)
+
+            AI_CLIENT.query_model_async(cont_history, on_c_fin, on_chunk=on_c_chunk)
+            return
+
+        self.typing_container.setVisible(False)
+        self.progress_details.setText("")
         self.input_box.setEnabled(True)
         self.input_box.setFocus()
         

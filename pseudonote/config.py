@@ -73,6 +73,7 @@ class Config:
         self.filter_system = True
         self.filter_empty = True
         self.asm_max_lines = 25
+        self.force_bulk_rename = False
 
         self.load()
 
@@ -188,6 +189,7 @@ class Config:
             self.filter_empty = parser.getboolean("Analysis", "FILTER_EMPTY", fallback=True)
             self.cooldown_seconds = parser.getint("Analysis", "COOLDOWN_SECONDS", fallback=22)
             self.asm_max_lines = parser.getint("Analysis", "ASM_MAX_LINES", fallback=25)
+            self.force_bulk_rename = parser.getboolean("Analysis", "FORCE_RENAME", fallback=False)
 
     def save(self):
         parser = configparser.ConfigParser()
@@ -254,6 +256,7 @@ class Config:
         parser.set("Analysis", "FILTER_EMPTY", str(self.filter_empty))
         parser.set("Analysis", "COOLDOWN_SECONDS", str(self.cooldown_seconds))
         parser.set("Analysis", "ASM_MAX_LINES", str(self.asm_max_lines))
+        parser.set("Analysis", "FORCE_RENAME", str(self.force_bulk_rename))
 
         # Try saving. Handle Permission Denied (e.g. Program Files) by falling back to user home.
         success = False

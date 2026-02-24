@@ -258,17 +258,3 @@ if QtWidgets:
 
                 self.setFormat(start_index, comment_length, self.multiline_comment_format)
                 start_index = self.comment_start.indexIn(text, start_index + comment_length)
-
-
-            c_fmt = self.multiline_comment_format
-
-
-            for pattern, format in self.rules:
-
-                if format.foreground().color().name() == "#6a9955":
-                     expression = QtCore.QRegExp(pattern)
-                     index = expression.indexIn(text)
-                     while index >= 0:
-                        length = expression.matchedLength()
-                        self.setFormat(index, length, format)
-                        index = expression.indexIn(text, index + length)

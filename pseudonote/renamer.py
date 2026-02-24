@@ -307,7 +307,7 @@ def get_xref_count(ea):
         if c > 150: break
     return c
 
-def get_code_fast(ea, max_len=1200, asm_max=25):
+def get_code_fast(ea, max_len=5000, asm_max=25):
     result = [None]
     def _get_code():
         try:
@@ -696,11 +696,24 @@ class AnalyzeWorker(QThread):
             if not func.code:
                 # self.log.emit(f"Getting code for {hex(func.ea)}...", 'info')
                 asm_max = self.cfg.get('asm_max_lines', 25)
-                func.code = get_code_fast(func.ea, 800, asm_max=asm_max)
+                # Gather more code (up to 5000) so we can handle long functions properly in single mode
+                func.code = get_code_fast(func.ea, 5000, asm_max=asm_max)
                 func.strings = get_strings_fast(func.ea)
                 func.calls = get_calls_fast(func.ea)
             
             if func.code:
+                line_count = func.code.count('\n')
+                # Dynamic limit: we aim for a total batch volume of ~800 lines to ensure AI accuracy and avoid truncation.
+                # Smaller batches allow for longer individual functions.
+                dynamic_line_limit = max(100, 800 // len(batch))
+                dynamic_char_limit = max(4000, 15000 // len(batch))
+                
+                force = self.cfg.get('force_bulk_rename', False)
+                if not force and len(batch) > 1 and (len(func.code) > dynamic_char_limit or line_count > dynamic_line_limit):
+                    self.log.emit(f"Skipping {hex(func.ea)} ({line_count} lines): Volume too high for a batch of {len(batch)}. "
+                                  "Suggested: Decrease 'Batch Size' to 1 in Settings for large functions.", 'warn')
+                    results.append((idx, func, None))
+                    continue
                 valid.append((idx, func))
             else:
                 self.log.emit(f"Skipping {hex(func.ea)}: No code found", 'warn')
@@ -727,7 +740,12 @@ class AnalyzeWorker(QThread):
                 self.log.emit(f"Processing batch of {len(valid)} functions...", 'info')
                 prompt = "Functions to name:\n\n"
                 for i, (idx, f) in enumerate(valid):
-                    prompt += f"[{i+1}]\n```\n{f.code[:600]}\n```\n"
+                    # In a batch (>1), truncate to 800 to avoid token limits, add marker
+                    snippet = f.code
+                    if len(snippet) > 800:
+                        snippet = snippet[:800] + "\n// ... (truncated) ..."
+                    
+                    prompt += f"[{i+1}]\n```\n{snippet}\n```\n"
                     if f.strings: prompt += f"Strings: {f.strings[:3]}\n"
                     if f.calls: prompt += f"Calls: {f.calls[:3]}\n"
                     prompt += "\n"
@@ -866,6 +884,7 @@ class BulkRenamer(QDialog):
             'rename_prefix': getattr(c, 'rename_prefix', 'bulkren_'),
             'cooldown_seconds': getattr(c, 'cooldown_seconds', 22),
             'asm_max_lines': getattr(c, 'asm_max_lines', 25),
+            'force_bulk_rename': getattr(c, 'force_bulk_rename', False),
             'use_custom_prompt': False,
             'custom_prompt': ''
         }
@@ -956,8 +975,6 @@ class BulkRenamer(QDialog):
 
         
         tb_row1.addSpacing(10)
-        tb_row1.addWidget(QLabel('|'))
-        tb_row1.addSpacing(10)
 
         self.find_edit = QLineEdit()
         self.find_edit.setPlaceholderText("Enter function substrings...")
@@ -974,12 +991,6 @@ class BulkRenamer(QDialog):
         tb_row1.addWidget(self.find_edit)
         
         tb_row1.addStretch()
-        
-        settings_btn = QPushButton("Settings")
-        settings_btn.setToolTip("Open PseudoNote Settings")
-        settings_btn.setFixedWidth(100)
-        settings_btn.clicked.connect(self.open_settings)
-        tb_row1.addWidget(settings_btn)
 
         tb_container.addWidget(tb_row1_widget)
         # Row 2: Filter Table
@@ -996,6 +1007,18 @@ class BulkRenamer(QDialog):
         self.filter_edit.setFixedWidth(350)
         self.filter_edit.textChanged.connect(lambda t: self.model.set_filter(t) or self.update_count())
         tb_row2.addWidget(self.filter_edit)
+        
+        tb_row2.addSpacing(20)
+        
+        settings_btn = QPushButton("Settings")
+        settings_btn.setToolTip("Open PseudoNote Settings")
+        settings_btn.setFixedWidth(100)
+        settings_btn.clicked.connect(self.open_settings)
+        tb_row2.addWidget(settings_btn)
+        
+        perf_info = QLabel("*Adjust the Batch Size and Workers in Settings to improve the performance.")
+        perf_info.setStyleSheet("color: #888888; font-style: italic; font-size: 9pt; margin-left: 5px;")
+        tb_row2.addWidget(perf_info)
         
         tb_row2.addStretch()
         tb_container.addWidget(tb_row2_widget)

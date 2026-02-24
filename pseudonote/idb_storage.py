@@ -54,8 +54,7 @@ def load_from_idb(func_ea, tag=0):
 
 def gather_function_context(func_ea, max_callers=8, max_caller_lines=40):
     """
-    Gather deep context for a function: callers, callees, and string references.
-    Returns a dict with 'callers', 'callees_api', 'callees_internal', 'strings'.
+    Gather context for a function optimized for performance: callers, callees, and string references.
     """
     context = {
         "callers": [],
@@ -75,16 +74,19 @@ def gather_function_context(func_ea, max_callers=8, max_caller_lines=40):
         if caller_func and caller_func.start_ea != func_ea:
             caller_eas.add(caller_func.start_ea)
 
-    for caller_ea in list(caller_eas)[:max_callers]:
+    # Limit expensive caller decompilation to save time during "Preparing"
+    # We only decompile the first 2 callers for snippets; for others, we just provide the name.
+    sorted_callers = sorted(list(caller_eas))
+    for i, caller_ea in enumerate(sorted_callers[:max_callers]):
         caller_name = idc.get_func_name(caller_ea)
         snippet = ""
-        try:
-            cfunc = ida_hexrays.decompile(caller_ea)
-            if cfunc:
-                lines = str(cfunc).split('\n')
-                snippet = '\n'.join(lines[:max_caller_lines])
-        except:
-            pass
+        if i < 2: # Only decompile first 2 for performance
+            try:
+                cfunc = ida_hexrays.decompile(caller_ea)
+                if cfunc:
+                    lines = str(cfunc).split('\n')
+                    snippet = '\n'.join(lines[:max_caller_lines])
+            except: pass
 
         context["callers"].append({
             "name": caller_name or f"sub_{caller_ea:X}",
@@ -92,9 +94,13 @@ def gather_function_context(func_ea, max_callers=8, max_caller_lines=40):
             "snippet": snippet
         })
 
-    # --- Callees (XREFs FROM) ---
+    # --- Callees and String References (Single Loop) ---
     seen_callees = set()
+    seen_strings = set()
+    
+    # We use a single loop over FuncItems to gather both callees and strings
     for item_ea in idautils.FuncItems(func_ea):
+        # 1. Gather Callees
         for xref_ea in idautils.CodeRefsFrom(item_ea, 0):
             callee_func = idaapi.get_func(xref_ea)
             if not callee_func or callee_func.start_ea == func_ea:
@@ -105,8 +111,7 @@ def gather_function_context(func_ea, max_callers=8, max_caller_lines=40):
             seen_callees.add(callee_start)
 
             callee_name = idc.get_func_name(callee_start)
-            if not callee_name:
-                continue
+            if not callee_name: continue
 
             flags = idc.get_func_attr(callee_start, idc.FUNCATTR_FLAGS)
             is_library = bool(flags & idc.FUNC_LIB) if flags and flags != -1 else False
@@ -114,51 +119,31 @@ def gather_function_context(func_ea, max_callers=8, max_caller_lines=40):
             is_import = callee_name.startswith("__imp_")
 
             entry = {"name": callee_name, "address": f"0x{callee_start:X}"}
-
             if is_library or is_thunk or is_import:
                 context["callees_api"].append(entry)
             else:
                 context["callees_internal"].append(entry)
 
-    # --- String References ---
-    seen_strings = set()
-    for item_ea in idautils.FuncItems(func_ea):
+        # 2. Gather Strings
         for xref_ea in idautils.DataRefsFrom(item_ea):
             str_type = idc.get_str_type(xref_ea)
             if str_type is not None and str_type >= 0:
+                # We skip very short/garbage strings to save processing
                 s = idc.get_strlit_contents(xref_ea, -1, str_type)
-                if s:
+                if s and len(s) > 3: # Ignore tiny strings for speed/noise
                     decoded = None
-                    # Heuristic: Prioritize ASCII/UTF-8 unless explicitly Wide
                     is_wide = str_type in (ida_nalt.STRTYPE_C_16, ida_nalt.STRTYPE_C_32)
+                    try:
+                        if is_wide: decoded = s.decode('utf-16', errors='replace')
+                        else: decoded = s.decode('utf-8', errors='replace')
+                    except: pass
                     
-                    if is_wide:
-                        try: decoded = s.decode('utf-16', errors='replace')
-                        except: pass
-                    
-                    # If not wide or decoding failed, try UTF-8/ASCII
-                    if not decoded:
-                        try: decoded = s.decode('utf-8', errors='strict') # Strict checking for UTF-8 first
-                        except: 
-                            # Fallback to loose UTF-8
-                            try: decoded = s.decode('utf-8', errors='replace')
-                            except: decoded = str(s)
-
                     if decoded:
-                         # Clean up string (remove nulls, strip whitespace)
-                         decoded = decoded.replace('\x00', '').strip()
-                         
-                         # Filter out tiny garbage or accidental CJK from ASCII reinterpretation
-                         # (If we got CJK chars but it wasn't marked as wide, it's suspicious)
-                         if not is_wide and any(ord(c) > 0x4e00 and ord(c) < 0x9fff for c in decoded):
-                             # Re-try forcibly as ASCII/Latin-1 if it looks like CJK noise
-                             try: decoded = s.decode('latin-1', errors='replace').strip()
-                             except: pass
-
-                         if decoded and len(decoded) > 1 and decoded not in seen_strings:
+                        decoded = decoded.replace('\x00', '').strip()
+                        if len(decoded) > 2 and decoded not in seen_strings:
                             seen_strings.add(decoded)
                             context["strings"].append(decoded)
-
+                            if len(context["strings"]) > 20: break # Safety cap
     return context
 
 
@@ -167,7 +152,7 @@ def format_context_for_prompt(context):
     parts = []
 
     if context["callers"]:
-        parts.append(f"## Callers — Who calls this function ({len(context['callers'])} references)")
+        parts.append(f"## Callers")
         for i, caller in enumerate(context["callers"], 1):
             parts.append(f"### {i}. {caller['name']} ({caller['address']})")
             if caller["snippet"]:
@@ -177,8 +162,7 @@ def format_context_for_prompt(context):
         parts.append("")
 
     if context["callees_api"] or context["callees_internal"]:
-        total = len(context["callees_api"]) + len(context["callees_internal"])
-        parts.append(f"## Callees — What this function calls ({total} calls)")
+        parts.append(f"## Callees")
         if context["callees_api"]:
             parts.append("### API / Library")
             for c in context["callees_api"]:
@@ -190,7 +174,7 @@ def format_context_for_prompt(context):
         parts.append("")
 
     if context["strings"]:
-        parts.append(f"## String References ({len(context['strings'])})")
+        parts.append(f"## String references")
         for s in context["strings"]:
             parts.append(f'- "{s}"')
         parts.append("")
@@ -223,15 +207,6 @@ def format_context_for_display(context):
                 parts.append(f"- {c['name']} ({c['address']})")
     else:
         parts.append("## Callees")
-        parts.append("- none")
-    parts.append("")
-
-    # Strings
-    parts.append("## Strings")
-    if context["strings"]:
-        for s in context["strings"]:
-            parts.append(f'- "{s}"')
-    else:
         parts.append("- none")
     parts.append("")
 

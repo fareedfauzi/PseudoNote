@@ -20,9 +20,176 @@ from pseudonote.idb_storage import (
     gather_function_context, format_context_for_prompt, format_context_for_display,
 )
 import pseudonote.ai_client as _ai_mod
+from pseudonote.ai_client import AI_CANCEL_REQUESTED
 
 def _get_ai():
     return _ai_mod.AI_CLIENT
+
+def set_ai_cancel(cancel=True):
+    global _force_cancelled
+    _ai_mod.AI_CANCEL_REQUESTED = cancel
+    if cancel:
+        _force_cancelled = True
+        # Immediately hide the overlay for better UX
+        get_overlay().hide()
+        # Reset ref count to zero safely
+        global _progress_ref_count
+        _progress_ref_count = 0
+
+_global_overlay = None
+_progress_ref_count = 0
+_force_cancelled = False
+
+def get_overlay():
+    global _global_overlay
+    if not _global_overlay:
+        _global_overlay = ProgressOverlay()
+    return _global_overlay
+
+def show_ai_progress(task_name, modal=False):
+    global _progress_ref_count
+    _progress_ref_count += 1
+    get_overlay().show_progress(task_name, modal=modal)
+
+def update_ai_progress_details(chars, status_text=None):
+    get_overlay().update_details(chars, status_text)
+
+def hide_ai_progress():
+    global _global_overlay, _progress_ref_count, _force_cancelled
+    _progress_ref_count -= 1
+    if _progress_ref_count <= 0 or _force_cancelled:
+        _progress_ref_count = 0
+        _force_cancelled = False
+        if _global_overlay:
+            _global_overlay.hide()
+
+class ProgressOverlay(QtWidgets.QDialog):
+    """A standalone floating progress dialog for AI tasks."""
+    def __init__(self, parent=None):
+        super().__init__(parent or QtWidgets.QApplication.activeWindow())
+        self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.Tool)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        
+        # Increase size for better readability
+        self.setFixedSize(520, 110)
+        
+        self.container = QtWidgets.QFrame(self)
+        self.container.setObjectName("Container")
+        self.container.setFixedSize(500, 90)
+        self.container.setCursor(QtCore.Qt.SizeAllCursor)
+        self._drag_pos = None
+        
+        shadow = QtWidgets.QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(0)
+        shadow.setYOffset(0)
+        shadow.setColor(QtGui.QColor(0, 0, 0, 180))
+        self.container.setGraphicsEffect(shadow)
+
+        # Main centering layout
+        outer_layout = QtWidgets.QVBoxLayout(self)
+        outer_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.addWidget(self.container)
+        
+        # Inner layout for the container
+        self.inner_layout = QtWidgets.QVBoxLayout(self.container)
+        self.inner_layout.setContentsMargins(15, 12, 15, 12)
+        self.inner_layout.setSpacing(6)
+        
+        self.container.setStyleSheet("""
+            #Container { 
+                background-color: #2D2D2D; 
+                border: 1px solid #4E4E4E;
+                border-radius: 10px;
+                color: #CCCCCC;
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+            }
+        """)
+
+        # Row 1: Header (Status + Stop Button)
+        header_layout = QtWidgets.QHBoxLayout()
+        header_layout.setSpacing(10)
+        
+        self.status_label = QtWidgets.QLabel("AI Working...")
+        self.status_label.setStyleSheet("font-size: 13px; font-weight: bold; border: none; background: transparent; color: #FFFFFF;")
+        header_layout.addWidget(self.status_label, 1)
+        
+        self.stop_btn = QtWidgets.QPushButton("Stop")
+        self.stop_btn.setFixedSize(50, 24)
+        self.stop_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.stop_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #3E3E3E; border: 1px solid #555555; color: #EEEEEE; border-radius: 4px; font-size: 11px; font-family: 'Inter', sans-serif;
+            }
+            QPushButton:hover { background-color: #D32F2F; border: 1px solid #D32F2F; color: white; }
+        """)
+        self.stop_btn.clicked.connect(lambda: set_ai_cancel(True))
+        header_layout.addWidget(self.stop_btn)
+        self.inner_layout.addLayout(header_layout)
+        
+        # Row 2: Progress Bar
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFixedHeight(6)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar { background-color: #3E3E42; border: none; border-radius: 3px; }
+            QProgressBar::chunk { background-color: #007ACC; border-radius: 3px; }
+        """)
+        self.inner_layout.addWidget(self.progress_bar)
+        
+        # Row 3: Details Label
+        self.details_label = QtWidgets.QLabel("Preparing...")
+        self.details_label.setStyleSheet("font-size: 11px; color: #AAAAAA; border: none; background: transparent;")
+        self.details_label.setWordWrap(True)
+        self.inner_layout.addWidget(self.details_label)
+        
+        self.hide()
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & QtCore.Qt.LeftButton:
+            self.move(event.globalPos() - self._drag_pos)
+            event.accept()
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            # Pressing ESC now cancels the AI task safely
+            set_ai_cancel(True)
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def show_progress(self, task_name, modal=False):
+        self.status_label.setText(task_name)
+        # Avoid resetting to "Preparing..." if it's already visible with status
+        if not self.isVisible():
+            self.details_label.setText("Preparing...")
+        
+        # Always use NonModal for PseudoNote to prevent deadlocks with execute_sync
+        self.setWindowModality(QtCore.Qt.NonModal)
+        
+        # Center in IDA only if it's the first show
+        if not hasattr(self, "_user_moved") or not self.isVisible():
+            ida_win = QtWidgets.QApplication.activeWindow()
+            if ida_win:
+                geo = ida_win.geometry()
+                self.move(geo.center().x() - self.width() // 2, geo.center().y() - self.height() // 2)
+            self._user_moved = True
+            
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def update_details(self, chars, status_text=None):
+        if status_text:
+            self.details_label.setText(status_text)
+        else:
+            self.details_label.setText(f"Received result: {chars} chars...")
 
 _view_instance = None
 START_TEXT = "Click the button to generate the code"
@@ -249,6 +416,15 @@ if QtWidgets:
             
             grp = QtWidgets.QGroupBox("Batching and Performance")
             fl = QtWidgets.QFormLayout()
+
+            self.force_rename_cb = QtWidgets.QCheckBox("Force renaming; do not skip functions, even if they are large.")
+            self.force_rename_cb.setChecked(getattr(self.config, 'force_bulk_rename', False))
+            fl.addRow(self.force_rename_cb)
+            
+            force_warn = QtWidgets.QLabel("Caution: Forcing large functions into big batches may cause truncated results or timeouts. Recommendation: Don't tick this box.")
+            force_warn.setStyleSheet("color: #FF9500; font-style: italic; font-size: 11px; margin-left: 0px;")
+            force_warn.setWordWrap(True)
+            fl.addRow(force_warn)
             
             self.batch_spin = QtWidgets.QSpinBox()
             self.batch_spin.setRange(1, 100)
@@ -257,8 +433,13 @@ if QtWidgets:
             
             self.workers_spin = QtWidgets.QSpinBox()
             self.workers_spin.setRange(1, 10)
-            self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 1))
+            self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 5))
             fl.addRow("Batch Workers (Multi-Threads):", self.workers_spin)
+            
+            warn_info = QtWidgets.QLabel("Increasing the number of workers beyond 8 may cause IDA to crash.")
+            warn_info.setStyleSheet("color: gray; font-style: italic; font-size: 11px; margin-left: 10px;")
+            warn_info.setWordWrap(True)
+            fl.addRow("", warn_info)
             
             self.cooldown_spin = QtWidgets.QSpinBox()
             self.cooldown_spin.setRange(0, 300)
@@ -290,7 +471,6 @@ if QtWidgets:
             info.setStyleSheet("color: gray; font-style: italic;")
             info.setWordWrap(True)
             layout.addWidget(info)
-            
             layout.addStretch()
             self.bulk_tab.setLayout(layout)
 
@@ -445,6 +625,7 @@ if QtWidgets:
             c.batch_size = self.batch_spin.value()
             c.parallel_workers = self.workers_spin.value()
             c.use_bulk_prefix = not self.disable_bulk_prefix_cb.isChecked()
+            c.force_bulk_rename = self.force_rename_cb.isChecked()
             c.rename_prefix = self.prefix_edit.text().strip() or "bulkren_"
             c.cooldown_seconds = self.cooldown_spin.value()
             c.asm_max_lines = self.asm_max_spin.value()
@@ -470,6 +651,9 @@ if QtWidgets:
             self.asm_convert_btn = None
             self.code_status_stack = None
             self.code_status_label = None
+            self.c_status_label = None
+            self.asm_status_label = None
+            self.comments_ai_status_label = None
             self.last_saved_c_code = ""
             self.last_saved_asm_code = ""
             self.note_tab_widget = None
@@ -495,7 +679,9 @@ if QtWidgets:
             self.status_pages = []
 
         def OnCreate(self, form):
+            global _view_instance
             self.parent = self.FormToPyQtWidget(form)
+            _view_instance = self
             # Reset trackers to avoid dangling references during init
             self.highlighters = []
             self.code_pages = []
@@ -506,6 +692,50 @@ if QtWidgets:
             AI = _get_ai()
             if AI: AI.log_provider_info()
             self.refresh_ui(force=True)
+            self.check_ai_busy_timer = QtCore.QTimer()
+            self.check_ai_busy_timer.timeout.connect(self.update_ai_busy_ui)
+            self.check_ai_busy_timer.start(500)
+
+        def update_ai_busy_ui(self):
+            """Sync UI state with global AI_BUSY flag."""
+            is_busy = _ai_mod.AI_BUSY
+            self.set_ai_features_enabled(not is_busy)
+            
+            # If we are not busy and ref count is still > 0, it might be a dangling dialog 
+            # or it might be the transition between preparation and generation.
+            # We only force hide if we are CERTAIN we are not in a task.
+            if not is_busy:
+                # If we were busy and now we're not, reset cancel flag
+                _ai_mod.AI_CANCEL_REQUESTED = False
+
+        def set_ai_features_enabled(self, enabled):
+            """Disable/Enable all buttons that trigger AI actions."""
+            try:
+                # Readable Code buttons
+                if self.c_convert_btn: self.c_convert_btn.setEnabled(enabled)
+                if self.asm_convert_btn: self.asm_convert_btn.setEnabled(enabled)
+                if self.get_comments_ai_btn: self.get_comments_ai_btn.setEnabled(enabled)
+                
+                # Analyst Notes buttons
+                if self.explain_code_btn: self.explain_code_btn.setEnabled(enabled)
+                if self.explain_malware_btn: self.explain_malware_btn.setEnabled(enabled)
+                if self.suggest_name_btn: self.suggest_name_btn.setEnabled(enabled)
+                if self.gflow_btn: self.gflow_btn.setEnabled(enabled)
+                # Code Toolbar buttons
+                if self.manual_edit_btn: self.manual_edit_btn.setEnabled(enabled)
+                if self.code_save_btn: self.code_save_btn.setEnabled(enabled)
+                if self.lang_combo: self.lang_combo.setEnabled(enabled)
+
+                # Placeholders (Status Labels / Pages)
+                if self.c_status_label: self.c_status_label.setEnabled(enabled)
+                if self.asm_status_label: self.asm_status_label.setEnabled(enabled)
+                if self.comments_ai_status_label: self.comments_ai_status_label.setEnabled(enabled)
+                for page in self.status_pages:
+                    if page: page.setEnabled(enabled)
+            except RuntimeError:
+                # Object likely deleted during teardown
+                if hasattr(self, 'check_ai_busy_timer') and self.check_ai_busy_timer:
+                    self.check_ai_busy_timer.stop()
 
         def init_ui(self):
             # Also reset in init_ui for safety
@@ -803,7 +1033,7 @@ if QtWidgets:
             gf_layout.setContentsMargins(0, 5, 0, 0)
             gf_layout.addWidget(self.gflow_viewer)
             gf_widget.setLayout(gf_layout)
-            self.note_tab_widget.addTab(gf_widget, "Function Graph (AI)")
+            self.note_tab_widget.addTab(gf_widget, "Tree Graph (AI)")
 
             # Function Details tab
             self.suggestion_viewer = QtWidgets.QTextBrowser()
@@ -822,6 +1052,9 @@ if QtWidgets:
             self.splitter.addWidget(self.note_widget)
 
             layout.addWidget(self.splitter)
+            
+            # Progress Overlay managed globally
+            
             self.parent.setLayout(layout)
 
             self.note_tab_widget.currentChanged.connect(self.on_note_tab_changed)
@@ -1059,6 +1292,7 @@ if QtWidgets:
 
         def on_code_text_changed(self):
             if not getattr(self, "c_code_editor", None) or not getattr(self, "asm_code_editor", None): return
+            if _ai_mod.AI_BUSY: return
             try:
                 index = self.code_tab_widget.currentIndex()
                 if index == 2: return # Code Comments tab - ignore updates
@@ -1315,55 +1549,115 @@ if QtWidgets:
                 if AI: AI.log_provider_info()
                 self.apply_fonts_and_styles()
                 self.on_lang_changed(self.current_lang)
+                # Restart timer to catch any new AI client state
+                if hasattr(self, 'check_ai_busy_timer'): self.check_ai_busy_timer.start(500)
 
         def on_convert(self, mode="C"):
             AI_CLIENT = _get_ai()
+            if not AI_CLIENT:
+                QtWidgets.QMessageBox.warning(self.parent, "PseudoNote", "AI Client not initialized. Please check your settings.")
+                return
+            if _ai_mod.AI_BUSY: 
+                return
+            self.set_ai_features_enabled(False)
+
+            ea = self.current_ea or idaapi.get_screen_ea()
+            func = idaapi.get_func(ea)
+            if not func: return
+
             if mode == "ASM":
+                show_ai_progress("Analyzing Function...", modal=True)
+                QtWidgets.QApplication.processEvents()
+                
+                asm_items = list(idautils.FuncItems(func.start_ea))
+                count = len(asm_items)
+                
+                hide_ai_progress()
+                
+                msg = f"Converting Assembly to {self.current_lang} requires tokens.\n\n"
+                msg += f"Instructions: {count}\n\n"
+                
+                if count > 2500:
+                    msg += "⚠️ WARNING: This function is very large (> 2,500 instructions).\n"
+                    msg += "The AI may struggle with logic accuracy or require multiple continuations.\n\n"
+                
+                msg += "Are you sure you want to proceed?"
+                
                 reply = QtWidgets.QMessageBox.question(
                     self.parent, f"Confirm ASM to {self.current_lang}",
-                    f"Converting Assembly to {self.current_lang} requires significantly more tokens than Decompiled C.\n\nAre you sure you want to proceed?",
+                    msg,
                     QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No
                 )
                 if reply == QtWidgets.QMessageBox.No: return
-            ea = self.current_ea
-            if not ea or ea == idaapi.BADADDR: ea = idaapi.get_screen_ea()
-            func = idaapi.get_func(ea)
-            if not func: return
+            
+            show_ai_progress("Preparing Code Data...", modal=True)
+            QtWidgets.QApplication.processEvents()
+            
             raw_code = ""
-            if mode == "C":
-                try:
-                    cfunc = ida_hexrays.decompile(func.start_ea)
-                    if cfunc:
-                        raw_code = str(cfunc)
-                        raw_code = re.sub(r'\([a-zA-Z0-9_\s\*]+\)', '', raw_code)
-                        raw_code = re.sub(r'\s+', ' ', raw_code).strip()
-                except: pass
+            try:
+                if mode == "C":
+                    try:
+                        cfunc = ida_hexrays.decompile(func.start_ea)
+                        if cfunc:
+                            raw_code = str(cfunc).strip()
+                    except Exception as e:
+                        LOGGER.log(f"Decompilation error: {e}")
+                else:
+                    items = list(idautils.FuncItems(func.start_ea))
+                    total = len(items)
+                    lines = []
+                    for i, item_ea in enumerate(items):
+                        if _ai_mod.AI_CANCEL_REQUESTED: break
+                        lines.append(f"{item_ea:X}: {idc.generate_disasm_line(item_ea, 0)}")
+                        if i % 50 == 0:
+                            update_ai_progress_details(0, f"Gathering instructions: {i}/{total}...")
+                            QtWidgets.QApplication.processEvents()
+                    raw_code = "\n".join(lines)
+            finally:
+                # If we fail OR the AI finishes preparation, we must hide the "Preparing" dialog
+                # We hide it here if raw_code is empty (early return)
+                # If NOT empty, we hide it right before showing the "Generating" dialog
                 if not raw_code:
-                    print("[PseudoNote] Failed to decompile."); return
-            else:
-                lines = []
-                for item_ea in idautils.FuncItems(func.start_ea):
-                    lines.append(f"{item_ea:X}: {idc.GetDisasm(item_ea)}")
-                raw_code = "\n".join(lines)
-                if not raw_code:
-                    print("[PseudoNote] Failed to get assembly."); return
+                    hide_ai_progress()
+                    return
 
-            self.set_loading(True, self.c_convert_btn if mode == "C" else self.asm_convert_btn, "Converting...")
-            if mode == "C":
-                status_label = self.c_status_label; status_stack = self.c_status_stack; editor = self.c_code_editor
-            else:
-                status_label = self.asm_status_label; status_stack = self.asm_status_stack; editor = self.asm_code_editor
-            status_label.setText(f"Asking AI to convert ({mode} -> {self.current_lang})... please wait.")
-            status_stack.setCurrentWidget(status_stack.widget(0))
-            editor.setReadOnly(True)
-            self.manual_edit_btn.setText("Edit"); self.manual_edit_btn.setStyleSheet(self.get_btn_style(blue=True))
+            # Safety check: Truncate extremely large input that would crash the AI/Client
+            if len(raw_code) > 250000: # Approx 50k-100k tokens
+                LOGGER.log(f"Truncating massive input code ({len(raw_code)} chars)")
+                raw_code = raw_code[:250000] + "\n\n[... CODE TRUNCATED DUE TO SIZE ...]"
 
+            # Transition from Preparation to Generation
+            hide_ai_progress()
+            show_ai_progress("Generating Readable Code with Comments...")
+            update_ai_progress_details(0, "Sending request to AI...")
+            
+            editor = self.c_code_editor if mode == "C" else self.asm_code_editor
+            editor.clear()
+            (self.c_status_stack if mode == "C" else self.asm_status_stack).setCurrentWidget(editor)
+            
+            context = {"mode": mode, "func_ea": func.start_ea, "lang": self.current_lang, "editor": editor, "full_text": ""}
+            prompt = self.build_convert_prompt(mode, raw_code)
+
+            def chunk_cb(text):
+                context["full_text"] += text
+                update_ai_progress_details(len(context["full_text"]))
+                # Use moveCursor directly on the editor for atomic append
+                editor.moveCursor(QtGui.QTextCursor.End)
+                editor.insertPlainText(text)
+                editor.ensureCursorVisible()
+
+            def fin_cb(response, finish_reason="stop", **kwargs):
+                self.handle_ai_response_callback(response, func.start_ea, mode, finish_reason, context)
+
+            AI_CLIENT.query_model_async(prompt, fin_cb, on_chunk=chunk_cb, on_status=update_ai_progress_details, additional_options={"max_completion_tokens": 16384})
+
+        def build_convert_prompt(self, mode, raw_code):
+            comment_style = "#" if self.current_lang in ["Python", "Nim"] else "//"
             if mode == "C":
-                comment_style = "#" if self.current_lang in ["Python", "Nim"] else "//"
-                prompt = (
-                    f"Rewrite the following decompiled C code into clean, readable, idiomatic {self.current_lang}.\n"
-                    "rules:\n"
-                    "1. Output the FULL code. Do not stop halfway.\n"
+                return (
+                    f"Analyze the following C function and rewrite it into high-level, readable {self.current_lang} code.\n"
+                    "CRITICAL RULES:\n"
+                    f"1. Use idiomatic {self.current_lang} control structures (if/else, loops). Do NOT use `goto` even if present in the C source.\n"
                     "2. Rename Variables/functions descriptively.\n"
                     f"3. Add concise inline comments ({comment_style} style). NO long separator lines.\n"
                     f"4. The FIRST LINE of output MUST be a comment indicating the language, e.g.: {comment_style} Converted language: {self.current_lang}. Do not add any other comments.\n"
@@ -1381,7 +1675,7 @@ if QtWidgets:
                 elif self.current_lang == "Nim": idiom_instruction = "Use Nim syntax (indentation-based, `proc`, `let`/`var`, `result` variable)."
                 elif self.current_lang == "Python": idiom_instruction = "Use idiomatic Python (snake_case, list comprehensions, indentation-based)."
                 elif self.current_lang == "C#": idiom_instruction = "Use idiomatic C# (PascalCase methods, LINQ, strong typing)."
-                prompt = (
+                return (
                     f"Analyze the following Assembly Code and reverse-engineer it into high-level, readable {self.current_lang} code.\n"
                     "CRITICAL RULES:\n"
                     "1. ABSTRACT AWAY LOW-LEVEL DETAILS: Completely IGNORE function prologue/epilogue (push ebp, mov esp...), stack cookies/canaries, and direct register saving/restoring. Focus purely on the logic.\n"
@@ -1394,200 +1688,152 @@ if QtWidgets:
                     f"{raw_code}"
                 )
 
-            LOGGER.log(f"Starting conversion to {mode} for function {hex(func.start_ea)}...")
-            AI_CLIENT.query_model_async(
-                prompt,
-                functools.partial(self.handle_ai_response_callback, func_ea=func.start_ea, mode=mode),
-                additional_options={"max_completion_tokens": 16384}
-            )
-
-        def handle_ai_response_callback(self, response, func_ea, mode="C"):
+        def handle_ai_response_callback(self, response, func_ea, mode="C", finish_reason="stop", context=None, **kwargs):
             try:
-                if func_ea != self.last_func_ea:
-                    if response:
-                        code = response
-                        if "```" in code:
-                            matches = re.findall(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
-                            if matches: code = matches[0]
-                            else:
-                                parts = code.split("```")
-                                if len(parts) >= 3: code = parts[1]
-                        tag = 0 if mode == "C" else 81
-                        save_to_idb(func_ea, code.strip(), tag=tag)
-                        print(f"[PseudoNote] Background conversion for {hex(func_ea)} ({mode}) completed and saved.")
+                if not response: 
+                    return
+                if finish_reason == "length" and not _ai_mod.AI_CANCEL_REQUESTED:
+                    # Continue logic
+                    show_ai_progress(f"Continuing {mode} (Part {len(response)//8000 + 1})...", modal=True)
+                    # Improve continuation prompt to avoid repetition and ensure logical flow
+                    last_chars = response[-800:].strip()
+                    prompt = (
+                        f"This is a continuation of the previous reverse-engineering task into {self.current_lang}. "
+                        f"The last part of the code you generated was:\n\n```\n{last_chars}\n```\n\n"
+                        "Please CONTINUE the code from exactly that point. "
+                        "Do NOT repeat the code above. Do NOT add new headers or explanations. "
+                        "Return ONLY the remaining code inside a markdown code block."
+                    )
+                    AI = _get_ai()
+                    
+                    def c_chunk(t):
+                        context["full_text"] += t
+                        update_ai_progress_details(len(context["full_text"]))
+                        context["editor"].moveCursor(QtGui.QTextCursor.End)
+                        context["editor"].insertPlainText(t)
+                        context["editor"].ensureCursorVisible()
+                    
+                    prev_resp = response
+                    def c_fin(response, finish_reason="stop", **kwargs): 
+                        full_resp = prev_resp + (response or "")
+                        self.handle_ai_response_callback(full_resp, func_ea, mode, finish_reason, context)
+                    AI.query_model_async(prompt, c_fin, on_chunk=c_chunk, on_status=update_ai_progress_details, additional_options={"max_completion_tokens": 16384})
                     return
 
-                if mode == "C":
-                    status_label = self.c_status_label; status_stack = self.c_status_stack; editor = self.c_code_editor
-                else:
-                    status_label = self.asm_status_label; status_stack = self.asm_status_stack; editor = self.asm_code_editor
-
-                if not response:
-                    status_label.setText("API Error. Check debug logs")
-                    status_stack.setCurrentWidget(status_stack.widget(0))
-                else:
-                    code = response
-                    if "```" in code:
-                        matches = re.findall(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
-                        if matches: code = matches[0]
-                        else:
-                            parts = code.split("```")
-                            if len(parts) >= 3: code = parts[1]
-                    editor.setPlainText(code.strip())
-                    status_stack.setCurrentWidget(editor)
+                code = response.strip()
+                if "```" in code:
+                    parts = code.split("```")
+                    code_parts = []
+                    # Robust extraction: items at odd indices are inside code blocks
+                    for i in range(1, len(parts), 2):
+                        p = parts[i].strip()
+                        if p:
+                            lines = p.split('\n')
+                            if lines:
+                                first = lines[0].strip().lower()
+                                # Common language identifiers to skip on the first line of a block
+                                if first in ["python", "c", "cpp", "rust", "go", "nim", "asm", "javascript", "typescript", "csharp", "delphi", "pascal", "objectivec", "swift"]:
+                                    p = "\n".join(lines[1:]).strip()
+                            if p:
+                                code_parts.append(p)
+                    
+                    if code_parts:
+                        code = "\n".join(code_parts)
+                    elif len(parts) >= 2:
+                        # Fallback for malformed blocks (e.g. only one ``` at start)
+                        code = parts[1].strip()
+                
+                # If cleanup resulted in MUCH smaller code than the raw response, something is wrong
+                # We should prefer keeping the raw response over an empty/tiny cleaned version
+                if len(code) < 10 and len(response.strip()) > 50:
+                    code = response.strip()
+                
+                tag = 0 if mode == "C" else 81
+                save_to_idb(func_ea, code.strip(), tag=tag)
+                if func_ea == self.last_func_ea:
                     if mode == "C": self.last_saved_c_code = code.strip()
                     else: self.last_saved_asm_code = code.strip()
-                    tag = 0 if mode == "C" else 81
-                    save_to_idb(func_ea, code.strip(), tag=tag)
+                    if context and "editor" in context:
+                        # Clean up editor content only if it differs from the raw stream (markdown symbols removal)
+                        if context["editor"].toPlainText().strip() != code.strip():
+                            # Save scroll position if possible, but setPlainText usually resets it
+                            context["editor"].setPlainText(code.strip())
                     self.update_save_btn_state(self.code_save_btn, saved=True)
-                    if mode == "ASM": self.code_tab_widget.setTabText(0, "IDA-View converted")
-                    else: self.code_tab_widget.setTabText(1, "Pseudocode converted")
-            except Exception as e:
-                LOGGER.log(f"Handle AI Response Error: {e}")
-                if func_ea == self.last_func_ea:
-                    QtWidgets.QMessageBox.warning(self.parent, "PseudoNote API Error", f"An error occurred during conversion:\n\n{str(e)}")
-                    if mode == "C":
-                         self.c_status_label.setText(f"Error: {e}"); self.c_status_stack.setCurrentWidget(self.c_status_stack.widget(0))
-                    else:
-                         self.asm_status_label.setText(f"Error: {e}"); self.asm_status_stack.setCurrentWidget(self.asm_status_stack.widget(0))
-            finally:
-                self.set_loading(False)
-                if func_ea == self.last_func_ea:
-                    c_text = f"Regenerate {self.current_lang} (AI)" if self.last_saved_c_code else f"Convert to {self.current_lang} (AI)"
-                    self.c_convert_btn.setText(c_text)
-                    asm_text = f"Regenerate {self.current_lang} (AI)" if self.last_saved_asm_code else f"Convert to {self.current_lang} (AI)"
-                    self.asm_convert_btn.setText(asm_text)
-                    self.manual_edit_btn.setEnabled(True)
+            except Exception as e: LOGGER.log(f"AI Response Callback Error: {e}")
+            finally: hide_ai_progress()
 
         def on_explain_func(self, context="code"):
             AI_CLIENT = _get_ai()
-            ea = self.current_ea
-            if not ea or ea == idaapi.BADADDR: ea = idaapi.get_screen_ea()
+            if not AI_CLIENT or _ai_mod.AI_BUSY: return
+            ea = self.current_ea or idaapi.get_screen_ea()
             func = idaapi.get_func(ea)
-            if not func:
-                QtWidgets.QMessageBox.warning(self.parent, "PseudoNote", "No function found."); return
+            if not func: return
+            
             decompiled = ""
             try:
                 cfunc = ida_hexrays.decompile(func.start_ea)
                 if cfunc: decompiled = str(cfunc)
             except: pass
+
             if not decompiled:
-                QtWidgets.QMessageBox.warning(self.parent, "PseudoNote", "No pseudocode available to explain (Hex-Rays Decompiler required)."); return
+                # Fallback to disassembly if no pseudocode
+                items = list(idautils.FuncItems(func.start_ea))
+                decompiled = "\n".join([f"{item_ea:X}: {idc.generate_disasm_line(item_ea, 0)}" for item_ea in items[:500]])
+            
+            if not decompiled: return
+
+            show_ai_progress(f"Explaining {context}...")
+            update_ai_progress_details(0, "Gathering context...")
+            
+            func_ctx = gather_function_context(func.start_ea)
+            context_text = format_context_for_prompt(func_ctx)
+            display_text = format_context_for_display(func_ctx)
+
+            update_ai_progress_details(0, "Sending request...")
+            
+            base_prompt = (
+                f"Analyze the following function logic {'specifically for malware behavior' if context == 'malware' else ''}.\n\n"
+                f"## Source Code\n```c\n{decompiled}\n```\n\n"
+            )
+            if context_text:
+                base_prompt += f"{context_text}\n\n"
+
             if context == "malware":
-                self.set_loading(True, self.explain_malware_btn, "Analyzing...")
-                prompt = (
-                    "Analyze the following C/Assembly function SPECIFICALLY for MALWARE context.\n\n"
+                prompt = base_prompt + (
                     "Return the output in Markdown format with the following structure:\n\n"
                     "## Summary\nA brief paragraph describing what the code is doing overall. "
                     "If the function appears BENIGN, clearly and strictly state that.\n\n"
                     "## Detailed Explanation\nProvide a numbered or bullet-point explanation of the logic and behavior.\n\n"
-                    f"{decompiled}"
+                    "Incorporate information from callers/callees/strings if they reveal malicious intent."
                 )
             else:
-                self.set_loading(True, self.explain_code_btn, "Asking...")
-                prompt = (
-                    "Analyze the following C function to explain its PROGRAMMING LOGIC.\n\n"
+                prompt = base_prompt + (
                     "Return the output in Markdown format using the structure below:\n\n"
                     "## Summary\nProvide a brief paragraph describing what the code is doing overall.\n\n"
                     "## Detailed Explanation\nProvide a numbered or bullet-point explanation of the function logic.\n\n"
-                    f"{decompiled}"
+                    "Use the provided context (callers, callees, strings) to better understand the function purpose."
                 )
-            if context == "malware": LOGGER.log(f"Starting malware analysis for function {hex(func.start_ea)}...")
-            else: LOGGER.log(f"Starting logic explanation for function {hex(func.start_ea)}...")
+            
+            total_chars = [0]
+            def chunk_cb(t):
+                total_chars[0] += len(t)
+                update_ai_progress_details(total_chars[0])
+
             AI_CLIENT.query_model_async(
-                prompt,
-                functools.partial(self.handle_explain_response_callback, func_ea=func.start_ea),
-                additional_options={"max_completion_tokens": 4096}
+                prompt, 
+                functools.partial(self.handle_explain_response_callback, func_ea=func.start_ea), 
+                on_chunk=chunk_cb, 
+                on_status=update_ai_progress_details
             )
 
-        def handle_explain_response_callback(self, response, func_ea):
+        def handle_explain_response_callback(self, response, func_ea, **kwargs):
             try:
-                if func_ea != self.last_func_ea:
-                    if response:
-                        save_to_idb(func_ea, response.strip(), tag=79)
-                        LOGGER.log(f"Background explanation for {hex(func_ea)} completed and saved.")
-                    return
-                if not response:
-                     LOGGER.log("AI Explain returned empty.")
-                     self.explanation_viewer.setText("API Error. Check debug logs")
-                else:
-                    explanation = response.strip()
-                    self.explanation_viewer.setMarkdown(explanation)
-                    save_to_idb(func_ea, explanation, tag=79)
-                    self.note_tab_widget.setTabText(1, "Function Explain (AI)")
-                    self.note_tab_widget.setCurrentIndex(1)
-            except Exception as e:
-                LOGGER.log(f"Explain Error: {e}")
-                if func_ea == self.last_func_ea:
-                    QtWidgets.QMessageBox.warning(self.parent, "PseudoNote API Error", f"An error occurred during explanation:\n\n{str(e)}")
-                    self.explanation_viewer.setText(f"Error: {str(e)}")
-                    self.note_tab_widget.setCurrentIndex(1)
-            finally:
-                self.set_loading(False)
-                if func_ea == self.last_func_ea:
-                    self.explain_malware_btn.setText("Malware")
-                    self.explain_code_btn.setText("Code")
+                if func_ea == self.last_func_ea and response:
+                    full_content = response.strip()
+                    self.explanation_viewer.setMarkdown(full_content)
+                    save_to_idb(func_ea, full_content, tag=79)
+            finally: hide_ai_progress()
 
-        def on_get_gflow(self):
-            AI_CLIENT = _get_ai()
-            ea = self.current_ea
-            if not ea or ea == idaapi.BADADDR: ea = idaapi.get_screen_ea()
-            func = idaapi.get_func(ea)
-            if not func: return
-            decompiled = ""
-            try:
-                cfunc = ida_hexrays.decompile(func.start_ea)
-                if cfunc: decompiled = str(cfunc)
-            except: pass
-            if not decompiled:
-                QtWidgets.QMessageBox.warning(self.parent, "Decompile error", "Could not decompile function for analysis."); return
-            self.set_loading(True, self.gflow_btn, "Generating...")
-            prompt = (
-                "Provide a structured, readable, high-level logical execution map for the following C function.\n"
-                "Focus strictly on semantic stages and major decision points.\n"
-                "Do NOT replicate low-level branch instructions, labels, or variable-level mechanics.\n\n"
-                "FORMAT REQUIREMENTS (STRICT):\n"
-                "1. The entire response MUST be enclosed inside a single Markdown code block using triple backticks.\n"
-                "2. Do NOT include any text, titles, explanations, or commentary outside the code block.\n"
-                "3. Do NOT include additional Markdown headers (no ## sections).\n"
-                "4. Use clear indentation and branching symbols (e.g., ├─, └─, →).\n"
-                "5. Keep the structure clean, readable, and logically staged.\n\n"
-                "The output must represent logical flow only.\n\n"
-                f"{decompiled}"
-            )
-            LOGGER.log(f"Starting Graph Flow generation for function {hex(func.start_ea)}...")
-            AI_CLIENT.query_model_async(
-                prompt,
-                functools.partial(self.handle_gflow_response_callback, func_ea=func.start_ea),
-                additional_options={"max_completion_tokens": 4096}
-            )
-
-        def handle_gflow_response_callback(self, response, func_ea):
-            try:
-                if func_ea != self.last_func_ea:
-                    if response:
-                        save_to_idb(func_ea, response.strip(), tag=82)
-                        LOGGER.log(f"Background Graph Flow for {hex(func_ea)} completed and saved.")
-                    return
-                if not response:
-                     LOGGER.log("AI Graph Flow returned empty.")
-                     self.gflow_viewer.setText("API Error. Check debug logs")
-                else:
-                    gflow = response.strip()
-                    gflow = f"Function start\n\n{gflow}"
-                    self.gflow_viewer.setMarkdown(gflow)
-                    save_to_idb(func_ea, gflow, tag=82)
-                    self.note_tab_widget.setCurrentIndex(2)
-            except Exception as e:
-                LOGGER.log(f"Graph Flow Error: {e}")
-                if func_ea == self.last_func_ea:
-                    QtWidgets.QMessageBox.warning(self.parent, "PseudoNote API Error", f"An error occurred during Graph Flow generation:\n\n{str(e)}")
-                    self.gflow_viewer.setText(f"Error: {str(e)}")
-                    self.note_tab_widget.setCurrentIndex(2)
-            finally:
-                self.set_loading(False)
-                if func_ea == self.last_func_ea:
-                    self.gflow_btn.setText("Get graph")
 
         def on_suggest_name(self):
             AI_CLIENT = _get_ai()
@@ -1603,7 +1849,10 @@ if QtWidgets:
             except: pass
             if not decompiled:
                 QtWidgets.QMessageBox.warning(self.parent, "PseudoNote", "No pseudocode available to suggest names (Hex-Rays Decompiler required)."); return
-            self.set_loading(True, self.suggest_name_btn, "Gathering context...")
+            
+            show_ai_progress("Analyzing Function Details...")
+            update_ai_progress_details(0, "Gathering context...")
+            
             context = gather_function_context(func.start_ea)
             if decompiled:
                 found_literals = re.findall(r'"((?:[^"\\]|\\.)*)"', decompiled)
@@ -1614,7 +1863,7 @@ if QtWidgets:
                         context["strings"].append(s_clean)
             context_text = format_context_for_prompt(context)
             display_text = format_context_for_display(context)
-            self.suggest_name_btn.setText("Analyzing...")
+            
             prompt = (
                 "Analyze the following C function together with its surrounding context "
                 "(callers, callees, and string references).\n\n"
@@ -1637,6 +1886,7 @@ if QtWidgets:
                 "## Arguments\n- ArgName (Type): Description of usage\n\n"
                 "## Interesting Calls\n- FunctionName – short reason\n\n"
                 "## Interesting APIs functions \n- API FunctionName – short reason\n\n"
+                "## String References\n- \"string content\" - purpose/usage\n\n"
                 "## Return Value\n- Brief explanation.\n\n"
                 "## Key Global Variables\n- `g_VarName`: Read/Written - purpose\n\n"
                 "## Key Local Variables\n- `vX` (Type/Size): Purpose (e.g. buffer, index, etc.)\n\n"
@@ -1646,108 +1896,198 @@ if QtWidgets:
                           f"{len(context['callees_api']) + len(context['callees_internal'])} callees, "
                           f"{len(context['strings'])} strings")
             LOGGER.log(f"Starting function details for {hex(func.start_ea)} (deep context: {ctx_summary})...")
+            
+            update_ai_progress_details(0, "Sending request...")
+            total_chars = [0]
+            def chunk_cb(t):
+                total_chars[0] += len(t)
+                update_ai_progress_details(total_chars[0])
+
             AI_CLIENT.query_model_async(
                 prompt,
                 functools.partial(self.handle_suggest_name_callback, func_ea=func.start_ea, context_text=display_text),
+                on_chunk=chunk_cb,
+                on_status=update_ai_progress_details,
                 additional_options={"max_completion_tokens": 16384}
             )
 
-        def handle_suggest_name_callback(self, response, func_ea, context_text=""):
+        def handle_suggest_name_callback(self, response, func_ea, context_text="", **kwargs):
             try:
-                if func_ea != self.last_func_ea:
-                    if response:
-                        full_output = response
-                        if context_text: full_output += f"\n\n{context_text}"
-                        save_to_idb(func_ea, full_output, tag=80)
-                        LOGGER.log(f"Background details for {hex(func_ea)} completed and saved.")
-                    return
-                if not response:
-                     self.suggestion_viewer.setText("API Error. Check debug logs")
-                else:
-                    full_output = response
-                    if context_text: full_output += f"\n\n{context_text}"
-                    self.suggestion_viewer.setMarkdown(full_output)
-                    save_to_idb(func_ea, full_output, tag=80)
-                    self.note_tab_widget.setTabText(3, "Function Details (AI)")
-                    self.note_tab_widget.setCurrentIndex(3)
-            except Exception as e:
-                LOGGER.log(f"Details Error: {e}")
-                if func_ea == self.last_func_ea:
-                    QtWidgets.QMessageBox.warning(self.parent, "PseudoNote API Error", f"An error occurred getting details:\n\n{str(e)}")
-                    self.suggestion_viewer.setText(f"Error: {str(e)}")
-            finally:
-                self.set_loading(False)
-                if func_ea == self.last_func_ea:
-                    self.suggest_name_btn.setText("Function Details (AI)")
+                if func_ea == self.last_func_ea and response:
+                    full_content = response.strip()
+                    if context_text:
+                        full_content = context_text + "\n\n---\n\n" + full_content
+                    self.suggestion_viewer.setMarkdown(full_content)
+                    save_to_idb(func_ea, full_content, tag=80)
+            finally: hide_ai_progress()
+
+        def on_get_gflow(self):
+            AI_CLIENT = _get_ai()
+            if not AI_CLIENT or _ai_mod.AI_BUSY: return
+            ea = self.current_ea or idaapi.get_screen_ea()
+            func = idaapi.get_func(ea)
+            if not func: return
+            
+            show_ai_progress("Preparing Context for GFlow...")
+            QtWidgets.QApplication.processEvents()
+            
+            try:
+                cfunc = ida_hexrays.decompile(func.start_ea)
+                raw = str(cfunc) if cfunc else ""
+            except: raw = ""
+            if not raw: 
+                hide_ai_progress()
+                return
+
+            # Transition from Preparation to Generation
+            hide_ai_progress()
+            show_ai_progress("Generating Text Flow Graph...")
+            update_ai_progress_details(0, "Sending request...")
+            
+            prompt = (
+                "Provide a structured, readable, high-level logical execution map for the following C function.\n"
+                "Focus strictly on semantic stages and major decision points.\n"
+                "Do NOT replicate low-level branch instructions, labels, or variable-level mechanics.\n\n"
+                "FORMAT REQUIREMENTS (STRICT):\n"
+                "1. The entire response MUST be enclosed inside a single Markdown code block using triple backticks.\n"
+                "2. Do NOT include any text, titles, explanations, or commentary outside the code block.\n"
+                "3. Do NOT include additional Markdown headers (no ## sections).\n"
+                "4. Use clear indentation and branching symbols (e.g., ├─, └─, →).\n"
+                "5. Keep the structure clean, readable, and logically staged.\n\n"
+                "The output must represent logical flow only.\n\n"
+                f"{raw}"
+            )
+            total_chars = [0]
+            def chunk_cb(t):
+                total_chars[0] += len(t)
+                update_ai_progress_details(total_chars[0])
+
+            AI_CLIENT.query_model_async(prompt, functools.partial(self.handle_gflow_response_callback, func_ea=func.start_ea), on_chunk=chunk_cb, on_status=update_ai_progress_details)
+
+        def handle_gflow_response_callback(self, response, func_ea, **kwargs):
+            try:
+                if func_ea == self.last_func_ea and response:
+                    self.gflow_viewer.setMarkdown(response.strip())
+                    save_to_idb(func_ea, response.strip(), tag=82)
+            finally: hide_ai_progress()
 
         def on_get_comments_ai(self):
             AI_CLIENT = _get_ai()
-            ea = self.current_ea
-            if not ea or ea == idaapi.BADADDR: ea = idaapi.get_screen_ea()
+            if not AI_CLIENT or _ai_mod.AI_BUSY: return
+            self.set_ai_features_enabled(False)
+            ea = self.current_ea or idaapi.get_screen_ea()
             func = idaapi.get_func(ea)
-            if not func:
-                QtWidgets.QMessageBox.warning(self.parent, "PseudoNote", "No function found."); return
-            decompiled = ""
+            if not func: return
+            
+            show_ai_progress("Preparing Code for Comments Analysis...", modal=True)
+            QtWidgets.QApplication.processEvents()
+            
             try:
                 cfunc = ida_hexrays.decompile(func.start_ea)
-                if cfunc: decompiled = str(cfunc)
-            except: pass
-            if not decompiled:
-                QtWidgets.QMessageBox.warning(self.parent, "PseudoNote", "No pseudocode available (Hex-Rays Decompiler required)."); return
-            if not AI_CLIENT:
-                LOGGER.log("AI client not initialised."); return
-            self.set_loading(True, self.get_comments_ai_btn, "Commenting...")
-            self.comments_ai_status_label.setText("AI is analyzing and rewriting code with comments... please wait.")
-            self.comments_ai_stack.setCurrentIndex(0)
+                raw = str(cfunc) if cfunc else ""
+            except: raw = ""
+            if not raw: 
+                hide_ai_progress()
+                return
+
+            # Transition from Preparation to Generation
+            hide_ai_progress()
+            show_ai_progress("Generating Readable Code with Comments...")
+            update_ai_progress_details(0, "Sending request...")
+            
+            self.comments_ai_editor.clear()
+            self.comments_ai_stack.setCurrentWidget(self.comments_ai_editor)
+            
             prompt = (
                 "You are an expert reverse engineer.\n\n"
                 "Rewrite the following C function exactly as-is (same logic, names, and structure), "
                 "but add concise comments ONLY at major logical blocks.\n\n"
-                f"{decompiled}\n\n"
+                f"{raw}\n\n"
                 "Rules:\n"
                 "- Do NOT comment every line.\n"
                 "- Add comments only above major blocks.\n"
                 "- Do NOT modify code.\n"
                 "- Return ONLY the C code inside ```c markdown block."
             )
-            LOGGER.log(f"Starting AI comment generation for function {hex(func.start_ea)}...")
-            AI_CLIENT.query_model_async(
-                prompt,
-                functools.partial(self.handle_get_comments_callback, func_ea=func.start_ea),
-                additional_options={"max_completion_tokens": 16384}
-            )
+            
+            context = {"full_text": "", "editor": self.comments_ai_editor}
+            def chunk_cb(text):
+                context["full_text"] += text
+                update_ai_progress_details(len(context["full_text"]))
+                self.comments_ai_editor.moveCursor(QtGui.QTextCursor.End)
+                self.comments_ai_editor.insertPlainText(text)
+                self.comments_ai_editor.ensureCursorVisible()
 
-        def handle_get_comments_callback(self, response, func_ea):
+            def fin_cb(response, finish_reason="stop", **kwargs):
+                self.handle_get_comments_callback(response, func.start_ea, context, finish_reason=finish_reason)
+
+            AI_CLIENT.query_model_async(prompt, fin_cb, on_chunk=chunk_cb, on_status=update_ai_progress_details, additional_options={"max_completion_tokens": 16384})
+
+        def handle_get_comments_callback(self, response, func_ea, context, finish_reason="stop", **kwargs):
             try:
-                if func_ea != self.last_func_ea:
-                    if response:
-                        save_to_idb(func_ea, response.strip(), tag=83)
-                        LOGGER.log(f"Background comments for {hex(func_ea)} completed and saved.")
+                if not response: 
+                    hide_ai_progress()
                     return
-                if not response:
-                    self.comments_ai_status_label.setText("API Error. Check debug logs.")
-                    self.comments_ai_stack.setCurrentIndex(0)
-                else:
+                
+                if finish_reason == "length" and not _ai_mod.AI_CANCEL_REQUESTED:
+                    show_ai_progress(f"Continuing Comments (Part {len(response)//8000 + 1})...", modal=True)
+                    last_chars = response[-800:].strip()
+                    prompt = (
+                        f"This is a continuation of adding comments to C code. "
+                        f"The last part you generated was:\n\n```\n{last_chars}\n```\n\n"
+                        "Please CONTINUE the code and comments from exactly that point. "
+                        "Do NOT repeat the code above. Return ONLY the remaining code inside a markdown code block."
+                    )
+                    AI = _get_ai()
+                    
+                    def c_chunk(t):
+                        context["full_text"] += t
+                        update_ai_progress_details(len(context["full_text"]))
+                        context["editor"].moveCursor(QtGui.QTextCursor.End)
+                        context["editor"].insertPlainText(t)
+                        context["editor"].ensureCursorVisible()
+                    
+                    prev_resp = response
+                    def c_fin(response, finish_reason="stop", **kwargs):
+                        full_resp = prev_resp + (response or "")
+                        self.handle_get_comments_callback(full_resp, func_ea, context, finish_reason)
+                    AI.query_model_async(prompt, c_fin, on_chunk=c_chunk, on_status=update_ai_progress_details, additional_options={"max_completion_tokens": 16384})
+                    return
+
+                code = response.strip()
+                if "```" in code:
+                    parts = code.split("```")
+                    code_parts = []
+                    for i in range(1, len(parts), 2):
+                        p = parts[i].strip()
+                        if p:
+                            lines = p.split('\n')
+                            if lines:
+                                first = lines[0].strip().lower()
+                                if first in ["python", "c", "cpp", "rust", "go", "nim", "asm", "javascript", "typescript", "csharp", "delphi", "pascal"]:
+                                    p = "\n".join(lines[1:]).strip()
+                            if p:
+                                code_parts.append(p)
+                    
+                    if code_parts:
+                        code = "\n".join(code_parts)
+                    elif len(parts) >= 2:
+                        code = parts[1].strip()
+                
+                if len(code) < 10 and len(response.strip()) > 50:
                     code = response.strip()
-                    if "```" in code:
-                        matches = re.findall(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
-                        if matches: code = matches[0]
-                        else:
-                            parts = code.split("```")
-                            if len(parts) >= 3: code = parts[1]
+                
+                save_to_idb(func_ea, code.strip(), tag=83)
+                if func_ea == self.last_func_ea:
                     self.comments_ai_editor.setPlainText(code.strip())
-                    save_to_idb(func_ea, response.strip(), tag=83)
-                    self.comments_ai_stack.setCurrentIndex(1)
-                    self.code_tab_widget.setCurrentIndex(2)
-            except Exception as e:
-                LOGGER.log(f"Comments AI Error: {e}")
-                if func_ea == self.last_func_ea:
-                    self.comments_ai_status_label.setText(f"Error: {e}")
-                    self.comments_ai_stack.setCurrentIndex(0)
-            finally:
-                self.set_loading(False)
-                if func_ea == self.last_func_ea:
-                    self.get_comments_ai_btn.setText("Get Comments (AI)")
+                    self.update_save_btn_state(self.code_save_btn, saved=True)
+            finally: hide_ai_progress()
+
+        def show_ai_progress(self, status):
+            show_ai_progress(status)
+
+        def update_ai_progress_details(self, tokens):
+            update_ai_progress_details(tokens)
 
         def refresh_ui(self, force=False):
             if not QtWidgets: return
@@ -1757,119 +2097,134 @@ if QtWidgets:
             func = idaapi.get_func(ea)
             if not func:
                 self.current_ea = None
-                self.title_label.setText("No Function Selected")
-                self.c_status_label.setText(START_TEXT)
-                self.c_status_stack.setCurrentWidget(self.c_status_stack.widget(0))
-                self.c_convert_btn.setEnabled(False)
-                self.asm_status_label.setText(START_TEXT)
-                self.asm_status_stack.setCurrentWidget(self.asm_status_stack.widget(0))
-                self.asm_convert_btn.setEnabled(False)
-                self.comments_ai_status_label.setText(START_TEXT)
-                self.comments_ai_stack.setCurrentIndex(0)
+                if self.title_label: self.title_label.setText("No Function Selected")
+                if self.c_status_label:
+                    self.c_status_label.setText(START_TEXT)
+                    if self.c_status_stack: self.c_status_stack.setCurrentWidget(self.c_status_stack.widget(0))
+                if self.c_convert_btn: self.c_convert_btn.setEnabled(False)
+                if self.asm_status_label:
+                    self.asm_status_label.setText(START_TEXT)
+                    if self.asm_status_stack: self.asm_status_stack.setCurrentWidget(self.asm_status_stack.widget(0))
+                if self.asm_convert_btn: self.asm_convert_btn.setEnabled(False)
+                if self.comments_ai_status_label:
+                    self.comments_ai_status_label.setText(START_TEXT)
+                    if self.comments_ai_stack: self.comments_ai_stack.setCurrentIndex(0)
                 return
+            
             self.current_ea = ea
             func_ea = func.start_ea
             if not force and self.last_func_ea == func_ea: return
             self.last_func_ea = func_ea
             name = idc.get_func_name(func_ea)
             accent = "#569CD6"
-            self.title_label.setText(f'Readable code: <span style="color: {accent};">{name}</span>')
+            if self.title_label: self.title_label.setText(f'Readable code: <span style="color: {accent};">{name}</span>')
             if getattr(self, "func_name_label", None):
                 self.func_name_label.setText(f'Analyst notes: <span style="color: {accent};">{name}</span>')
             try: self.SetTitle(f"PseudoNote: {name}")
             except:
                 if self.parent: self.parent.setWindowTitle(f"PseudoNote: {name}")
-            self.c_code_editor.setReadOnly(True)
-            self.asm_code_editor.setReadOnly(True)
-            self.manual_edit_btn.setText("Edit")
-            self.manual_edit_btn.setEnabled(True)
-            self.manual_edit_btn.setStyleSheet(self.get_btn_style(blue=True))
+            
+            if self.c_code_editor: self.c_code_editor.setReadOnly(True)
+            if self.asm_code_editor: self.asm_code_editor.setReadOnly(True)
+            if self.manual_edit_btn:
+                self.manual_edit_btn.setText("Edit")
+                self.manual_edit_btn.setEnabled(True)
+                self.manual_edit_btn.setStyleSheet(self.get_btn_style(blue=True))
 
             code_c = load_from_idb(func_ea, tag=0)
-            self.c_code_editor.blockSignals(True)
-            if code_c:
-                self.last_saved_c_code = code_c
-                self.c_convert_btn.setText(f"Regenerate {self.current_lang} (AI)")
-                self.c_code_editor.setPlainText(code_c)
-                self.c_status_stack.setCurrentWidget(self.c_code_editor)
-                self.code_tab_widget.setTabText(1, "Pseudocode converted")
-            else:
-                self.last_saved_c_code = ""
-                self.c_convert_btn.setText(f"Convert to {self.current_lang} (AI)")
-                self.c_code_editor.setPlainText("")
-                self.c_status_stack.setCurrentWidget(self.c_status_stack.widget(0))
-                self.c_status_label.setText(START_TEXT)
-                self.code_tab_widget.setTabText(1, "Pseudocode")
-            self.c_code_editor.blockSignals(False)
+            if self.c_code_editor:
+                self.c_code_editor.blockSignals(True)
+                if code_c:
+                    self.last_saved_c_code = code_c
+                    if self.c_convert_btn: self.c_convert_btn.setText(f"Regenerate {self.current_lang} (AI)")
+                    self.c_code_editor.setPlainText(code_c)
+                    if self.c_status_stack: self.c_status_stack.setCurrentWidget(self.c_code_editor)
+                    if self.code_tab_widget: self.code_tab_widget.setTabText(1, "Pseudocode converted")
+                else:
+                    self.last_saved_c_code = ""
+                    if self.c_convert_btn: self.c_convert_btn.setText(f"Convert to {self.current_lang} (AI)")
+                    self.c_code_editor.setPlainText("")
+                    if self.c_status_stack: self.c_status_stack.setCurrentWidget(self.c_status_stack.widget(0))
+                    if self.c_status_label: self.c_status_label.setText(START_TEXT)
+                    if self.code_tab_widget: self.code_tab_widget.setTabText(1, "Pseudocode")
+                self.c_code_editor.blockSignals(False)
 
             code_asm = load_from_idb(func_ea, tag=81)
-            self.asm_code_editor.blockSignals(True)
-            if code_asm:
-                self.last_saved_asm_code = code_asm
-                self.asm_convert_btn.setText(f"Regenerate {self.current_lang} (AI)")
-                self.asm_code_editor.setPlainText(code_asm)
-                self.asm_status_stack.setCurrentWidget(self.asm_code_editor)
-                self.code_tab_widget.setTabText(0, "IDA-View converted")
-            else:
-                self.last_saved_asm_code = ""
-                self.asm_convert_btn.setText(f"Convert to {self.current_lang} (AI)")
-                self.asm_code_editor.setPlainText("")
-                self.asm_status_stack.setCurrentWidget(self.asm_status_stack.widget(0))
-                self.asm_status_label.setText(START_TEXT)
-                self.code_tab_widget.setTabText(0, "IDA-View")
-            self.asm_code_editor.blockSignals(False)
+            if self.asm_code_editor:
+                self.asm_code_editor.blockSignals(True)
+                if code_asm:
+                    self.last_saved_asm_code = code_asm
+                    if self.asm_convert_btn: self.asm_convert_btn.setText(f"Regenerate {self.current_lang} (AI)")
+                    self.asm_code_editor.setPlainText(code_asm)
+                    if self.asm_status_stack: self.asm_status_stack.setCurrentWidget(self.asm_code_editor)
+                    if self.code_tab_widget: self.code_tab_widget.setTabText(0, "IDA-View converted")
+                else:
+                    self.last_saved_asm_code = ""
+                    if self.asm_convert_btn: self.asm_convert_btn.setText(f"Convert to {self.current_lang} (AI)")
+                    self.asm_code_editor.setPlainText("")
+                    if self.asm_status_stack: self.asm_status_stack.setCurrentWidget(self.asm_status_stack.widget(0))
+                    if self.asm_status_label: self.asm_status_label.setText(START_TEXT)
+                    if self.code_tab_widget: self.code_tab_widget.setTabText(0, "IDA-View")
+                self.asm_code_editor.blockSignals(False)
 
             self.on_code_text_changed()
-            self.on_code_tab_changed(self.code_tab_widget.currentIndex())
-            self.c_convert_btn.setEnabled(True)
-            self.asm_convert_btn.setEnabled(True)
+            if self.code_tab_widget: self.on_code_tab_changed(self.code_tab_widget.currentIndex())
+            if self.c_convert_btn: self.c_convert_btn.setEnabled(True)
+            if self.asm_convert_btn: self.asm_convert_btn.setEnabled(True)
 
             note = load_from_idb(func_ea, tag=78)
-            self.last_saved_note = note if note else ""
-            self.note_editor.blockSignals(True)
-            self.note_editor.setPlainText(self.last_saved_note)
-            self.note_editor.blockSignals(False)
-            self.update_save_btn_state(self.note_save_btn, saved=True)
-            self.toggle_note_mode(edit=False)
-            if not self.last_saved_note:
-                self.note_viewer.setText("")
+            if self.note_editor:
+                self.last_saved_note = note if note else ""
+                self.note_editor.blockSignals(True)
+                self.note_editor.setPlainText(self.last_saved_note)
+                self.note_editor.blockSignals(False)
+                if self.note_save_btn: self.update_save_btn_state(self.note_save_btn, saved=True)
+                self.toggle_note_mode(edit=False)
+                if not self.last_saved_note and self.note_viewer:
+                    self.note_viewer.setText("")
 
             explanation = load_from_idb(func_ea, tag=79)
-            if explanation: self.explanation_viewer.setMarkdown(explanation)
-            else:
-                self.explanation_viewer.setPlaceholderText("Click 'Explain (AI)' to generate an explanation for the current function.")
-                self.explanation_viewer.setText("")
+            if self.explanation_viewer:
+                if explanation: self.explanation_viewer.setMarkdown(explanation)
+                else:
+                    self.explanation_viewer.setPlaceholderText("Click 'Explain (AI)' to generate an explanation for the current function.")
+                    self.explanation_viewer.setText("")
 
             gflow = load_from_idb(func_ea, tag=82)
-            if gflow: self.gflow_viewer.setMarkdown(gflow)
-            else:
-                self.gflow_viewer.setPlaceholderText("Click 'Get graph' to generate a text flow graph.")
-                self.gflow_viewer.setText("")
+            if self.gflow_viewer:
+                if gflow: self.gflow_viewer.setMarkdown(gflow)
+                else:
+                    self.gflow_viewer.setPlaceholderText("Click 'Get graph' to generate a text flow graph.")
+                    self.gflow_viewer.setText("")
 
             suggestions = load_from_idb(func_ea, tag=80)
-            if suggestions: self.suggestion_viewer.setMarkdown(suggestions)
-            else:
-                self.suggestion_viewer.setPlaceholderText("Click 'Function Details (AI)' to generate details.")
-                self.suggestion_viewer.setText("")
+            if self.suggestion_viewer:
+                if suggestions: self.suggestion_viewer.setMarkdown(suggestions)
+                else:
+                    self.suggestion_viewer.setPlaceholderText("Click 'Function Details (AI)' to generate details.")
+                    self.suggestion_viewer.setText("")
 
             comments = load_from_idb(func_ea, tag=83)
-            if comments:
-                code = comments.strip()
-                if "```" in code:
-                    matches = re.findall(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
-                    if matches: code = matches[0]
-                    else:
-                        parts = code.split("```")
-                        if len(parts) >= 3: code = parts[1]
-                self.comments_ai_editor.setPlainText(code.strip())
-                self.comments_ai_stack.setCurrentIndex(1)
-            else:
-                self.comments_ai_status_label.setText(START_TEXT)
-                self.comments_ai_stack.setCurrentIndex(0)
-                self.comments_ai_editor.setPlainText("")
+            if self.comments_ai_editor:
+                if comments:
+                    code = comments.strip()
+                    if "```" in code:
+                        matches = re.findall(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
+                        if matches: code = matches[0]
+                        else:
+                            parts = code.split("```")
+                            if len(parts) >= 3: code = parts[1]
+                    self.comments_ai_editor.setPlainText(code.strip())
+                    if self.comments_ai_stack: self.comments_ai_stack.setCurrentIndex(1)
+                else:
+                    if self.comments_ai_status_label: self.comments_ai_status_label.setText(START_TEXT)
+                    if self.comments_ai_stack: self.comments_ai_stack.setCurrentIndex(0)
+                    self.comments_ai_editor.setPlainText("")
 
         def OnClose(self, form):
             global _view_instance
+            if hasattr(self, 'check_ai_busy_timer') and self.check_ai_busy_timer:
+                self.check_ai_busy_timer.stop()
             if self.hooks: self.hooks.unhook()
             _view_instance = None
 

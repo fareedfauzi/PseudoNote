@@ -17,6 +17,7 @@ from pseudonote.qt_compat import QtWidgets, QtGui
 from pseudonote.config import CONFIG, LOGGER
 import pseudonote.ai_client as _ai_mod
 import pseudonote.chat as _chat
+import pseudonote.view as _view_mod
 
 
 def _get_ai_client():
@@ -92,14 +93,13 @@ class RenameVariablesHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         AI_CLIENT = _get_ai_client()
-        if not AI_CLIENT:
-            print("[PseudoNote] AI client not initialised.")
-            return 0
+        if not AI_CLIENT: return 0
+        
         decompiler_output = ida_hexrays.decompile(idaapi.get_screen_ea())
         v = ida_hexrays.get_widget_vdui(ctx.widget)
-        if not decompiler_output or not v:
-            print("[PseudoNote] Could not decompile the current function or get view.")
-            return 0
+        if not decompiler_output or not v: return 0
+        
+        _view_mod.show_ai_progress("Renaming Variables")
         prompt = (
             "You are an expert reverse engineer. Review the C function code provided below:\n\n{decompiler_output}\n\n"
             "Identify variables with generic or unhelpful names (e.g., v1, a2, result, qword_1234, dword_5678). "
@@ -107,11 +107,17 @@ class RenameVariablesHandler(idaapi.action_handler_t):
             "Output ONLY a valid JSON object mapping the original variable names (keys) to the suggested new names (values). "
             "Do NOT include any explanations or markdown formatting outside the JSON."
         ).format(decompiler_output=str(decompiler_output))
-        AI_CLIENT.query_model_async(
-            prompt,
-            functools.partial(_pn_rename_callback, address=idaapi.get_screen_ea(), view=v)
-        )
-        print("[PseudoNote] Rename Variables request sent...")
+        
+        def wrapped_cb(response, **kwargs):
+            try: _pn_rename_callback(address=idaapi.get_screen_ea(), view=v, response=response)
+            finally: _view_mod.hide_ai_progress()
+
+        total_chars = [0]
+        def chunk_cb(t):
+            total_chars[0] += len(t)
+            _view_mod.update_ai_progress_details(total_chars[0])
+
+        AI_CLIENT.query_model_async(prompt, wrapped_cb, on_chunk=chunk_cb, additional_options={"max_completion_tokens": 8192})
         return 1
 
     def update(self, ctx):
@@ -128,18 +134,14 @@ class RenameFunctionHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         AI_CLIENT = _get_ai_client()
-        if not AI_CLIENT:
-            print("[PseudoNote] AI client not initialised.")
-            return 0
+        if not AI_CLIENT: return 0
         ea = idaapi.get_screen_ea()
         cfunc = ida_hexrays.decompile(ea)
         vdui = ida_hexrays.get_widget_vdui(ctx.widget)
-        if not cfunc or not vdui:
-            print("[PseudoNote] Could not decompile the current function or get view.")
-            return 0
-        prefix = ""
-        if CONFIG.use_rename_prefix:
-            prefix = CONFIG.function_prefix
+        if not cfunc or not vdui: return 0
+        
+        prefix = CONFIG.function_prefix if CONFIG.use_rename_prefix else ""
+        _view_mod.show_ai_progress("Naming Function (Code)")
         
         prompt = (
             "Analyze the following C function code:\n"
@@ -147,59 +149,27 @@ class RenameFunctionHandler(idaapi.action_handler_t):
             "Suggest a concise new name for this function. "
             f"Only reply with the new function name, prefixed with '{prefix}' if appropriate."
         )
-        def callback(response):
-            if not response:
-                print("[PseudoNote] Rename Function: no response from AI.")
-                return
-            # More robust extraction: strip backticks, whitespace, and take the first "word"
-            clean_resp = response.strip().replace("`", "").replace("'", "").replace("\"", "")
-            if not clean_resp:
-                print("[PseudoNote] Rename Function: AI response was empty after cleaning.")
-                return
-            new_name = clean_resp.split()[0]
-            
-            func = idaapi.get_func(ea)
-            if not func:
-                print("[PseudoNote] Could not find function at address.")
-                return
-            old_name = idc.get_func_name(func.start_ea)
-            
-            # Validation regex
-            # Use a specific prefix if enabled, otherwise just standard identifier
-            if prefix:
-                ident_re = rf'^{re.escape(prefix)}[A-Za-z_][A-Za-z0-9_]*$'
-            else:
-                ident_re = r'^[A-Za-z_][A-Za-z0-9_]*$'
-            
-            if new_name == old_name or not re.match(ident_re, new_name):
-                # Auto-apply prefix if user intended it but AI forgot
-                if CONFIG.use_rename_prefix and not new_name.startswith(prefix):
-                    new_name = prefix + new_name
-                
-                # Final validation
-                if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', new_name):
-                    print(f"[PseudoNote] Invalid name suggested: {new_name}")
-                    # Final attempt: try to find ANYTHING that looks like an identifier in the response
-                    m = re.search(r'[A-Za-z_][A-Za-z0-9_]*', clean_resp)
-                    if m:
-                        new_name = m.group(0)
-                        if prefix and not new_name.startswith(prefix):
-                            new_name = prefix + new_name
-                    else:
-                        ida_kernwin.warning(f"AI suggested the current function name or an invalid name.\n\nNothing to change.")
-                        return
-            
-            if new_name == old_name:
-                ida_kernwin.warning(f"AI suggested the current function name:\n\n{old_name}\n\nNothing to change.")
-                return
-            success = idc.set_name(func.start_ea, new_name, idc.SN_AUTO)
-            if success:
-                print(f"[PseudoNote] Function renamed to: {new_name}")
-                if vdui: vdui.refresh_view(True)
-            else:
-                print(f"[PseudoNote] Failed to rename function to: {new_name}")
-        AI_CLIENT.query_model_async(prompt, callback)
-        print("[PseudoNote] Rename Function (Code) request sent...")
+        def callback(response, **kwargs):
+            try:
+                if not response: return
+                clean_resp = response.strip().replace("`", "").replace("'", "").replace("\"", "")
+                if not clean_resp: return
+                new_name = clean_resp.split()[0]
+                func = idaapi.get_func(ea)
+                if not func: return
+                old_name = idc.get_func_name(func.start_ea)
+                if new_name == old_name: return
+                if idc.set_name(func.start_ea, new_name, idc.SN_AUTO):
+                    if vdui: vdui.refresh_view(True)
+            finally:
+                _view_mod.hide_ai_progress()
+
+        total_chars = [0]
+        def chunk_cb(t):
+            total_chars[0] += len(t)
+            _view_mod.update_ai_progress_details(total_chars[0])
+
+        AI_CLIENT.query_model_async(prompt, callback, on_chunk=chunk_cb)
         return 1
 
     def update(self, ctx):
@@ -216,78 +186,42 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         AI_CLIENT = _get_ai_client()
-        if not AI_CLIENT:
-            print("[PseudoNote] AI client not initialised.")
-            return 0
+        if not AI_CLIENT: return 0
         ea = idaapi.get_screen_ea()
         cfunc = ida_hexrays.decompile(ea)
         vdui = ida_hexrays.get_widget_vdui(ctx.widget)
-        if not cfunc or not vdui:
-            print("[PseudoNote] Could not decompile the current function or get view.")
-            return 0
-        prefix = ""
-        if CONFIG.use_rename_prefix:
-            prefix = CONFIG.function_prefix
-            
+        if not cfunc or not vdui: return 0
+        
+        prefix = CONFIG.function_prefix if CONFIG.use_rename_prefix else ""
+        _view_mod.show_ai_progress("Naming Function (Malware)")
+        
         prompt = (
             "Analyze the following C function code in the context of malware reverse engineering:\n"
             f"{str(cfunc)}\n"
             "Suggest a concise new name for this function. "
             f"Only reply with the new function name, prefixed with '{prefix}' if appropriate."
         )
-        def callback(response):
-            if not response:
-                print("[PseudoNote] Rename Function (Malware): no response from AI.")
-                return
-            # More robust extraction: strip backticks, whitespace, and take the first "word"
-            clean_resp = response.strip().replace("`", "").replace("'", "").replace("\"", "")
-            if not clean_resp:
-                print("[PseudoNote] Rename Function (Malware): AI response was empty after cleaning.")
-                return
-            new_name = clean_resp.split()[0]
+        def callback(response, **kwargs):
+            try:
+                if not response: return
+                clean_resp = response.strip().replace("`", "").replace("'", "").replace("\"", "")
+                if not clean_resp: return
+                new_name = clean_resp.split()[0]
+                func = idaapi.get_func(ea)
+                if not func: return
+                old_name = idc.get_func_name(func.start_ea)
+                if new_name == old_name: return
+                if idc.set_name(func.start_ea, new_name, idc.SN_AUTO):
+                    if vdui: vdui.refresh_view(True)
+            finally:
+                _view_mod.hide_ai_progress()
 
-            func = idaapi.get_func(ea)
-            if not func:
-                print("[PseudoNote] Could not find function at address.")
-                return
-            old_name = idc.get_func_name(func.start_ea)
+        total_chars = [0]
+        def chunk_cb(t):
+            total_chars[0] += len(t)
+            _view_mod.update_ai_progress_details(total_chars[0])
 
-            # Validation regex
-            if prefix:
-                ident_re = rf'^{re.escape(prefix)}[A-Za-z_][A-Za-z0-9_]*$'
-            else:
-                ident_re = r'^[A-Za-z_][A-Za-z0-9_]*$'
-
-            if new_name == old_name or not re.match(ident_re, new_name):
-                # Auto-apply prefix if user intended it but AI forgot
-                if CONFIG.use_rename_prefix and not new_name.startswith(prefix):
-                    new_name = prefix + new_name
-                
-                # Final validation
-                if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', new_name):
-                    print(f"[PseudoNote] Invalid name suggested: {new_name}")
-                    # Final attempt: try to find ANYTHING that looks like an identifier in the response
-                    m = re.search(r'[A-Za-z_][A-Za-z0-9_]*', clean_resp)
-                    if m:
-                        new_name = m.group(0)
-                        if prefix and not new_name.startswith(prefix):
-                            new_name = prefix + new_name
-                    else:
-                        ida_kernwin.warning(f"AI suggested the current function name or an invalid name.\n\nNothing to change.")
-                        return
-            
-            if new_name == old_name:
-                ida_kernwin.warning(f"AI suggested the current function name:\n\n{old_name}\n\nNothing to change.")
-                return
-
-            success = idc.set_name(func.start_ea, new_name, idc.SN_AUTO)
-            if success:
-                print(f"[PseudoNote] Function renamed to: {new_name}")
-                if vdui: vdui.refresh_view(True)
-            else:
-                print(f"[PseudoNote] Failed to rename function to: {new_name}")
-        AI_CLIENT.query_model_async(prompt, callback)
-        print("[PseudoNote] Rename Function (Malware) request sent...")
+        AI_CLIENT.query_model_async(prompt, callback, on_chunk=chunk_cb)
         return 1
 
     def update(self, ctx):
@@ -307,21 +241,15 @@ class SuggestFunctionSignatureHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         AI_CLIENT = _get_ai_client()
-        if not AI_CLIENT:
-            print("[PseudoNote] AI client not initialised.")
-            return 0
+        if not AI_CLIENT: return 0
         ea = idaapi.get_screen_ea()
-        try:
-             cfunc = ida_hexrays.decompile(ea)
-        except:
-             print("[PseudoNote] Failed to decompile.")
-             return 0
+        try: cfunc = ida_hexrays.decompile(ea)
+        except: return 0
              
         vdui = ida_hexrays.get_widget_vdui(ctx.widget)
-        if not cfunc or not vdui:
-            print("[PseudoNote] Could not decompile the current function or get view.")
-            return 0
+        if not cfunc or not vdui: return 0
             
+        _view_mod.show_ai_progress("Suggesting Signature")
         prompt = (
             "Analyze the following C function code:\n"
             f"{str(cfunc)}\n\n"
@@ -331,79 +259,26 @@ class SuggestFunctionSignatureHandler(idaapi.action_handler_t):
             "Do not include semicolon or body."
         )
         
-        def callback(response):
-            if not response:
-                print("[PseudoNote] Suggest Signature: no response from AI.")
-                return
-            
+        def callback(response, **kwargs):
             try:
-                # Extract signature
-                clean_sig = response.strip()
-                # Remove markdown code blocks
-                match = re.search(r"```(?:c|cpp)?\s*(.*?)\s*```", clean_sig, re.DOTALL)
-                if match:
-                    clean_sig = match.group(1).strip()
-                
-                # Strip single backticks or quotes if AI wrapped it
-                clean_sig = clean_sig.strip("`'\" ")
-                
-                # Remove trailing semicolon or braces
-                clean_sig = clean_sig.split('{')[0].strip().rstrip(';')
-
-                # Use address to get current state (safer than stale objects)
+                if not response: return
+                clean_sig = response.strip().split('{')[0].strip().rstrip(';')
                 func = idaapi.get_func(ea)
                 if not func: return
                 
-                # Attempt to get current type using standard idc.get_type
-                current_decl = None
-                try:
-                    current_decl = idc.get_type(func.start_ea)
-                except:
-                    pass
-                
-                def normalize(s):
-                    if not s: return ""
-                    # Remove comments
-                    s = re.sub(r'/\*.*?\*/', '', s, flags=re.DOTALL)
-                    s = re.sub(r'//.*', '', s)
-                    # Collapse whitespace
-                    s = " ".join(s.split())
-                    # Normalize common C tokens spacing
-                    s = s.replace(" *", "*").replace("* ", "*")
-                    s = s.replace(" (", "(").replace("( ", "(")
-                    s = s.replace(" ,", ",").replace(", ", ",")
-                    return s.strip().rstrip(';').lower()
-
-                n_new = normalize(clean_sig)
-                n_old = normalize(current_decl) if current_decl else ""
-                
-                if n_new and n_old and n_new == n_old:
-                    print(f"[PseudoNote] Suggest Signature: AI suggested the same signature as current. Skipping.")
-                    ida_kernwin.warning("AI suggested the same signature as current.\n\nNothing to change.")
-                    return
-
                 msg = f"AI Suggested Signature:\n\n{clean_sig}\n\nApply this signature?"
-                # ask_yn returns 1 (Yes), 0 (No), -1 (Cancel)
-                resp = ida_kernwin.ask_yn(1, msg)
-                
-                if resp == 1:
-                    # Apply - append semicolon for SetType
+                if ida_kernwin.ask_yn(1, msg) == 1:
                     if idc.SetType(func.start_ea, clean_sig + ";"):
-                        print(f"[PseudoNote] Applied signature: {clean_sig}")
-                        # Re-get view if possible
-                        curr_v = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_widget())
-                        if curr_v: curr_v.refresh_view(True)
-                        else:
-                            # Fallback view refresh
-                            v = ida_hexrays.get_widget_vdui(ctx.widget)
-                            if v: v.refresh_view(True)
-                    else:
-                        print(f"[PseudoNote] Failed to apply signature: {clean_sig}. Check syntax.")
-            except Exception as e:
-                print(f"[PseudoNote] Error in Suggest Signature callback: {e}")
-        
-        AI_CLIENT.query_model_async(prompt, callback)
-        print("[PseudoNote] Suggest Function Signature request sent...")
+                        if vdui: vdui.refresh_view(True)
+            finally:
+                _view_mod.hide_ai_progress()
+
+        total_chars = [0]
+        def chunk_cb(t):
+            total_chars[0] += len(t)
+            _view_mod.update_ai_progress_details(total_chars[0])
+
+        AI_CLIENT.query_model_async(prompt, callback, on_chunk=chunk_cb)
         return 1
 
     def update(self, ctx):
@@ -551,25 +426,16 @@ class CommentHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         AI_CLIENT = _get_ai_client()
-        if not AI_CLIENT:
-            print("[PseudoNote] AI client not initialised.")
-            return 0
-        
+        if not AI_CLIENT: return 0
         ea = idaapi.get_screen_ea()
-        try:
-            cfunc = ida_hexrays.decompile(ea)
-        except:
-            print("[PseudoNote] Could not decompile function.")
-            return 0
-            
+        try: cfunc = ida_hexrays.decompile(ea)
+        except: return 0
         v = ida_hexrays.get_widget_vdui(ctx.widget)
-        if not cfunc or not v:
-            print("[PseudoNote] Could not decompile the current function or get view.")
-            return 0
+        if not cfunc or not v: return 0
 
+        _view_mod.show_ai_progress("Commenting Code")
         pseudocode_lines = get_commentable_lines(cfunc)
         formatted_lines = format_commentable_lines(pseudocode_lines)
-
         prompt = (
             "You are a reverse-engineering assistant adding helpful pseudocode comments.\n"
             "- Output format (strict): exactly one JSON object mapping integer lineNumber -> string comment.\n"
@@ -583,13 +449,17 @@ class CommentHandler(idaapi.action_handler_t):
             f"{formatted_lines}\n"
             "```"
         )
-        
-        AI_CLIENT.query_model_async(
-            prompt,
-            functools.partial(_pn_comment_callback, cfunc=cfunc, pseudocode_lines=pseudocode_lines, view=v),
-             additional_options={"response_format": {"type": "json_object"}}
-        )
-        print("[PseudoNote] AI Commenting request sent...")
+        def wrapped_cb(response, **kwargs):
+            try: _pn_comment_callback(cfunc=cfunc, pseudocode_lines=pseudocode_lines, view=v, response=response)
+            finally:
+                _view_mod.hide_ai_progress()
+
+        total_chars = [0]
+        def chunk_cb(t):
+            total_chars[0] += len(t)
+            _view_mod.update_ai_progress_details(total_chars[0])
+
+        AI_CLIENT.query_model_async(prompt, wrapped_cb, on_chunk=chunk_cb, additional_options={"max_completion_tokens": 8192})
         return 1
 
     def update(self, ctx):
@@ -773,11 +643,9 @@ class StructAnalysisHandler(idaapi.action_handler_t):
             print("[PseudoNote] Structure analysis currently supports Pseudocode view only.")
             return 0
             
-        if not target_name or not target_code:
-            return 0
+        if not target_name or not target_code: return 0
             
-        print(f"[PseudoNote] Analyzing structure for '{target_name}'...")
-        
+        _view_mod.show_ai_progress(f"Analyzing Struct: {target_name}")
         # Prepare Prompt
         prompt = (
             f"Analyze the C code below. Focus on the usage of variable `{target_name}`.\n"
@@ -790,13 +658,61 @@ class StructAnalysisHandler(idaapi.action_handler_t):
             "```"
         )
         
+        def wrapped_cb(response, **kwargs):
+            _view_mod.hide_ai_progress()
+            try: 
+                self.handle_response(target_name=target_name, vdui=vdui, lvar_name=target_lvar_name, response=response)
+            except Exception as e:
+                print(f"[PseudoNote] Struct Analysis Error: {e}")
+
         if AI_CLIENT:
-            AI_CLIENT.query_model_async(
-                prompt,
-                functools.partial(self.handle_response, target_name=target_name, vdui=vdui, lvar_name=target_lvar_name),
-                additional_options={"max_completion_tokens": 2048}
-            )
+            total_chars = [0]
+            def chunk_cb(t):
+                total_chars[0] += len(t)
+                _view_mod.update_ai_progress_details(total_chars[0])
+
+            AI_CLIENT.query_model_async(prompt, wrapped_cb, on_chunk=chunk_cb, on_status=_view_mod.update_ai_progress_details, additional_options={"max_completion_tokens": 8192})
         return 1
+
+    def handle_response(self, target_name, vdui, lvar_name, response):
+        if not response: 
+            print("[PseudoNote] Struct Analysis: No response from AI.")
+            return
+        
+        # Extract C code from AI response
+        c_struct = response.strip()
+        if "```" in c_struct:
+            parts = c_struct.split("```")
+            for i in range(1, len(parts), 2):
+                p = parts[i].strip()
+                if p:
+                    # Strip language tags if present
+                    lines = p.split('\n')
+                    if lines and lines[0].strip().lower() in ["c", "cpp"]:
+                        c_struct = "\n".join(lines[1:]).strip()
+                    else:
+                        c_struct = p
+                    break
+        
+        # Define apply callback to update the variable type in IDA
+        def on_apply(type_name):
+            if not vdui or not lvar_name: return False
+            try:
+                for lvar in vdui.cfunc.get_lvars():
+                    if lvar.name == lvar_name:
+                        new_type = idaapi.tinfo_t()
+                        # parse_decl expects "TYPE NAME;" snippet to infer the type
+                        if idaapi.parse_decl(new_type, None, f"{type_name} dummy;", 0):
+                            if vdui.set_lvar_type(lvar, new_type):
+                                vdui.refresh_view(True)
+                                return True
+            except Exception as e:
+                print(f"[PseudoNote] Failed to apply struct type: {e}")
+            return False
+
+        # Create and show the result dialog
+        dlg = StructAnalysisDialog(c_struct, on_apply_callback=on_apply)
+        dlg.exec_()
 
     def update(self, ctx):
         """Enable this action only for the Pseudocode view (where structure analysis is supported)."""
