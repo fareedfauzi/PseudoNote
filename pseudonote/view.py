@@ -422,7 +422,7 @@ if QtWidgets:
             fl.addRow(self.force_rename_cb)
             
             force_warn = QtWidgets.QLabel("Caution: Forcing large functions into big batches may cause truncated results or timeouts. Recommendation: Don't tick this box.")
-            force_warn.setStyleSheet("color: #FF9500; font-style: italic; font-size: 11px; margin-left: 0px;")
+            force_warn.setStyleSheet("color: #d10e00; font-style: italic; font-size: 12px; margin-left: 0px;")
             force_warn.setWordWrap(True)
             fl.addRow(force_warn)
             
@@ -444,7 +444,7 @@ if QtWidgets:
             self.cooldown_spin = QtWidgets.QSpinBox()
             self.cooldown_spin.setRange(0, 300)
             self.cooldown_spin.setValue(getattr(self.config, 'cooldown_seconds', 22))
-            fl.addRow("Cooling Down Seconds:", self.cooldown_spin)
+            fl.addRow("Cooldown seconds (Avoid rate limits):", self.cooldown_spin)
             
             self.asm_max_spin = QtWidgets.QSpinBox()
             self.asm_max_spin.setRange(5, 500)
@@ -463,6 +463,16 @@ if QtWidgets:
             # Gray out logic for bulk
             self.disable_bulk_prefix_cb.toggled.connect(lambda checked: self.prefix_edit.setEnabled(not checked))
             self.prefix_edit.setEnabled(not self.disable_bulk_prefix_cb.isChecked())
+            
+            self.bulk_append_addr_cb = QtWidgets.QCheckBox("Append offset address (e.g., {prefix}_FunctionName_18001db0)")
+            self.bulk_append_addr_cb.setChecked(getattr(self.config, 'bulk_append_address', False))
+            fl.addRow("", self.bulk_append_addr_cb)
+            
+            self.bulk_use_0x_cb = QtWidgets.QCheckBox("Use 0x prefix for address (e.g., _0x18001db0)")
+            self.bulk_use_0x_cb.setChecked(getattr(self.config, 'bulk_use_0x', False))
+            self.bulk_use_0x_cb.setEnabled(self.bulk_append_addr_cb.isChecked())
+            self.bulk_append_addr_cb.toggled.connect(self.bulk_use_0x_cb.setEnabled)
+            fl.addRow("", self.bulk_use_0x_cb)
             
             grp.setLayout(fl)
             layout.addWidget(grp)
@@ -529,9 +539,18 @@ if QtWidgets:
             self.func_prefix_edit.setPlaceholderText("fn_ (empty for none)")
             fl.addRow("Rename prefix:", self.func_prefix_edit)
 
-            # Gray out logic
             self.disable_prefix_cb.toggled.connect(lambda checked: self.func_prefix_edit.setEnabled(not checked))
             self.func_prefix_edit.setEnabled(not self.disable_prefix_cb.isChecked())
+
+            self.rename_append_addr_cb = QtWidgets.QCheckBox("Append offset address (e.g., fn_FunctionName_18001db0)")
+            self.rename_append_addr_cb.setChecked(getattr(self.config, 'rename_append_address', False))
+            fl.addRow("", self.rename_append_addr_cb)
+            
+            self.rename_use_0x_cb = QtWidgets.QCheckBox("Use 0x prefix for address (e.g., _0x18001db0)")
+            self.rename_use_0x_cb.setChecked(getattr(self.config, 'rename_use_0x', False))
+            self.rename_use_0x_cb.setEnabled(self.rename_append_addr_cb.isChecked())
+            self.rename_append_addr_cb.toggled.connect(self.rename_use_0x_cb.setEnabled)
+            fl.addRow("", self.rename_use_0x_cb)
             
             grp.setLayout(fl)
             layout.addWidget(grp)
@@ -629,10 +648,14 @@ if QtWidgets:
             c.rename_prefix = self.prefix_edit.text().strip() or "bulkren_"
             c.cooldown_seconds = self.cooldown_spin.value()
             c.asm_max_lines = self.asm_max_spin.value()
+            c.bulk_append_address = self.bulk_append_addr_cb.isChecked()
+            c.bulk_use_0x = self.bulk_use_0x_cb.isChecked()
             
             # Save Function Rename
             c.use_rename_prefix = not self.disable_prefix_cb.isChecked()
             c.function_prefix = self.func_prefix_edit.text().strip()
+            c.rename_append_address = self.rename_append_addr_cb.isChecked()
+            c.rename_use_0x = self.rename_use_0x_cb.isChecked()
             
             c.save()
             self.accept()
@@ -2266,11 +2289,11 @@ class ContextMenuHooks(idaapi.UI_Hooks):
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_variables", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
-            # 'Ask AI' popup action removed due to instability
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyze_struct", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_comments", "PseudoNote/")

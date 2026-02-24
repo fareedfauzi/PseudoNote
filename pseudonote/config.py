@@ -74,6 +74,10 @@ class Config:
         self.filter_empty = True
         self.asm_max_lines = 25
         self.force_bulk_rename = False
+        self.bulk_append_address = False
+        self.bulk_use_0x = False
+        self.rename_append_address = False
+        self.rename_use_0x = False
 
         self.load()
 
@@ -190,6 +194,10 @@ class Config:
             self.cooldown_seconds = parser.getint("Analysis", "COOLDOWN_SECONDS", fallback=22)
             self.asm_max_lines = parser.getint("Analysis", "ASM_MAX_LINES", fallback=25)
             self.force_bulk_rename = parser.getboolean("Analysis", "FORCE_RENAME", fallback=False)
+            self.bulk_append_address = parser.getboolean("Analysis", "BULK_APPEND_ADDR", fallback=False)
+            self.bulk_use_0x = parser.getboolean("Analysis", "BULK_USE_0X", fallback=False)
+            self.rename_append_address = parser.getboolean("Analysis", "RENAME_APPEND_ADDR", fallback=False)
+            self.rename_use_0x = parser.getboolean("Analysis", "RENAME_USE_0X", fallback=False)
 
     def save(self):
         parser = configparser.ConfigParser()
@@ -257,6 +265,10 @@ class Config:
         parser.set("Analysis", "COOLDOWN_SECONDS", str(self.cooldown_seconds))
         parser.set("Analysis", "ASM_MAX_LINES", str(self.asm_max_lines))
         parser.set("Analysis", "FORCE_RENAME", str(self.force_bulk_rename))
+        parser.set("Analysis", "BULK_APPEND_ADDR", str(self.bulk_append_address))
+        parser.set("Analysis", "BULK_USE_0X", str(self.bulk_use_0x))
+        parser.set("Analysis", "RENAME_APPEND_ADDR", str(self.rename_append_address))
+        parser.set("Analysis", "RENAME_USE_0X", str(self.rename_use_0x))
 
         # Try saving. Handle Permission Denied (e.g. Program Files) by falling back to user home.
         success = False

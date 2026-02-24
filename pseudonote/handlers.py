@@ -157,6 +157,15 @@ class RenameFunctionHandler(idaapi.action_handler_t):
                 new_name = clean_resp.split()[0]
                 func = idaapi.get_func(ea)
                 if not func: return
+
+                if getattr(CONFIG, 'rename_append_address', False):
+                    use_0x = getattr(CONFIG, 'rename_use_0x', False)
+                    addr_str = f"{func.start_ea:X}"
+                    if use_0x:
+                        new_name = f"{new_name}_0x{addr_str}"
+                    else:
+                        new_name = f"{new_name}_{addr_str}"
+
                 old_name = idc.get_func_name(func.start_ea)
                 if new_name == old_name: return
                 if idc.set_name(func.start_ea, new_name, idc.SN_AUTO):
@@ -209,6 +218,15 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
                 new_name = clean_resp.split()[0]
                 func = idaapi.get_func(ea)
                 if not func: return
+
+                if getattr(CONFIG, 'rename_append_address', False):
+                    use_0x = getattr(CONFIG, 'rename_use_0x', False)
+                    addr_str = f"{func.start_ea:X}"
+                    if use_0x:
+                        new_name = f"{new_name}_0x{addr_str}"
+                    else:
+                        new_name = f"{new_name}_{addr_str}"
+
                 old_name = idc.get_func_name(func.start_ea)
                 if new_name == old_name: return
                 if idc.set_name(func.start_ea, new_name, idc.SN_AUTO):

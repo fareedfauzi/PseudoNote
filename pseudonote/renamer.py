@@ -477,7 +477,7 @@ def ai_request(cfg, prompt, sys_prompt, logger=None):
             # Second failure (attempt 1) -> terminate request
             raise e
 
-def clean_name(name, existing=None):
+def clean_name(name, existing=None, ea=None):
     if not name: return None
     name = re.sub(r'[`"\'\n\r\t]', '', name)
     name = name.split('(')[0].split(':')[-1].strip()
@@ -497,6 +497,14 @@ def clean_name(name, existing=None):
         prefix = getattr(CONFIG, 'rename_prefix', 'bulkren_')
         if not name.startswith(prefix):
             name = f"{prefix}{name}"
+
+    if ea is not None and getattr(CONFIG, 'bulk_append_address', False):
+        use_0x = getattr(CONFIG, 'bulk_use_0x', False)
+        addr_str = f"{ea:X}"
+        if use_0x:
+            name = f"{name}_0x{addr_str}"
+        else:
+            name = f"{name}_{addr_str}"
 
     if existing:
         orig, cnt = name, 1
@@ -734,7 +742,7 @@ class AnalyzeWorker(QThread):
                 if f.strings: prompt += f"\nStrings found: {f.strings}"
                 if f.calls: prompt += f"\nCalled functions: {f.calls}"
                 resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger)
-                name = clean_name(resp, self.existing)
+                name = clean_name(resp, self.existing, ea=f.ea)
                 results.append((idx, f, name))
             else:
                 self.log.emit(f"Processing batch of {len(valid)} functions...", 'info')
@@ -756,7 +764,7 @@ class AnalyzeWorker(QThread):
 
                 for i, (idx, f) in enumerate(valid):
                     suggestion = names[i] if i < len(names) else None
-                    name = clean_name(suggestion, self.existing) if suggestion else None
+                    name = clean_name(suggestion, self.existing, ea=f.ea) if suggestion else None
                     
                     if name:
                         self.existing.add(name)
