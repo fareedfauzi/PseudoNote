@@ -35,7 +35,7 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 7. Automatically generate C function prototypes and type definitions.
 8. Analyst Notes - Integrated Markdown editor with live preview with markdown toolbar.
 9. Generate high-level, text-based execution tree graph flow.
-10. Insert section comments into the pseudocode (Only pseudocode for now).
+10. Insert section comments into the pseudocode and IDA-view assembly.
 11. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
 12. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio.
     - Currently, only OpenAI, LM Studio, and OpenAI-compatible providers have been fully tested.
