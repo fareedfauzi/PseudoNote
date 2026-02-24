@@ -60,6 +60,6 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 
 ### Call highlighter (IDA view and Pseudocode)
 <img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
-<img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
+
 
 
