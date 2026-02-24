@@ -49,7 +49,6 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 ### Demo: Converting IDA-view/Pseudocode to readable C code
 ![chrome_lEV4Uyor9A](https://github.com/user-attachments/assets/5d7376a6-5156-446f-9725-692b4d7d449c)
 
-
 ### Saved notes 
 <img width="729" height="155" alt="image" src="https://github.com/user-attachments/assets/5fa827e1-86cd-409e-8517-7d1e194dd120" />
 
@@ -58,5 +57,9 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 
 ### Bulk function renamer pane
 <img width="1202" height="882" alt="image" src="https://github.com/user-attachments/assets/bd202b28-d534-4293-946c-b4e960331e5e" />
+
+### Call highlighter (IDA view and Pseudocode)
+<img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
+<img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
 
 
