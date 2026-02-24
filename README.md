@@ -42,10 +42,14 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
     - Anthropic, Gemini, DeepSeek, and Ollama have not yet been tested.
 12. Save all generated data directly into the IDA database (.idb).
 
+# GUI
 ### Pseudonote Pane
 <img width="1535" height="821" alt="image" src="https://github.com/user-attachments/assets/514f7c28-c60b-4e81-a6f0-e03a867ab36e" />
 
-### Chat with about the current function
+### Saved notes 
+<img width="729" height="155" alt="image" src="https://github.com/user-attachments/assets/5fa827e1-86cd-409e-8517-7d1e194dd120" />
+
+### Chat with the AI agent about the current function
 <img width="1534" height="867" alt="image" src="https://github.com/user-attachments/assets/03a684d2-bef3-49d0-a0d4-35173b409e09" />
 
 ### Bulk function renamer pane
