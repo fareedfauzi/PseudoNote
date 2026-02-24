@@ -24,7 +24,14 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 ### 4. Usage
 **Right-Click**: See options in Pseudocode/Disassembly.
 
+Pseudocode view:
+
 <img width="1511" height="819" alt="image" src="https://github.com/user-attachments/assets/45523f17-8010-47c1-bd6e-8f54af576028" />
+
+IDA view:
+
+<img width="1145" height="930" alt="image" src="https://github.com/user-attachments/assets/0dc19be7-3dd5-49f0-8ed4-cadc16f87e09" />
+
 
 # Features
 1. Convert HexRay's Pseudocode or Assembly into high-level languages such as C. Python, Rust, and others.
@@ -62,5 +69,8 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 ### Call highlighter (IDA view and Pseudocode)
 <img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
 
+### Basic shellcode static analysis
+- Tested only on msvenom generated shellcode
+<img width="1528" height="915" alt="image" src="https://github.com/user-attachments/assets/e4230ec5-5dc9-4070-bbf3-4f283d1fb6ae" />
 
 
