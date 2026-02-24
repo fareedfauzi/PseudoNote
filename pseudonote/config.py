@@ -7,7 +7,7 @@ import os
 import datetime
 import configparser
 
-from pseudonote.qt_compat import QtCore, Signal
+from pseudonote.qt_compat import QtCore, Signal, QtWidgets
 
 
 class Config:
@@ -286,6 +286,14 @@ class Config:
                         parser.write(f)
                     LOGGER.log(f"Configuration saved to {self.config_path}")
                     success = True
+                    if QtWidgets:
+                        QtWidgets.QMessageBox.information(
+                            None,
+                            "PseudoNote - Permission Notice",
+                            f"The configuration file was saved to your home directory:\n{self.config_path}\n\n"
+                            "This happened because PseudoNote does not have permission to write to the "
+                            "IDA installation folder. Your settings will be loaded from this home directory location in the future."
+                        )
                 except Exception as e2:
                     LOGGER.log(f"Failed to save to user home: {e2}")
             else:

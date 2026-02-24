@@ -169,6 +169,8 @@ class RenameFunctionHandler(idaapi.action_handler_t):
                 old_name = idc.get_func_name(func.start_ea)
                 if new_name == old_name: return
                 if idc.set_name(func.start_ea, new_name, idc.SN_AUTO):
+                    from pseudonote.idb_storage import save_to_idb
+                    save_to_idb(func.start_ea, "renamed_by_pseudonote", tag=83)
                     if vdui: vdui.refresh_view(True)
             finally:
                 _view_mod.hide_ai_progress()
@@ -230,6 +232,8 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
                 old_name = idc.get_func_name(func.start_ea)
                 if new_name == old_name: return
                 if idc.set_name(func.start_ea, new_name, idc.SN_AUTO):
+                    from pseudonote.idb_storage import save_to_idb
+                    save_to_idb(func.start_ea, "renamed_by_pseudonote", tag=83)
                     if vdui: vdui.refresh_view(True)
             finally:
                 _view_mod.hide_ai_progress()
@@ -536,7 +540,207 @@ class DeleteCommentsHandler(idaapi.action_handler_t):
         return 1
 
     def update(self, ctx):
-        return idaapi.AST_ENABLE_ALWAYS
+        if ctx.widget_type == idaapi.BWN_PSEUDOCODE:
+            return idaapi.AST_ENABLE_FOR_WIDGET
+        return idaapi.AST_DISABLE_FOR_WIDGET
+
+
+# ---------------------------------------------------------------------------
+# ASM Section Comment Handler (IDA Disassembly View)
+# ---------------------------------------------------------------------------
+
+def _get_asm_sections(start_ea, end_ea):
+    """
+    Return a list of (ea, label, [insn_text, ...]) tuples for the address
+    range [start_ea, end_ea).  A new section starts at start_ea and at every
+    address that is a jump/branch target or has a named label.
+    """
+    import idautils
+    sections = []
+    current_label = None
+    current_ea = None
+    current_insns = []
+
+    # Collect all branch-target addresses inside the range
+    jump_targets = set()
+    for head in idautils.Heads(start_ea, end_ea):
+        for ref in idautils.CodeRefsFrom(head, 0):
+            if start_ea <= ref < end_ea:
+                jump_targets.add(ref)
+
+    for head in idautils.Heads(start_ea, end_ea):
+        is_section_start = (
+            head == start_ea
+            or head in jump_targets
+            or bool(idc.get_name(head))
+        )
+        if is_section_start:
+            if current_ea is not None and current_insns:
+                sections.append((current_ea, current_label, current_insns))
+            current_ea = head
+            current_label = idc.get_name(head) or f"loc_{head:X}"
+            current_insns = []
+        disasm = idc.generate_disasm_line(head, 0)
+        if disasm:
+            current_insns.append(disasm)
+
+    if current_ea is not None and current_insns:
+        sections.append((current_ea, current_label, current_insns))
+
+    return sections
+
+
+def _resolve_asm_range(ea):
+    """
+    Try to resolve a (start_ea, end_ea, context_name) for the given address.
+    Priority:
+      1. Active selection in the disassembly widget
+      2. Enclosing function bounds
+    Returns None if neither is available.
+    """
+    # 1. Try active selection
+    ok, sel_start, sel_end = idaapi.read_range_selection(None)
+    if ok and sel_start != idaapi.BADADDR and sel_end != idaapi.BADADDR and sel_end > sel_start:
+        return sel_start, sel_end, f"selection {hex(sel_start)}–{hex(sel_end)}"
+
+    # 2. Fall back to enclosing function
+    func = idaapi.get_func(ea)
+    if func:
+        name = idc.get_func_name(func.start_ea) or f"sub_{func.start_ea:X}"
+        return func.start_ea, func.end_ea, name
+
+    return None
+
+
+class AsmCommentHandler(idaapi.action_handler_t):
+    """Add concise section-level comments to the IDA disassembly view using AI.
+    Works on a user selection (for shellcode) or the enclosing function."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        import json as _json
+        AI_CLIENT = _get_ai_client()
+        if not AI_CLIENT: return 0
+
+        ea = idaapi.get_screen_ea()
+        result = _resolve_asm_range(ea)
+        if not result:
+            print("[PseudoNote] No selection and no function found. "
+                  "Select a range of instructions first, or place the cursor inside a defined function.")
+            return 0
+
+        start_ea, end_ea, context_name = result
+        sections = _get_asm_sections(start_ea, end_ea)
+        if not sections:
+            print("[PseudoNote] Could not collect disassembly sections in range.")
+            return 0
+
+        # Build compact representation for the AI (cap each section at 12 lines)
+        lines = []
+        for i, (sec_ea, label, insns) in enumerate(sections):
+            snippet = "\n  ".join(insns[:12])
+            if len(insns) > 12:
+                snippet += f"\n  ... ({len(insns) - 12} more)"
+            lines.append(f"Section {i+1} [{hex(sec_ea)}] {label}:\n  {snippet}")
+
+        asm_text = "\n\n".join(lines)
+
+        prompt = (
+            f"You are an expert reverse engineer analyzing `{context_name}`.\n\n"
+            "Below are the logical sections of its disassembly. "
+            "For each section provide a VERY SHORT description (≤6 words, plain English, no punctuation).\n\n"
+            f"{asm_text}\n\n"
+            "Output ONLY valid JSON — a list of objects with keys \"section\" (1-based int) and \"comment\" (string).\n"
+            "Example: [{\"section\": 1, \"comment\": \"init stack frame\"}, {\"section\": 2, \"comment\": \"validate argument\"}]\n"
+            "No markdown, no extra text."
+        )
+
+        _view_mod.show_ai_progress("Annotating Disassembly Sections...")
+
+        def done_cb(response, **kwargs):
+            _view_mod.hide_ai_progress()
+            if not response:
+                print("[PseudoNote] No response from AI.")
+                return
+            try:
+                text = response.strip()
+                # Strip optional markdown fences
+                if text.startswith("```"):
+                    text = "\n".join(text.split("\n")[1:])
+                if text.endswith("```"):
+                    text = text[:text.rfind("```")]
+                text = text.strip()
+
+                items = _json.loads(text)
+                applied = 0
+                for item in items:
+                    idx = item.get("section", 0) - 1
+                    cmt = item.get("comment", "").strip()
+                    if not cmt or idx < 0 or idx >= len(sections):
+                        continue
+                    sec_ea = sections[idx][0]
+                    idc.set_cmt(sec_ea, cmt, 0)
+                    applied += 1
+
+                print(f"[PseudoNote] Applied {applied} section comment(s) to {context_name}.")
+                idaapi.request_refresh(idaapi.IWID_DISASM)
+            except Exception as e:
+                print(f"[PseudoNote] ASM comment parse error: {e}\nRaw: {response[:300]}")
+
+        total_chars = [0]
+        def chunk_cb(t):
+            total_chars[0] += len(t)
+            _view_mod.update_ai_progress_details(total_chars[0])
+
+        AI_CLIENT.query_model_async(prompt, done_cb, on_chunk=chunk_cb,
+                                    additional_options={"max_completion_tokens": 2048})
+        return 1
+
+    def update(self, ctx):
+        if ctx.widget_type in (idaapi.BWN_DISASM, idaapi.BWN_DISASMS):
+            return idaapi.AST_ENABLE_FOR_WIDGET
+        return idaapi.AST_DISABLE_FOR_WIDGET
+
+
+class DeleteAsmCommentsHandler(idaapi.action_handler_t):
+    """Delete all regular (non-repeatable) IDA comments in the selected range or enclosing function."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        import idautils
+        ea = idaapi.get_screen_ea()
+        result = _resolve_asm_range(ea)
+        if not result:
+            print("[PseudoNote] No selection and no function found.")
+            return 0
+
+        start_ea, end_ea, context_name = result
+
+        if idaapi.ask_yn(idaapi.ASKBTN_NO,
+                         f"Delete all IDA-view comments in {context_name}?") != idaapi.ASKBTN_YES:
+            return 0
+
+        deleted = 0
+        for head in idautils.Heads(start_ea, end_ea):
+            if idc.get_cmt(head, 0):   # regular comment
+                idc.set_cmt(head, "", 0)
+                deleted += 1
+            if idc.get_cmt(head, 1):   # repeatable comment
+                idc.set_cmt(head, "", 1)
+                deleted += 1
+
+        print(f"[PseudoNote] Deleted {deleted} comment(s) from {context_name}.")
+        idaapi.request_refresh(idaapi.IWID_DISASM)
+        return 1
+
+    def update(self, ctx):
+        if ctx.widget_type in (idaapi.BWN_DISASM, idaapi.BWN_DISASMS):
+            return idaapi.AST_ENABLE_FOR_WIDGET
+        return idaapi.AST_DISABLE_FOR_WIDGET
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -802,4 +1006,70 @@ class SettingsHandler(idaapi.action_handler_t):
         return 1
 
     def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+class ShellcodeAnalystHandler(idaapi.action_handler_t):
+    """Open the Shellcode Analysis dialog."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        # We need to get the view module lazily
+        import pseudonote.view as _view_mod
+        
+        # Gather data from selection if possible
+        hex_data = ""
+        asm_data = ""
+        
+        selection, start_ea, end_ea = idaapi.read_range_selection(None)
+        if not selection:
+            # Fallback to current item if no selection
+            start_ea = idaapi.get_screen_ea()
+            end_ea = idc.next_head(start_ea)
+        
+        if start_ea != idaapi.BADADDR:
+            try:
+                # Gather bytes
+                bytes_count = end_ea - start_ea
+                if 0 < bytes_count < 10000: # Safety limit
+                    blob = idaapi.get_bytes(start_ea, bytes_count)
+                    if blob:
+                        hex_data = blob.hex(" ").upper()
+                
+                # Gather assembly
+                items = []
+                curr = start_ea
+                while curr < end_ea and curr != idaapi.BADADDR:
+                    items.append(curr)
+                    curr = idc.next_head(curr, end_ea)
+                
+                asm_lines = []
+                for ea in items:
+                    line = idc.generate_disasm_line(ea, 0)
+                    if line:
+                        asm_lines.append(line)
+                asm_data = "\n".join(asm_lines)
+
+                # BUG FIX: If we only got one line of assembly but the range is multiple bytes,
+                # and it's not explicitly code, it's likely we just hit the start of a data blob.
+                # In this case, clear asm_data to force fallback to hex_data (which is complete).
+                if len(asm_lines) == 1 and (end_ea - start_ea) > 1:
+                    flags = idaapi.get_full_flags(start_ea)
+                    if not idc.is_code(flags):
+                        asm_data = ""
+            except:
+                pass
+
+        dialog = _view_mod.ShellcodeAnalystDialog(hex_data, asm_data)
+        dialog.show()
+        # Keep a reference to prevent GC if needed
+        if not hasattr(_view_mod, "_shellcode_analyst_dialogs"):
+            _view_mod._shellcode_analyst_dialogs = []
+        _view_mod._shellcode_analyst_dialogs.append(dialog)
+        return 1
+
+    def update(self, ctx):
+        if ctx.widget_type == idaapi.BWN_PSEUDOCODE:
+            return idaapi.AST_DISABLE_FOR_WIDGET
         return idaapi.AST_ENABLE_ALWAYS

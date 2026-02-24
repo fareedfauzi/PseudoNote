@@ -406,24 +406,24 @@ class SimpleAI:
                     return False, f"Connected but API returned no choices. (Model: {model})"
 
                 msg = response.choices[0].message
-                content = getattr(msg, 'content', "") or getattr(msg, 'text', "") or ""
+                content = getattr(msg, 'content', "") or ""
                 reasoning = getattr(msg, 'reasoning_content', "") or getattr(msg, 'reasoning', "") or ""
                 refusal = getattr(msg, 'refusal', None)
-                
-                if not content and not reasoning:
-                    try:
-                        if hasattr(msg, 'get'):
-                            content = msg.get('content', "") or msg.get('text', "") or msg.get('reasoning_content', "") or ""
-                    except: pass
 
-                if content.strip() or reasoning.strip():
-                    return True, "Connection successful!"
-                    
+                # Any valid response with choices = connection works.
+                # Empty content can be a model quirk (e.g. some o1/o3 variants) — still counts as success.
                 if refusal:
                     return False, f"Connected but model refused request: {refusal}"
-                
-                LOGGER.log(f"Test Connection: Empty content. Full message object: {msg}")
-                return False, f"Connected to {self.provider} but received empty response content for model '{model}'. check Debug Logs for details."
+
+                finish_reason = getattr(response.choices[0], 'finish_reason', None)
+                if content.strip() or reasoning.strip():
+                    return True, f"Connection successful! Model: {model}"
+
+                # Got a valid response object but empty content — still a live connection
+                LOGGER.log(f"Test Connection: Got valid response with empty content (finish_reason={finish_reason}). "
+                           f"Full message: {msg}")
+                return True, (f"Connection successful! (Model '{model}' replied with empty content — "
+                              f"this is normal for some reasoning models. finish_reason={finish_reason})")
 
             elif self.provider == "anthropic":
                 if not self.client: return False, "Anthropic client not initialized."

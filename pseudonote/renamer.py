@@ -143,6 +143,20 @@ QPushButton#danger:disabled {
     border: 1px solid #D1D1D6;
 }
 
+QPushButton#secondary {
+    background-color: #5856D6;
+    color: #FFFFFF;
+    border: 1px solid #5856D6;
+}
+QPushButton#secondary:hover {
+    background-color: #4845B2;
+}
+QPushButton#secondary:disabled {
+    background-color: #E5E5EA;
+    color: #8E8E93;
+    border: 1px solid #D1D1D6;
+}
+
 QTableView {
     background-color: #FFFFFF;
     border: 1px solid #D1D1D6;
@@ -241,39 +255,44 @@ SKIP_SEGS = {'.plt','.plt.got','.plt.sec','extern','.extern','.got','.got.plt','
 SYS_PREFIX = ('__cxa_','__gxx_','__gnu_','__libc_','__ctype_','_GLOBAL_','_init','_fini','_start','atexit','malloc','free','memcpy','memset','strlen','printf','scanf','fprintf','sprintf','operator','std::','boost::','__stack_chk','__security','_security','__report','__except','__imp_','__x86.','__do_global')
 SYS_MODULES = ('kernel32.','ntdll.','user32.','advapi32.','msvcrt.','ucrtbase.','ws2_32.','libc.so','libm.so','libpthread','foundation.','corefoundation.','uikit.')
 
-DEFAULT_PROMPT = """You are an expert reverse engineer performing function naming. Decision Rules:
-1) If it strongly matches a known/common routine, use canonical-style naming (symbol recovery mode).
-2) Otherwise generate a descriptive snake_case name reflecting WHAT the function does (descriptive mode).
+DEFAULT_PROMPT = """Expert reverse engineer. Name this function in snake_case.
 
-Rules:
-- Use snake_case format
-- if it is a system function, use the system name
-- if it is a library function, use the library name
-- if it not, be specific and descriptive (e.g., parse_user_config, validate_license_key, decrypt_network_packet)
-- Focus on what the function DOES, not how
-- Use common prefixes: init_, parse_, validate_, process_, handle_, send_, recv_, encrypt_, decrypt_, load_, save_, get_, set_, create_, destroy_, check_, is_, has_
-- Keep names 3-40 characters
-- NO generic names like: func1, do_something, process_data, handle_stuff
+THUNK RULE (overrides all): Single return/jmp to unnamed/opaque target →
+name it thunk_<offset> or wrap_<offset>, confidence ≤20%. No semantic names.
 
-Output ONLY the function name, nothing else."""
+SUB RULE: sub_XXXXX calls are unnamed black boxes — zero semantic information.
+Do NOT infer purpose from sub_* patterns, argument count, or call order alone.
+If body contains ONLY sub_* calls with no strings/known APIs/constants → confidence ≤30%,
+use a conservative name (e.g. wrap_<offset>).
 
-DEFAULT_BATCH_PROMPT = """You are an expert reverse engineer. For each function:
-1) If it strongly matches a known/common routine, use canonical-style naming (symbol recovery mode).
-2) Otherwise generate a descriptive snake_case name reflecting WHAT the function does (descriptive mode).
-Rules:
-- snake_case format only
-- if it is a system function, use the system name
-- if it is a library function, use the library name
-- if it not, be specific and descriptive (e.g., parse_user_config, validate_license_key, decrypt_network_packet)
-- Focus on WHAT function does
-- Common prefixes: init_, parse_, validate_, process_, handle_, send_, recv_, encrypt_, decrypt_, load_, save_, get_, set_, create_, destroy_, check_, is_, has_
-- 3-40 chars per name
-- NO generic names
+Otherwise: name reflects WHAT code does, based on evidence only.
+Evidence = named API calls, strings, constants, recognizable patterns.
+Prefixes only if evidence supports: init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
+Length: 3-40 chars. No generic filler (func1, do_something).
+Confidence: no evidence=≤30%, weak=31-60%, strong=61-95%.
 
-Output format - exactly one name per line, numbered:
-1. suggested_name_one
-2. suggested_name_two
-..."""
+Output: suggested_name [score]
+Example: decrypt_payload [95]"""
+
+DEFAULT_BATCH_PROMPT = """Expert reverse engineer. Name each function in snake_case.
+
+THUNK RULE (overrides all): Single return/jmp to unnamed/opaque target →
+thunk_<offset> or wrap_<offset>, confidence ≤20%. No semantic names.
+
+SUB RULE: sub_XXXXX calls are unnamed black boxes — zero semantic information.
+Do NOT infer purpose from sub_* patterns, argument count, or call order alone.
+Body contains ONLY sub_* calls with no strings/known APIs/constants → confidence ≤30%,
+use conservative name (e.g. wrap_<offset>).
+
+Otherwise: name what code clearly does, evidence only.
+Evidence = named API calls, strings, constants, recognizable patterns.
+Prefixes only if evidence supports: init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
+Length: 3-40 chars. No generic filler.
+Confidence: no evidence=≤30%, weak=31-60%, strong=61-95%.
+
+Output one per line:
+1. name [score]
+2. name [score]"""
 
 def is_valid_seg(ea):
     seg = idaapi.getseg(ea)
@@ -515,9 +534,9 @@ def clean_name(name, existing=None, ea=None):
     return name
 
 class FuncData:
-    __slots__ = ['ea','name','demangled','suggested','status','checked','code','strings','calls']
+    __slots__ = ['ea','name','demangled','suggested','score','status','checked','code','strings','calls']
     def __init__(self, ea, name):
-        self.ea, self.name, self.suggested, self.status, self.checked = ea, name, '', 'Pending', True
+        self.ea, self.name, self.suggested, self.score, self.status, self.checked = ea, name, '', '', 'Pending', True
         self.demangled = None
         if name.startswith('??') or name.startswith('_Z'):
             self.demangled = ida_name.demangle_name(name, 0)
@@ -528,7 +547,7 @@ class ResultSignal(QThread):
     def __init__(self): super().__init__()
 
 class VirtualFuncModel(QAbstractTableModel):
-    HEADERS = ['', 'Address', 'Current Name', 'AI Suggestion', 'Status']
+    HEADERS = ['', 'Address', 'Current Name', 'AI Suggestion', 'Score', 'Status']
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -567,7 +586,7 @@ class VirtualFuncModel(QAbstractTableModel):
         self.endResetModel()
 
     def rowCount(self, p=QModelIndex()): return len(self.filtered)
-    def columnCount(self, p=QModelIndex()): return 5
+    def columnCount(self, p=QModelIndex()): return 6
     def headerData(self, s, o, r=Qt.DisplayRole): return self.HEADERS[s] if r==Qt.DisplayRole and o==Qt.Horizontal else None
 
     def data(self, idx, role=Qt.DisplayRole):
@@ -581,7 +600,8 @@ class VirtualFuncModel(QAbstractTableModel):
             elif c==2:
                 return self.funcs[self.filtered[idx.row()]].demangled or f.name
             elif c==3: return f.suggested
-            elif c==4: return f.status
+            elif c==4: return f.score
+            elif c==5: return f.status
             
         elif role == Qt.CheckStateRole and c==0:
             return Qt.Checked if f.checked else Qt.Unchecked
@@ -590,12 +610,20 @@ class VirtualFuncModel(QAbstractTableModel):
             if c==0: return Qt.AlignCenter
             return Qt.AlignLeft | Qt.AlignVCenter
 
-        elif role == Qt.ForegroundRole and c==4:
-            # Color code status (Light theme colors)
-            if f.status == 'OK': return QColor('#34C759') # Apple Green
-            if f.status == 'Skip': return QColor('#8E8E93') # Apple Gray
-            if f.status == 'Applied': return QColor('#007AFF') # Apple Blue
-            if f.status == 'Pending': return QColor('#FF9500') # Apple Orange
+        elif role == Qt.ForegroundRole:
+            if c == 4 and f.score: # Confidence score colors
+                try:
+                    s = int(f.score.replace('%', ''))
+                    if s >= 80: return QColor('#34C759') # High (Green)
+                    if s >= 50: return QColor('#FF9500') # Medium (Orange)
+                    return QColor('#FF3B30') # Low (Red)
+                except: pass
+            
+            if c == 5: # Status colors
+                if f.status == 'OK': return QColor('#34C759')
+                if f.status == 'Skip': return QColor('#8E8E93')
+                if f.status == 'Applied': return QColor('#007AFF')
+                if f.status == 'Pending': return QColor('#FF9500')
             
         return None
 
@@ -647,6 +675,22 @@ class VirtualFuncModel(QAbstractTableModel):
 
     def get_checked(self): return [(i,f) for i,f in enumerate(self.funcs) if f.checked]
     def get_with_suggestions(self): return [(i,f) for i,f in enumerate(self.funcs) if f.checked and f.suggested]
+
+    def select_good_scores(self, threshold=80):
+        count = 0
+        for i in self.filtered:
+            f = self.funcs[i]
+            score_val = 0
+            if f.score:
+                try:
+                    score_val = int(f.score.replace('%', ''))
+                except: pass
+            f.checked = (score_val >= threshold)
+            if f.checked: count += 1
+        if self.filtered:
+            self.dataChanged.emit(self.index(0,0), self.index(len(self.filtered)-1,0))
+        return count
+
     def total(self): return len(self.funcs)
 
 class AnalyzeWorker(QThread):
@@ -678,7 +722,7 @@ class AnalyzeWorker(QThread):
         for batch in batches:
             if not self.running: break
             results = self.process_batch(batch)
-            for idx, func, name in results:
+            for idx, func, name, score in results:
                 if name:
                     self.existing.add(name)
             self.batch_done.emit(results)
@@ -720,12 +764,12 @@ class AnalyzeWorker(QThread):
                 if not force and len(batch) > 1 and (len(func.code) > dynamic_char_limit or line_count > dynamic_line_limit):
                     self.log.emit(f"Skipping {hex(func.ea)} ({line_count} lines): Volume too high for a batch of {len(batch)}. "
                                   "Suggested: Decrease 'Batch Size' to 1 in Settings for large functions.", 'warn')
-                    results.append((idx, func, None))
+                    results.append((idx, func, None, ''))
                     continue
                 valid.append((idx, func))
             else:
                 self.log.emit(f"Skipping {hex(func.ea)}: No code found", 'warn')
-                results.append((idx, func, None))
+                results.append((idx, func, None, ''))
 
         if not valid:
             self.log.emit("Batch empty (no valid functions with code)", 'warn')
@@ -742,8 +786,18 @@ class AnalyzeWorker(QThread):
                 if f.strings: prompt += f"\nStrings found: {f.strings}"
                 if f.calls: prompt += f"\nCalled functions: {f.calls}"
                 resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger)
-                name = clean_name(resp, self.existing, ea=f.ea)
-                results.append((idx, f, name))
+                
+                name_part, score_part = '', ''
+                if resp:
+                    # Parse single response for [score]
+                    name_part = resp
+                    s_match = re.search(r'\[(\d+)%?\]', resp)
+                    if s_match:
+                        score_part = f"{s_match.group(1)}%"
+                        name_part = resp.replace(s_match.group(0), "").strip()
+                
+                name = clean_name(name_part, self.existing, ea=f.ea) if name_part else None
+                results.append((idx, f, name, score_part))
             else:
                 self.log.emit(f"Processing batch of {len(valid)} functions...", 'info')
                 prompt = "Functions to name:\n\n"
@@ -759,11 +813,12 @@ class AnalyzeWorker(QThread):
                     prompt += "\n"
 
                 resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger)
-                names, actual_count = self.parse_batch_response(resp, len(valid))
+                names, scores, actual_count = self.parse_batch_response(resp, len(valid))
                 self.log.emit(f"API returned {actual_count} names for batch of {len(valid)}", 'info')
 
                 for i, (idx, f) in enumerate(valid):
                     suggestion = names[i] if i < len(names) else None
+                    score = scores[i] if i < len(scores) else ''
                     name = clean_name(suggestion, self.existing, ea=f.ea) if suggestion else None
                     
                     if name:
@@ -773,7 +828,7 @@ class AnalyzeWorker(QThread):
                     else:
                         self.log.emit(f"No suggestion found for {hex(f.ea)} (index {i+1} in batch)", 'warn')
                         
-                    results.append((idx, f, name))
+                    results.append((idx, f, name, score))
 
         except Exception as e:
             self.log.emit(f'Batch Error: {str(e)[:100]}', 'err')
@@ -781,16 +836,16 @@ class AnalyzeWorker(QThread):
             print(f"[PseudoNote] Batch error traceback:")
             traceback.print_exc()
             for idx, f in valid:
-                results.append((idx, f, None))
+                results.append((idx, f, None, ''))
 
         return results
 
     def parse_batch_response(self, resp, expected):
         if not resp or not resp.strip():
             self.log.emit("Warning: AI returned empty response!", 'warn')
-            return [None] * expected, 0
+            return [None] * expected, [''] * expected, 0
 
-        names = []
+        names, scores = [], []
         
         # Log first 200 chars of response
         snippet = resp.strip()[:200].replace('\n', ' | ')
@@ -808,14 +863,19 @@ class AnalyzeWorker(QThread):
             
             if not clean or len(clean) < 3: continue
             
+            # Split line to find [score]
+            score_match = re.search(r'\[(\d+)%?\]', line)
+            score_val = f"{score_match.group(1)}%" if score_match else ""
+            
             # Extract the first token that looks like an identifier
-            parts = re.split(r'[\s,\:\(\)\|]+', clean)
+            parts = re.split(r'[\s,\:\(\)\|\[\]]+', clean)
             if not parts: continue
             nm = parts[0].strip(' "\'`*')
             nm = re.sub(r'[^a-zA-Z0-9_]', '', nm)
             
             if nm and len(nm) >= 3 and nm.lower() not in ('function','func','sub','unknown','unnamed','noname','the','this','and','for','with'):
                 names.append(nm)
+                scores.append(score_val)
 
         # Fallback: regex scan for identifiers in the whole response
         if len(names) < expected:
@@ -823,21 +883,24 @@ class AnalyzeWorker(QThread):
             found = re.findall(r'\b([a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)*)\b', resp)
             for n in found:
                 if len(n) >= 3 and n.lower() not in ('void', 'int', 'char', 'return', 'include', 'func', 'function', 'const', 'unsigned', 'static'):
-                    # In fallback mode, we still allow duplicates if needed, but usually we try to fill gaps
-                    if len(names) < expected:
-                        names.append(n)
-                    else:
-                        break
+                    if n not in names:
+                        if len(names) < expected:
+                            names.append(n)
+                            scores.append('')
+                        else:
+                            break
 
         if len(names) < expected:
             self.log.emit(f"Parser found {len(names)}/{expected} names. Check IDA Output for raw text.", 'warn')
             print(f"[PseudoNote] Raw API Response:\n{resp}\n{'-'*40}")
 
         actual_count = min(len(names), expected)
-        while len(names) < expected:
-            names.append(None)
+        
+        # Ensure we return exactly 'expected' items
+        final_names = (names + [None] * expected)[:expected]
+        final_scores = (scores + [''] * expected)[:expected]
             
-        return names[:expected], actual_count
+        return final_names, final_scores, actual_count
 
 
 class BulkRenamer(QDialog):
@@ -870,16 +933,7 @@ class BulkRenamer(QDialog):
             # Refresh local config from updated pn_config
             self.cfg = self.build_cfg(self.pn_config)
             
-            # Update Bulk Load button visibility and text
-            use_prefix = getattr(CONFIG, 'use_bulk_prefix', True)
-            prefix = getattr(CONFIG, 'rename_prefix', 'bulkren_')
-            self.btn_fnb.setVisible(use_prefix)
-            if use_prefix:
-                self.btn_fnb.setText(f'Load {prefix}* (renamed functions)')
-                # Re-connect to use the new prefix in the lambda
-                try: self.btn_fnb.clicked.disconnect()
-                except: pass
-                self.btn_fnb.clicked.connect(lambda: self.load_funcs(prefix=prefix, append=True))
+
             
             self.add_log(f"Settings updated. Provider: {self.cfg['provider']}, Model: {self.cfg['model']}")
 
@@ -944,17 +998,17 @@ class BulkRenamer(QDialog):
         tb_container = QVBoxLayout()
         tb_container.setSpacing(8)
         
-        # Row 1: Presets
+        # Row 1: Preset Loaders & Settings
         tb_row1_widget = QWidget()
-        tb_row1_widget.setObjectName("RowContainer1")
-        tb_row1_widget.setStyleSheet("QWidget#RowContainer1 { background-color: transparent; }")
+        tb_row1_widget.setObjectName("tb_row1_container")
+        tb_row1_widget.setStyleSheet("QWidget#tb_row1_container { background: transparent; }")
         tb_row1 = QHBoxLayout(tb_row1_widget)
         tb_row1.setContentsMargins(0, 0, 0, 0)
+        tb_row1.setSpacing(8)
         
         self.load_btn = QPushButton('Load sub_*')
-        self.load_btn.setAutoDefault(False)
         self.load_btn.setObjectName("primary")
-        self.load_btn.clicked.connect(lambda: self.load_funcs(prefix='sub_', append=True))
+        self.load_btn.clicked.connect(lambda: self.load_funcs(prefix='sub_'))
         tb_row1.addWidget(self.load_btn)
 
         btn_lib = QPushButton('Load unknown_libname_*')
@@ -967,68 +1021,65 @@ class BulkRenamer(QDialog):
         btn_all.clicked.connect(lambda: self.load_funcs(prefix=None, append=True, mode='all'))
         tb_row1.addWidget(btn_all)
 
-        prefix = getattr(CONFIG, 'rename_prefix', 'bulkren_')
-        self.btn_fnb = QPushButton(f'Load {prefix}*')
-        self.btn_fnb.setObjectName("primary")
-        self.btn_fnb.clicked.connect(lambda: self.load_funcs(prefix=prefix, append=True))
-        self.btn_fnb.setVisible(getattr(CONFIG, 'use_bulk_prefix', True))
-        tb_row1.addWidget(self.btn_fnb)
-
-        btn_renamed = QPushButton('Load all bulk renamed')
+        btn_renamed = QPushButton('Load renamed functions')
         btn_renamed.setToolTip("Load every function previously renamed by PseudoNote")
         btn_renamed.setObjectName("primary")
         btn_renamed.clicked.connect(lambda: self.load_funcs(prefix=None, append=True, mode='metadata'))
         tb_row1.addWidget(btn_renamed)
         
-
-        
-        tb_row1.addSpacing(10)
-
-        self.find_edit = QLineEdit()
-        self.find_edit.setPlaceholderText("Enter function substrings...")
-        self.find_edit.setFixedWidth(250)
-        # Use a method to handle return so we can ensure focus and consumption
-        self.find_edit.returnPressed.connect(self.on_find_edit_return)
-
-        self.find_btn = QPushButton("Load from binary")
-        self.find_btn.setAutoDefault(False)
-        self.find_btn.setObjectName("primary")
-        self.find_btn.clicked.connect(lambda: self.load_funcs(prefix=self.find_edit.text(), append=True, mode='search'))
-        
-        tb_row1.addWidget(self.find_btn)
-        tb_row1.addWidget(self.find_edit)
-        
         tb_row1.addStretch()
 
-        tb_container.addWidget(tb_row1_widget)
-        # Row 2: Filter Table
-        tb_row2_widget = QWidget()
-        tb_row2_widget.setObjectName("RowContainer2")
-        tb_row2_widget.setStyleSheet("QWidget#RowContainer2 { background-color: transparent; }")
-        tb_row2 = QHBoxLayout(tb_row2_widget)
-        tb_row2.setContentsMargins(0, 0, 0, 0)
-        
-        tb_row2.addWidget(QLabel("Filter Table:"))
-        
-        self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText('Search in current list...')
-        self.filter_edit.setFixedWidth(350)
-        self.filter_edit.textChanged.connect(lambda t: self.model.set_filter(t) or self.update_count())
-        tb_row2.addWidget(self.filter_edit)
-        
-        tb_row2.addSpacing(20)
-        
         settings_btn = QPushButton("Settings")
         settings_btn.setToolTip("Open PseudoNote Settings")
-        settings_btn.setFixedWidth(100)
+        settings_btn.setObjectName("secondary")
+        settings_btn.setFixedWidth(110)
         settings_btn.clicked.connect(self.open_settings)
-        tb_row2.addWidget(settings_btn)
+        tb_row1.addWidget(settings_btn)
+
+        tb_container.addWidget(tb_row1_widget)
+
+        # Row 2: Search & Filter Tools
+        tb_row2_widget = QWidget()
+        tb_row2_widget.setObjectName("tb_row2_container")
+        tb_row2_widget.setStyleSheet("QWidget#tb_row2_container { background: transparent; }")
+        tb_row2 = QHBoxLayout(tb_row2_widget)
+        tb_row2.setContentsMargins(0, 5, 0, 5)
+        tb_row2.setSpacing(10)
         
-        perf_info = QLabel("*Adjust the Batch Size and Workers in Settings to improve the performance.")
-        perf_info.setStyleSheet("color: #888888; font-style: italic; font-size: 9pt; margin-left: 5px;")
-        tb_row2.addWidget(perf_info)
+        # Search Binary Section
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(QLabel("Search Functions:"))
+        self.find_edit = QLineEdit()
+        self.find_edit.setPlaceholderText("Function name or address...")
+        self.find_edit.setFixedWidth(350)
+        self.find_edit.returnPressed.connect(self.on_find_edit_return)
+        search_layout.addWidget(self.find_edit)
         
+        self.find_btn = QPushButton("Load")
+        self.find_btn.setAutoDefault(False)
+        self.find_btn.setObjectName("primary")
+        self.find_btn.setFixedWidth(100)
+        self.find_btn.clicked.connect(lambda: self.load_funcs(prefix=self.find_edit.text(), append=True, mode='search'))
+        search_layout.addWidget(self.find_btn)
+        tb_row2.addLayout(search_layout)
+
+        # Visual Separator
+        sep = QLabel("|")
+        sep.setStyleSheet("color: #D1D1D6; margin: 0 10px; font-weight: bold;")
+        tb_row2.addWidget(sep)
+
+        # Filter Section
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter Table:"))
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText('Search in current list...')
+        self.filter_edit.setFixedWidth(400)
+        self.filter_edit.textChanged.connect(lambda t: self.model.set_filter(t) or self.update_count())
+        filter_layout.addWidget(self.filter_edit)
+        tb_row2.addLayout(filter_layout)
+
         tb_row2.addStretch()
+        
         tb_container.addWidget(tb_row2_widget)
         
         layout.addLayout(tb_container)
@@ -1053,7 +1104,8 @@ class BulkRenamer(QDialog):
         # Column sizing
         self.table.setColumnWidth(0, 30)  # Checkbox
         self.table.setColumnWidth(1, 100) # Address
-        self.table.setColumnWidth(4, 80) # Status
+        self.table.setColumnWidth(4, 70)  # Score
+        self.table.setColumnWidth(5, 80)  # Status
         h = self.table.horizontalHeader()
         h.setSectionResizeMode(2, QHeaderView.Stretch) # Current
         h.setSectionResizeMode(3, QHeaderView.Stretch) # Suggested
@@ -1072,20 +1124,27 @@ class BulkRenamer(QDialog):
         log_header.addStretch()
         
         # Selection Utils moved to header
+        self.sel_good_btn = QPushButton('Select Good Score')
+        self.sel_good_btn.setToolTip("Select all functions with a confidence score of 80% or higher")
+        self.sel_good_btn.setFixedWidth(150)
+        self.sel_good_btn.setEnabled(False)
+        self.sel_good_btn.clicked.connect(self.on_select_good)
+        log_header.addWidget(self.sel_good_btn)
+
         ab = QPushButton('Select All')
         ab.setFixedWidth(150)
         ab.clicked.connect(lambda: self.model.toggle_all(True))
         log_header.addWidget(ab)
         
         nb = QPushButton('Select None')
-        nb.setFixedWidth(150)
+        nb.setFixedWidth(130)
         nb.clicked.connect(lambda: self.model.toggle_all(False))
         log_header.addWidget(nb)
 
         # Unload button
         ub = QPushButton('Unload Table')
         ub.setToolTip("Clear the current list of functions")
-        ub.clicked.connect(lambda: [self.model.clear(), self.update_count()])
+        ub.clicked.connect(lambda: [self.model.clear(), setattr(self, 'load_mode', 'prefix'), self.update_count()])
         log_header.addWidget(ub)
 
         cb = QPushButton('Clear Log')
@@ -1144,9 +1203,20 @@ class BulkRenamer(QDialog):
         self.apply_btn.setEnabled(False) # Grey out until suggestions exist
         self.apply_btn.clicked.connect(self.apply_renames)
         actions.addWidget(self.apply_btn)
-        
+
+        self.undo_btn = QPushButton('Undo Renames')
+        self.undo_btn.setToolTip("Revert selected functions to their names before PseudoNote renaming")
+        self.undo_btn.setObjectName("danger")
+        self.undo_btn.setMinimumHeight(32)
+        self.undo_btn.setMinimumWidth(150)
+        self.undo_btn.setEnabled(False) # Grey out until metadata mode
+        self.undo_btn.clicked.connect(self.undo_renames)
+        actions.addWidget(self.undo_btn)
         bottom.addLayout(actions)
         layout.addLayout(bottom)
+
+        # Initial hint
+        self.add_log("*Adjust Batch/Workers in Settings for speed.", "err")
 
     def on_table_context_menu(self, pos):
         idx = self.table.indexAt(pos)
@@ -1211,6 +1281,9 @@ class BulkRenamer(QDialog):
         # Update Apply button: only enable if we have suggestions AND not busy
         if not self.workers and not self.is_loading:
             self.apply_btn.setEnabled(sug > 0)
+            
+        # Update Undo button: only enabled in metadata mode with data
+        self.undo_btn.setEnabled(getattr(self, 'load_mode', '') == 'metadata' and t > 0 and not self.is_loading)
 
     def load_funcs(self, prefix='sub_', append=False, mode='prefix'):
         self.load_prefix = prefix
@@ -1266,8 +1339,9 @@ class BulkRenamer(QDialog):
                 is_match = False
                 if self.load_mode == 'metadata':
                     from pseudonote.idb_storage import load_from_idb
-                    marker = load_from_idb(ea, tag=81)
-                    is_match = (marker == "renamed_by_pseudonote")
+                    marker = load_from_idb(ea, tag=83)
+                    # Only match if marked AND currently doesn't start with sub_
+                    is_match = (marker == "renamed_by_pseudonote" and not name.startswith("sub_"))
                 elif self.load_mode == 'all':
                     is_match = True
                 else:
@@ -1368,6 +1442,7 @@ class BulkRenamer(QDialog):
         # UI State: Analysing
         self.analyze_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self.sel_good_btn.setEnabled(False)
         self.apply_btn.setEnabled(False) # Also grey out apply while analysing
         
         self.progress.setVisible(True)
@@ -1397,9 +1472,12 @@ class BulkRenamer(QDialog):
 
     def on_batch_done(self, results):
         indices = []
-        for idx, func, name in results:
+        for res in results:
+            if not res or len(res) < 4: continue
+            idx, func, name, score = res
             if name:
                 func.suggested = name
+                func.score = score
                 func.status = 'OK'
                 self.existing_names.add(name)
             else:
@@ -1435,6 +1513,12 @@ class BulkRenamer(QDialog):
         
         self.workers = []
         self._last_done = 0
+        self.sel_good_btn.setEnabled(suggestions > 0)
+
+    def on_select_good(self):
+        count = self.model.select_good_scores(80)
+        self.add_log(f"Selected {count:,} high-confidence suggestions (>= 80%)", 'info')
+        self.update_count()
 
     def stop_all(self):
         self.is_loading = False
@@ -1459,6 +1543,7 @@ class BulkRenamer(QDialog):
         self.stop_btn.setEnabled(False)
         suggestions = sum(1 for f in self.model.funcs if f.suggested)
         self.apply_btn.setEnabled(suggestions > 0)
+        self.sel_good_btn.setEnabled(suggestions > 0)
 
     def jump_to(self, idx):
         f = self.model.get_func(idx.row())
@@ -1481,7 +1566,15 @@ class BulkRenamer(QDialog):
 
         applied = 0
         indices = []
+        from pseudonote.idb_storage import save_to_idb, load_from_idb
         for i, f in items:
+            # Store original name if not already stored (to allow Undo back to very first state)
+            orig = load_from_idb(f.ea, tag=82)
+            if not orig:
+                cur_name = idc.get_func_name(f.ea)
+                if cur_name and not cur_name.startswith('sub_'):
+                    save_to_idb(f.ea, cur_name, tag=82)
+
             if ida_name.set_name(f.ea, f.suggested, ida_name.SN_NOWARN|ida_name.SN_FORCE):
                 applied += 1
                 f.name = f.suggested
@@ -1490,8 +1583,7 @@ class BulkRenamer(QDialog):
                 f.checked = False
                 
                 # Save metadata marker (tag 81) to track this function as "renamed by us"
-                from pseudonote.idb_storage import save_to_idb
-                save_to_idb(f.ea, "renamed_by_pseudonote", tag=81)
+                save_to_idb(f.ea, "renamed_by_pseudonote", tag=83)
                 
                 indices.append(i)
 
@@ -1499,3 +1591,67 @@ class BulkRenamer(QDialog):
         self.update_count()
         self.add_log(f'Applied {applied:,} renames', 'ok')
         self.update_status(f'Applied {applied:,} renames')
+
+    def undo_renames(self):
+        items = self.model.get_checked()
+        if not items:
+            self.add_log('No functions selected to undo', 'warn')
+            return
+            
+        res = QMessageBox.question(self, "Undo Renames", 
+                                f"Are you sure you want to revert {len(items):,} functions to their original names?",
+                                QMessageBox.Yes | QMessageBox.No)
+        
+        # Handle both int and Enum result (PySide6 compatibility)
+        val = res.value if hasattr(res, 'value') else res
+        yes_val = QMessageBox.Yes.value if hasattr(QMessageBox.Yes, 'value') else QMessageBox.Yes
+        if val != yes_val: return
+
+        reverted = 0
+        indices = []
+        from pseudonote.idb_storage import load_from_idb, save_to_idb
+        for i, f in items:
+            # Try to get stored original name (tag 82)
+            orig_name = load_from_idb(f.ea, tag=82)
+            
+            # If no original name, setting to "" reverts to IDA default sub_XXXX
+            target = orig_name if orig_name else ""
+            
+            # Flags: SN_NOWARN (0x01) | SN_FORCE (0x0800)
+            # When target is "", some flags might cause failure.
+            success = False
+            if target == "":
+                # Reverting to default sub_XXXX
+                success = ida_name.set_name(f.ea, "", ida_name.SN_NOWARN)
+            else:
+                # Reverting to a specific original name
+                success = ida_name.set_name(f.ea, target, ida_name.SN_NOWARN | ida_name.SN_FORCE)
+
+            if success:
+                reverted += 1
+                f.name = idc.get_func_name(f.ea)
+                f.suggested = ''
+                f.status = 'Undone'
+                f.checked = False
+                
+                # Clear markers so they don't appear in "Load renamed" and are forgotten
+                save_to_idb(f.ea, "", tag=83)
+                save_to_idb(f.ea, "", tag=82)
+                
+                indices.append(i)
+            else:
+                # Check if it's already the default name or already the target name
+                cur = idc.get_func_name(f.ea)
+                if (target == "" and cur.startswith("sub_")) or (target != "" and cur == target):
+                    reverted += 1
+                    f.status = 'Undone'
+                    save_to_idb(f.ea, "", tag=83)
+                    save_to_idb(f.ea, "", tag=82)
+                    indices.append(i)
+                else:
+                    self.add_log(f"Failed to revert {f.ea:X} to '{target}' (Currently: '{cur}')", "warn")
+
+        self.model.refresh_rows(indices)
+        self.update_count()
+        self.add_log(f'Reverted {reverted:,} functions', 'ok')
+        self.update_status(f'Reverted {reverted:,} functions')

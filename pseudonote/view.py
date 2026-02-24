@@ -39,6 +39,8 @@ def set_ai_cancel(cancel=True):
 _global_overlay = None
 _progress_ref_count = 0
 _force_cancelled = False
+_view_instance = None
+plugin_instance = None
 
 def get_overlay():
     global _global_overlay
@@ -62,6 +64,7 @@ def hide_ai_progress():
         _force_cancelled = False
         if _global_overlay:
             _global_overlay.hide()
+
 
 class ProgressOverlay(QtWidgets.QDialog):
     """A standalone floating progress dialog for AI tasks."""
@@ -421,7 +424,7 @@ if QtWidgets:
             self.force_rename_cb.setChecked(getattr(self.config, 'force_bulk_rename', False))
             fl.addRow(self.force_rename_cb)
             
-            force_warn = QtWidgets.QLabel("Caution: Forcing large functions into big batches may cause truncated results or timeouts. Recommendation: Don't tick this box.")
+            force_warn = QtWidgets.QLabel("Caution: Forcing large functions into big batches may cause truncated results or timeouts.\nRecommendation: Don't tick this box.")
             force_warn.setStyleSheet("color: #d10e00; font-style: italic; font-size: 12px; margin-left: 0px;")
             force_warn.setWordWrap(True)
             fl.addRow(force_warn)
@@ -1858,6 +1861,7 @@ if QtWidgets:
             finally: hide_ai_progress()
 
 
+
         def on_suggest_name(self):
             AI_CLIENT = _get_ai()
             ea = self.current_ea
@@ -2283,25 +2287,230 @@ class PseudoNoteHandler(idaapi.action_handler_t):
 
 class ContextMenuHooks(idaapi.UI_Hooks):
     def finish_populating_widget_popup(self, widget, popup):
-        if idaapi.get_widget_type(widget) in [idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE, idaapi.BWN_DISASMS]:
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:action", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:list", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_variables", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
+        wtype = idaapi.get_widget_type(widget)
+        if wtype not in [idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE, idaapi.BWN_DISASMS]:
+            return
+
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:action", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:list", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_variables", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
+
+        if wtype == idaapi.BWN_PSEUDOCODE:
+            # Pseudocode-specific actions
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyze_struct", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_comments", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_comments", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
-            if idaapi.get_widget_type(widget) == idaapi.BWN_PSEUDOCODE:
-                idaapi.attach_action_to_popup(widget, popup, "pseudonote:highlight_on", "PseudoNote/Call Highlight/")
-                idaapi.attach_action_to_popup(widget, popup, "pseudonote:highlight_off", "PseudoNote/Call Highlight/")
-            elif idaapi.get_widget_type(widget) in [idaapi.BWN_DISASMS, idaapi.BWN_DISASM]:
-                idaapi.attach_action_to_popup(widget, popup, "pseudonote:disasm_highlight_on", "PseudoNote/Call Highlight/")
-                idaapi.attach_action_to_popup(widget, popup, "pseudonote:disasm_highlight_off", "PseudoNote/Call Highlight/")
+        elif wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
+            # IDA View (disassembly) specific actions
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_asm_comments", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_asm_comments", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:shellcode_analyst", "PseudoNote/")
+
+        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+        if wtype == idaapi.BWN_PSEUDOCODE:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:highlight_on", "PseudoNote/Call Highlight/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:highlight_off", "PseudoNote/Call Highlight/")
+        elif wtype in [idaapi.BWN_DISASMS, idaapi.BWN_DISASM]:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:disasm_highlight_on", "PseudoNote/Call Highlight/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:disasm_highlight_off", "PseudoNote/Call Highlight/")
+
+
+class ShellcodeAnalystDialog(QtWidgets.QDialog):
+    """A standalone dialog for manual shellcode analysis (Static analysis context)."""
+    def __init__(self, hex_data="", asm_data="", parent=None):
+        super().__init__(parent or QtWidgets.QApplication.activeWindow())
+        self.setWindowTitle("PseudoNote Shellcode Analysis (Static)")
+        self.resize(1100, 800)
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowMaximizeButtonHint)
+        self.setStyleSheet("""
+            QDialog {
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+            }
+            QLabel {
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+            }
+            QPushButton {
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+            }
+            QComboBox {
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+            }
+        """)
+        
+        main_layout = QtWidgets.QVBoxLayout(self)
+        
+        # Splitter for Input/Output
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        
+        # Top part: Input and Controls
+        top_widget = QtWidgets.QWidget()
+        top_layout = QtWidgets.QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Label & Header
+        header_layout = QtWidgets.QHBoxLayout()
+        header_layout.addWidget(QtWidgets.QLabel("<b>Input: Paste Hex Bytes or Assembly Instructions</b>"))
+        header_layout.addStretch()
+        
+        header_layout.addWidget(QtWidgets.QLabel("Architecture:"))
+        self.arch_combo = QtWidgets.QComboBox()
+        self.arch_combo.addItems(["Auto-Detect", "x86 (32-bit)", "x64 (64-bit)", "ARM (32-bit)", "ARM64 (64-bit)", "MIPS", "PowerPC"])
+        # Attempt to set default based on current IDB
+        if idaapi.BADADDR == 0xFFFFFFFFFFFFFFFF:
+            self.arch_combo.setCurrentText("x64 (64-bit)")
+        else:
+            self.arch_combo.setCurrentText("x86 (32-bit)")
+        header_layout.addWidget(self.arch_combo)
+        
+        self.analyze_btn = QtWidgets.QPushButton("Analyze Shellcode")
+        self.analyze_btn.setMinimumHeight(35)
+        self.analyze_btn.setStyleSheet("background-color: #007AFF; color: white; font-weight: bold; border-radius: 4px; padding: 5px;")
+        self.analyze_btn.clicked.connect(self.on_analyze)
+        header_layout.addWidget(self.analyze_btn)
+        
+        top_layout.addLayout(header_layout)
+        
+        # Input Editor
+        self.input_edit = QtWidgets.QPlainTextEdit()
+        self.input_edit.setPlaceholderText("Example: 55 89 E5 ... or push ebp; mov ebp, esp; ...")
+        # Prefer ASM data if available, else hex
+        if asm_data:
+            self.input_edit.setPlainText(asm_data)
+        elif hex_data:
+            self.input_edit.setPlainText(hex_data)
+        
+        self.input_edit.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                font-family: 'Fira Code', 'Consolas', 'Courier New', monospace;
+                font-size: 12pt;
+                border: 1px solid #333;
+                border-radius: 4px;
+            }
+        """)
+        top_layout.addWidget(self.input_edit)
+        
+        splitter.addWidget(top_widget)
+        
+        # Bottom part: Result Viewer
+        bottom_widget = QtWidgets.QWidget()
+        bottom_layout = QtWidgets.QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        
+        bottom_layout.addWidget(QtWidgets.QLabel("<b>Analysis Report:</b>"))
+        self.result_viewer = QtWidgets.QTextBrowser()
+        self.result_viewer.setOpenExternalLinks(True)
+        self.result_viewer.setStyleSheet("""
+            QTextBrowser {
+                background-color: #121212;
+                color: #E0E0E0;
+                font-family: 'Inter', 'Segoe UI', Tahoma, sans-serif;
+                font-size: 11pt;
+                border: 1px solid #333;
+                border-radius: 4px;
+                padding: 10px;
+            }
+        """)
+        bottom_layout.addWidget(self.result_viewer)
+        
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFixedHeight(2)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.hide()
+        bottom_layout.addWidget(self.progress_bar)
+        
+        splitter.addWidget(bottom_widget)
+        splitter.setSizes([300, 700])
+        main_layout.addWidget(splitter)
+
+    def on_analyze(self):
+        input_content = self.input_edit.toPlainText().strip()
+        if not input_content:
+            return
+        
+        arch = self.arch_combo.currentText()
+        AI_CLIENT = _get_ai()
+        if not AI_CLIENT:
+            idaapi.info("AI Client not initialized."); return
+        
+        self.analyze_btn.setEnabled(False)
+        self.progress_bar.show()
+        self.result_viewer.clear()
+        self.result_viewer.setPlaceholderText("AI is processing static analysis... please wait.")
+        
+        prompt = (
+        f"You are an expert shellcode reverse engineer. Target architecture: {arch}.\n\n"
+
+        "ANALYSIS PRIORITY (STRICT ORDER):\n"
+        "1) Execution structure\n"
+        "2) Decoder/transform logic\n"
+        "3) Capability evidence\n"
+        "4) Intent inference (ONLY if supported by evidence)\n\n"
+
+        f"INPUT:\n```\n{input_content}\n```\n\n"
+
+        "NORMALIZATION:\n"
+        "- Hex bytes → convert to assembly internally. Do NOT print disassembly.\n"
+        "- Assume code may be incomplete or one stage of a multi-stage chain.\n\n"
+
+        "ANTI-HALLUCINATION:\n"
+        "- Do NOT guess APIs, networking, persistence, or OS unless directly evidenced.\n"
+        "- If uncertain → 'insufficient evidence'.\n"
+        "- Flag every assumption with [ASSUMED].\n\n"
+
+        "OUTPUT FORMAT:\n"
+        "## [Label]\n"
+        "[1-2 sentence observation]\n"
+        "- [Important explaination 1]\n"
+        "- [Important explaination 2]\n"
+        "- [Continue important explainations]\n"
+        "Skip sections with no evidence. No filler. No repetition.\n\n"
+
+        "FINDINGS TO COVER:\n"
+        "## Summary\n"
+        "## Decoder / Encoding Layer\n"
+        "## PEB Walking / API Resolving\n"
+        "## API Calls\n"
+        "## Capability / Behavior\n"
+        "## Suspicious Constants\n"
+        "## Extractable IOCs\n"
+        "## Confidence\n"
+        "Confidence → [score]/100 — one sentence justification.\n"
+        "## Unknowns & Gaps\n"
+        "## Other important findings\n"
+        "## Conclusion\n"
+        "Conclusion → 2-3 sentences: what it is, what it does, what analyst should do next.\n"
+        "## Pseudocode\n"
+        "Pseudocode → Full readable C-style code, unlimited lines, inline comments on every section\n"
+        )
+        
+        self.current_response = ""
+        
+        def chunk_cb(t):
+            self.current_response += t
+            # Periodically set markdown might be slow, so append or only set at end
+            # For UX, we append to plain text and show
+            self.result_viewer.moveCursor(QtGui.QTextCursor.End)
+            self.result_viewer.insertPlainText(t)
+            self.result_viewer.ensureCursorVisible()
+
+        def fin_cb(response, **kwargs):
+            self.progress_bar.hide()
+            self.analyze_btn.setEnabled(True)
+            if response:
+                self.result_viewer.setMarkdown(response.strip())
+            else:
+                self.result_viewer.setPlainText("Error: No response from AI.")
+
+        AI_CLIENT.query_model_async(prompt, fin_cb, on_chunk=chunk_cb)
+

@@ -23,10 +23,13 @@ from pseudonote.handlers import (
     SuggestFunctionSignatureHandler,
     CommentHandler,
     DeleteCommentsHandler,
+    AsmCommentHandler,
+    DeleteAsmCommentsHandler,
     StructAnalysisHandler,
     BulkRenameHandler,
     SettingsHandler,
     AskAIHandler,
+    ShellcodeAnalystHandler,
 )
 
 # These will be imported lazily to avoid circular imports
@@ -164,7 +167,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(rename_vars_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Rename Variables", "pseudonote:rename_variables", idaapi.SETMENU_APP)
 
-
         # Suggest Function Signature Action
         sugg_sig_desc = idaapi.action_desc_t(
             "pseudonote:suggest_function_signature",
@@ -186,7 +188,41 @@ class PseudoNotePlugin(idaapi.plugin_t):
             45
         )
         idaapi.register_action(comment_handler_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Add Comments", "pseudonote:add_comments", idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Add Comments (Pseudocode)", "pseudonote:add_comments", idaapi.SETMENU_APP)
+
+        asm_comment_handler_desc = idaapi.action_desc_t(
+            "pseudonote:add_asm_comments",
+            "Add Section Comments (IDA-View)",
+            AsmCommentHandler(),
+            "",
+            "Ask AI to add concise section comments to the disassembly",
+            45
+        )
+        idaapi.register_action(asm_comment_handler_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Add Section Comments (IDA-View)", "pseudonote:add_asm_comments", idaapi.SETMENU_APP)
+
+        del_asm_comments_desc = idaapi.action_desc_t(
+            "pseudonote:delete_asm_comments",
+            "Delete IDA-View Comments",
+            DeleteAsmCommentsHandler(),
+            "",
+            "Delete all IDA-view comments in the selected range or enclosing function",
+            45
+        )
+        idaapi.register_action(del_asm_comments_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Delete Comments (IDA-View)", "pseudonote:delete_asm_comments", idaapi.SETMENU_APP)
+
+        # Shellcode Analysis (Static)
+        shell_analyst_desc = idaapi.action_desc_t(
+            "pseudonote:shellcode_analyst",
+            "Shellcode Analysis (Static)",
+            ShellcodeAnalystHandler(),
+            "",
+            "Open the static shellcode analysis window",
+            161
+        )
+        idaapi.register_action(shell_analyst_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Shellcode Analysis (Static)", "pseudonote:shellcode_analyst", idaapi.SETMENU_APP)
 
         delete_comments_desc = idaapi.action_desc_t(
             "pseudonote:delete_comments",
@@ -249,7 +285,10 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Rename Function (Code)", "pseudonote:rename_function")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Rename Function (Malware)", "pseudonote:rename_function_malware")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Function Signature", "pseudonote:suggest_function_signature")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Comments", "pseudonote:add_comments")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Comments (Pseudocode)", "pseudonote:add_comments")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Section Comments (IDA-View)", "pseudonote:add_asm_comments")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments (IDA-View)", "pseudonote:delete_asm_comments")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Shellcode Analysis (Static)", "pseudonote:shellcode_analyst")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
 
@@ -259,6 +298,8 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:rename_variables", "pseudonote:rename_function",
             "pseudonote:rename_function_malware", "pseudonote:suggest_function_signature",
             "pseudonote:add_comments", "pseudonote:delete_comments",
+            "pseudonote:add_asm_comments", "pseudonote:delete_asm_comments",
+            "pseudonote:shellcode_analyst",
             "pseudonote:analyze_struct", "pseudonote:bulk_rename",
             "pseudonote:highlight_on", "pseudonote:highlight_off",
             "pseudonote:disasm_highlight_on", "pseudonote:disasm_highlight_off",
