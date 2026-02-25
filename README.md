@@ -66,6 +66,9 @@ IDA view:
 ### Bulk function renamer pane
 <img width="1202" height="882" alt="image" src="https://github.com/user-attachments/assets/9a45e458-899d-436d-a525-e028e5df432e" />
 
+### Bulk function analyzer
+<img width="1402" height="982" alt="image" src="https://github.com/user-attachments/assets/65c3c249-2b68-4a12-b047-30a18b023cf7" />
+
 ### Call highlighter (IDA view and Pseudocode)
 <img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
 
