@@ -30,6 +30,7 @@ from pseudonote.handlers import (
     SettingsHandler,
     AskAIHandler,
     ShellcodeAnalystHandler,
+    BulkAnalyzeHandler,
 )
 
 # These will be imported lazily to avoid circular imports
@@ -253,6 +254,18 @@ class PseudoNotePlugin(idaapi.plugin_t):
             205
         )
         idaapi.register_action(bulk_rename_desc)
+        
+        # Bulk Function Analyzer Action
+        bulk_analyze_desc = idaapi.action_desc_t(
+            "pseudonote:bulk_analyze",
+            "Bulk Function Analyzer",
+            BulkAnalyzeHandler(),
+            "Ctrl+Shift+A",
+            "Open the AI bulk function analysis and tagging window",
+            204
+        )
+        idaapi.register_action(bulk_analyze_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bulk Function Analyzer", "pseudonote:bulk_analyze", idaapi.SETMENU_APP)
 
         # Ask AI Chat Action
         ask_chat_desc = idaapi.action_desc_t(

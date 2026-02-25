@@ -30,6 +30,9 @@ from pseudonote.qt_compat import (
     QBrush, QPainter, QPalette, QKeySequence, QTextEdit,
     QWidget, QTabWidget, QStackedWidget, QSplitter, QSpacerItem
 )
+import ida_kernwin
+import pseudonote.view as _view
+import pseudonote.ai_client as _ai_mod
 Qt = QtCore.Qt
 
 # Modern Light Theme (Premium Clean)
@@ -382,98 +385,96 @@ def get_calls_fast(ea):
     idaapi.execute_sync(_get_calls, idaapi.MFF_READ)
     return result[0]
 
-def ai_request(cfg, prompt, sys_prompt, logger=None):
+def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None):
     # cfg is expected to be a dict with needed keys from PseudoNote Config
     url = cfg.get('api_url', '')
-    req_url = url # Default to provided URL
+    req_url = url
     key = cfg.get('api_key', '')
     model = cfg.get('model', '')
     provider = cfg.get('provider', 'openai')
     
     hdrs = {'Content-Type': 'application/json'}
-    
-    # Simple logic similar to original but using PseudoNote detected provider type (if passed) or inferring
-    
     is_ollama = provider == 'ollama' or 'localhost:11434' in url
     is_anthropic = provider == 'anthropic' or 'anthropic.com' in url
     is_ollama_native = is_ollama and '/api/' in url
 
+    # Default data payload
+    data = {'model': model, 'messages': [{'role': 'system', 'content': sys_prompt}, {'role': 'user', 'content': prompt}]}
+    if on_chunk:
+        data['stream'] = True
+
     if is_ollama_native:
-        data = {'model':model,'messages':[{'role':'system','content':sys_prompt},{'role':'user','content':prompt}],'stream':False,'options':{'temperature':0.1,'num_predict':500}}
+        data['options'] = {'temperature': 0.1, 'num_predict': 500}
     elif is_anthropic:
         hdrs['x-api-key'] = key
         hdrs['anthropic-version'] = '2023-06-01'
-        data = {'model':model,'max_tokens':500,'messages':[{'role':'user','content':sys_prompt+'\n\n'+prompt}],'temperature':0.1}
+        data = {'model': model, 'max_tokens': 500, 'messages': [{'role': 'user', 'content': sys_prompt + '\n\n' + prompt}], 'temperature': 0.1}
+        if on_chunk: data['stream'] = True
     else:
-        # Standard OpenAI compatible
         if key: hdrs['Authorization'] = f'Bearer {key}'
-        
-        # Ensure we target the chat/completions endpoint
         if not req_url.endswith('chat/completions') and not req_url.endswith('/generate'):
             req_url = f"{req_url.rstrip('/')}/chat/completions"
-            
-        data = {'model':model,'messages':[{'role':'system','content':sys_prompt},{'role':'user','content':prompt}]}
         
-        # Reasoning models (o1, o3, gpt-5) don't support max_tokens or temperature
         is_reasoning = any(x in model.lower() for x in ['o1', 'o3', 'gpt-5'])
         if is_reasoning:
-            data['max_completion_tokens'] = 4096 # Reasoning models need large budget for internal chain-of-thought
+            data['max_completion_tokens'] = 4096
         else:
             data['max_tokens'] = 500
             data['temperature'] = 0.1
 
-    # Implement specific retry logic for 429 errors as requested
-    # Try once. If 429, wait 60s, try again. If 429 again, fail.
-    
     for attempt in range(2):
         try:
             if HAS_REQUESTS and SESSION:
-                # Use local reference for data to avoid UnboundLocalError
-                r = SESSION.post(req_url, headers=hdrs, json=data, timeout=120)
-                r.raise_for_status()
-                res = r.json()
+                if on_chunk:
+                    r = SESSION.post(req_url, headers=hdrs, json=data, timeout=120, stream=True)
+                    r.raise_for_status()
+                    
+                    full_content = ""
+                    for line in r.iter_lines():
+                        if _ai_mod.AI_CANCEL_REQUESTED:
+                            break
+                        if not line: continue
+                        line = line.decode('utf-8').strip()
+                        if line.startswith('data: '):
+                            payload = line[6:]
+                            if payload == '[DONE]': break
+                            try:
+                                j = json.loads(payload)
+                                # OpenAI / Anthropic-compat / Ollama-OAI format
+                                choices = j.get('choices', [])
+                                if choices:
+                                    chunk = choices[0].get('delta', {}).get('content', '')
+                                    if chunk:
+                                        full_content += chunk
+                                        on_chunk(chunk)
+                                # Anthropic native format
+                                elif j.get('type') == 'content_block_delta':
+                                    chunk = j.get('delta', {}).get('text', '')
+                                    if chunk:
+                                        full_content += chunk
+                                        on_chunk(chunk)
+                            except: continue
+                    return full_content.strip()
+                else:
+                    if _ai_mod.AI_CANCEL_REQUESTED: return ""
+                    r = SESSION.post(req_url, headers=hdrs, json=data, timeout=120)
+                    r.raise_for_status()
+                    res = r.json()
             else:
-                # Fallback to urllib if requests missing
+                # Fallback to urllib if requests missing (no streaming support here for now)
                 req = urllib.request.Request(req_url, json.dumps(data).encode(), hdrs)
                 with urllib.request.urlopen(req, timeout=120) as r:
                     res = json.loads(r.read().decode())
             
-            # Return parsed response immediately on success
+            # Parse non-streamed response
             if is_ollama_native: return res.get('message',{}).get('content','').strip()
-            elif is_anthropic: return res['content'][0]['text'].strip()
+            elif is_anthropic: return res.get('content', [{}])[0].get('text', '').strip()
             
-            # OpenAI / OpenAI-compatible
             msg = res.get('choices', [{}])[0].get('message', {})
-            content = msg.get('content') or ''
+            content = msg.get('content') or msg.get('reasoning_content') or msg.get('reasoning') or ''
             refusal = msg.get('refusal') or ''
             
-            # Log refusal if present
-            if refusal:
-                warn = f"Model refused request: {refusal[:200]}"
-                if logger: logger(warn)
-                else: print(f"[PseudoNote] {warn}")
-            
-            # For reasoning models, content might be empty but reasoning is in 'reasoning_content'
-            if not content.strip():
-                content = msg.get('reasoning_content') or msg.get('reasoning') or ''
-            
-            if not content.strip():
-                # Dump the FULL raw response to IDA output so we can see what's happening
-                raw = json.dumps(res, indent=2, default=str)
-                print(f"[PseudoNote] EMPTY RESPONSE - Full API JSON:\n{raw[:2000]}\n{'-'*40}")
-                if logger:
-                    logger(f"Warning: Empty content from API. content={repr(msg.get('content'))}, refusal={repr(refusal)}")
-                    
-                # Check if there's an 'output' field (some newer API formats)
-                if 'output' in res:
-                    out = res['output']
-                    if isinstance(out, str): content = out
-                    elif isinstance(out, list):
-                        for item in out:
-                            if isinstance(item, dict) and item.get('content'):
-                                content = item['content']
-                                break
-            
+            if refusal and logger: logger(f"Model refused: {refusal[:200]}")
             return content.strip()
 
         except Exception as e:
@@ -552,6 +553,8 @@ class VirtualFuncModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.funcs, self.filtered, self.filter_text = [], [], ''
+        self.sort_col = 1 # Default to Address
+        self.sort_ord = Qt.AscendingOrder
 
     def set_data(self, funcs):
         self.beginResetModel()
@@ -578,11 +581,38 @@ class VirtualFuncModel(QAbstractTableModel):
                 elif f.suggested and ft in f.suggested.lower():
                     res.append(i)
             self.filtered = res
+            
+        # Maintain active sorting
+        self.sort(self.sort_col, self.sort_ord)
 
     def set_filter(self, t):
         self.beginResetModel()
         self.filter_text = t
         self._apply_filter()
+        self.endResetModel()
+
+    def sort(self, col, ord=Qt.AscendingOrder):
+        self.beginResetModel()
+        self.sort_col = col
+        self.sort_ord = ord
+        
+        reverse = (ord == Qt.DescendingOrder)
+        
+        if col == 1: # Address
+            self.filtered.sort(key=lambda i: self.funcs[i].ea, reverse=reverse)
+        elif col == 2: # Current Name
+            self.filtered.sort(key=lambda i: (self.funcs[i].demangled or self.funcs[i].name).lower(), reverse=reverse)
+        elif col == 3: # AI Suggestion
+            self.filtered.sort(key=lambda i: self.funcs[i].suggested.lower(), reverse=reverse)
+        elif col == 4: # Score
+            def _score_key(i):
+                s = self.funcs[i].score.replace('%', '')
+                try: return float(s)
+                except: return -1.0
+            self.filtered.sort(key=_score_key, reverse=reverse)
+        elif col == 5: # Status
+            self.filtered.sort(key=lambda i: self.funcs[i].status.lower(), reverse=reverse)
+            
         self.endResetModel()
 
     def rowCount(self, p=QModelIndex()): return len(self.filtered)
@@ -730,11 +760,12 @@ class AnalyzeWorker(QThread):
             self.progress.emit(done, total)
             
             if self.needs_cooldown:
-                self.log.emit('Rate limit reached. Cooling down...', 'info')
-                for s in range(self.cooldown_seconds, 0, -1):
+                self.log.emit('Rate limit reached. Cooling down', 'info')
+                # Animated count decrease: update every 0.2s for smoothness
+                for s in range(self.cooldown_seconds * 10, 0, -2):
                     if not self.running: break
-                    self.update_status.emit(f'Cooling down ({s}s)')
-                    time.sleep(1)
+                    self.update_status.emit(f'Cooling down ({s/10.0:.1f}s)')
+                    time.sleep(0.2)
                 self.needs_cooldown = False
                 self.update_status.emit('')
 
@@ -747,18 +778,18 @@ class AnalyzeWorker(QThread):
         for idx, func in batch:
             if not func.code:
                 # self.log.emit(f"Getting code for {hex(func.ea)}...", 'info')
-                asm_max = self.cfg.get('asm_max_lines', 25)
-                # Gather more code (up to 5000) so we can handle long functions properly in single mode
-                func.code = get_code_fast(func.ea, 5000, asm_max=asm_max)
+                asm_max = self.cfg.get('asm_max_lines', 500) # Increased default for long functions
+                # Increased to 50k to handle 1000+ lines (avg 40-50 chars/line)
+                func.code = get_code_fast(func.ea, 50000, asm_max=asm_max)
                 func.strings = get_strings_fast(func.ea)
                 func.calls = get_calls_fast(func.ea)
             
             if func.code:
                 line_count = func.code.count('\n')
-                # Dynamic limit: we aim for a total batch volume of ~800 lines to ensure AI accuracy and avoid truncation.
+                # Dynamic limit: we aim for a total batch volume of ~1200 lines to ensure AI accuracy and avoid truncation.
                 # Smaller batches allow for longer individual functions.
-                dynamic_line_limit = max(100, 800 // len(batch))
-                dynamic_char_limit = max(4000, 15000 // len(batch))
+                dynamic_line_limit = max(100, 1200 // len(batch))
+                dynamic_char_limit = max(4000, 45000 // len(batch))
                 
                 force = self.cfg.get('force_bulk_rename', False)
                 if not force and len(batch) > 1 and (len(func.code) > dynamic_char_limit or line_count > dynamic_line_limit):
@@ -777,6 +808,7 @@ class AnalyzeWorker(QThread):
 
         try:
             self.needs_cooldown = True
+            if not self.running or _ai_mod.AI_CANCEL_REQUESTED: return results
             logger = lambda m: self.log.emit(m, 'info')
             
             if len(valid) == 1:
@@ -785,7 +817,17 @@ class AnalyzeWorker(QThread):
                 prompt = f"Code:\n```\n{f.code}\n```"
                 if f.strings: prompt += f"\nStrings found: {f.strings}"
                 if f.calls: prompt += f"\nCalled functions: {f.calls}"
-                resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger)
+                
+                self._resp_len = 0
+                def _chunk(t):
+                    self._resp_len += len(t)
+                    ida_kernwin.execute_sync(lambda: _view.update_ai_progress_details(self._resp_len), ida_kernwin.MFF_WRITE)
+                
+                ida_kernwin.execute_sync(lambda: _view.show_ai_progress(f"Naming {f.name}"), ida_kernwin.MFF_WRITE)
+                try:
+                    resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger, on_chunk=_chunk)
+                finally:
+                    ida_kernwin.execute_sync(_view.hide_ai_progress, ida_kernwin.MFF_WRITE)
                 
                 name_part, score_part = '', ''
                 if resp:
@@ -812,7 +854,17 @@ class AnalyzeWorker(QThread):
                     if f.calls: prompt += f"Calls: {f.calls[:3]}\n"
                     prompt += "\n"
 
-                resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger)
+                self._resp_len = 0
+                def _chunk(t):
+                    self._resp_len += len(t)
+                    ida_kernwin.execute_sync(lambda: _view.update_ai_progress_details(self._resp_len), ida_kernwin.MFF_WRITE)
+                
+                ida_kernwin.execute_sync(lambda: _view.show_ai_progress(f"Naming Batch of {len(valid)}"), ida_kernwin.MFF_WRITE)
+                try:
+                    resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger, on_chunk=_chunk)
+                finally:
+                    ida_kernwin.execute_sync(_view.hide_ai_progress, ida_kernwin.MFF_WRITE)
+
                 names, scores, actual_count = self.parse_batch_response(resp, len(valid))
                 self.log.emit(f"API returned {actual_count} names for batch of {len(valid)}", 'info')
 
@@ -824,7 +876,7 @@ class AnalyzeWorker(QThread):
                     if name:
                         self.existing.add(name)
                     elif suggestion:
-                        self.log.emit(f"Suggestion '{suggestion}' for {hex(f.ea)} rejected by clean_name", 'warn')
+                        self.log.emit(f"Suggestion '{suggestion}' for {hex(f.ea)} - can't find meaningful name", 'warn')
                     else:
                         self.log.emit(f"No suggestion found for {hex(f.ea)} (index {i+1} in batch)", 'warn')
                         
@@ -927,8 +979,8 @@ class BulkRenamer(QDialog):
 
     def open_settings(self):
         from pseudonote.view import SettingsDialog
-        # Hide extra tabs (Appearance, Rename, Logs) in Bulk Renamer settings
-        d = SettingsDialog(self.pn_config, self, hide_extra_tabs=True)
+        # Hide extra tabs in Bulk Renamer settings, but show the renamer settings
+        d = SettingsDialog(self.pn_config, self, hide_extra_tabs=True, mode='renamer')
         if d.exec_():
             # Refresh local config from updated pn_config
             self.cfg = self.build_cfg(self.pn_config)
@@ -1088,6 +1140,7 @@ class BulkRenamer(QDialog):
         self.model = VirtualFuncModel(self)
         self.table = QTableView()
         self.table.setModel(self.model)
+        self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QTableView.ExtendedSelection)
@@ -1100,6 +1153,9 @@ class BulkRenamer(QDialog):
         # Context Menu for Settings
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
+
+        self.model.dataChanged.connect(self.update_count)
+        self.model.modelReset.connect(self.update_count)
     
         # Column sizing
         self.table.setColumnWidth(0, 30)  # Checkbox
@@ -1142,10 +1198,11 @@ class BulkRenamer(QDialog):
         log_header.addWidget(nb)
 
         # Unload button
-        ub = QPushButton('Unload Table')
-        ub.setToolTip("Clear the current list of functions")
-        ub.clicked.connect(lambda: [self.model.clear(), setattr(self, 'load_mode', 'prefix'), self.update_count()])
-        log_header.addWidget(ub)
+        self.unload_btn = QPushButton('Unload Table')
+        self.unload_btn.setObjectName("danger")
+        self.unload_btn.setToolTip("Clear the current list of functions")
+        self.unload_btn.clicked.connect(lambda: [self.model.clear(), setattr(self, 'load_mode', 'prefix'), self.update_count()])
+        log_header.addWidget(self.unload_btn)
 
         cb = QPushButton('Clear Log')
         cb.setFixedWidth(120) 
@@ -1204,6 +1261,14 @@ class BulkRenamer(QDialog):
         self.apply_btn.clicked.connect(self.apply_renames)
         actions.addWidget(self.apply_btn)
 
+        self.forward_btn = QPushButton('Forward to Analyzer')
+        self.forward_btn.setObjectName("secondary")
+        self.forward_btn.setMinimumHeight(32)
+        self.forward_btn.setMinimumWidth(150)
+        self.forward_btn.setToolTip("Forward ticked functions to the Bulk Analyzer tool")
+        self.forward_btn.clicked.connect(self.forward_to_analyzer)
+        actions.addWidget(self.forward_btn)
+
         self.undo_btn = QPushButton('Undo Renames')
         self.undo_btn.setToolTip("Revert selected functions to their names before PseudoNote renaming")
         self.undo_btn.setObjectName("danger")
@@ -1224,14 +1289,9 @@ class BulkRenamer(QDialog):
         menu.setStyleSheet(STYLES)
         
         if idx.isValid():
-            jump_act = menu.addAction("🔍 Open function in view")
+            jump_act = menu.addAction("View Pseudocode")
             jump_act.triggered.connect(lambda: self.jump_to(idx))
             menu.addSeparator()
-
-        act = menu.addAction("⚙️ Configure Settings...")
-        act.triggered.connect(self.open_settings)
-        
-        menu.addSeparator()
         
         # Add basic selection actions to context menu too
         sel_all = menu.addAction("Select All")
@@ -1249,27 +1309,36 @@ class BulkRenamer(QDialog):
         sb.setValue(sb.maximum())
 
     def on_busy_tick(self):
-        self.busy_dots = (self.busy_dots + 1) % 4
-        if self.progress.isVisible():
-            fmt = self.progress.format().rstrip('.')
-            self.progress.setFormat(fmt + ('.' * self.busy_dots))
+        # Animation disabled as requested
+        pass
 
     def update_status(self, text):
         if not text:
+            self.progress.setFormat("%p% (%v/%m)") # Reset to default
             self.busy_timer.stop()
+            if hasattr(self, '_cooldown_text'):
+                self._cooldown_text = ""
             return
             
-        # If it's a progress update, show it on the progress bar if visible
-        if self.progress.isVisible() and any(x in text for x in ["Scanning", "Analyzing", "Cooling down"]):
-            self.progress.setFormat(f"{text}  %p%")
-        else:
-            # Log significant status changes to the activity log, but skip per-second updates
-            if not any(text.startswith(x) for x in ["Scanning", "Analyzing", "Cooling down"]):
-                self.add_log(text, 'info')
+        # Store cooldown status to avoid it being immediately overwritten by standard progress
+        if "Cooling down" in text:
+            self._cooldown_text = text
         
-        if "Analyzing" in text or "Cooling down" in text:
+        # Prefer showing cooldown if active
+        display_text = text
+        if hasattr(self, '_cooldown_text') and self._cooldown_text and "Analyzing" in text:
+            display_text = f"{self._cooldown_text} | {text}"
+
+        # If it's a progress update, show it on the progress bar if visible
+        if self.progress.isVisible() and any(x in display_text for x in ["Scanning", "Analyzing", "Cooling down"]):
+            self.progress.setFormat(f"{display_text}  %p%")
+        else:
+            # Log significant status changes to the activity log
+            if not any(display_text.startswith(x) for x in ["Scanning", "Analyzing", "Cooling down"]):
+                self.add_log(display_text, 'info')
+        
+        if "Analyzing" in display_text or "Cooling down" in display_text:
             if not self.busy_timer.isActive():
-                self.busy_dots = 0
                 self.busy_timer.start(500)
         else:
             self.busy_timer.stop()
@@ -1282,6 +1351,14 @@ class BulkRenamer(QDialog):
         if not self.workers and not self.is_loading:
             self.apply_btn.setEnabled(sug > 0)
             
+            # Analyze and Forward: only enabled if rows are checked
+            has_checked = len(self.model.get_checked()) > 0
+            self.analyze_btn.setEnabled(has_checked)
+            self.forward_btn.setEnabled(has_checked)
+            
+        # Unload only enabled if table has data
+        self.unload_btn.setEnabled(t > 0)
+
         # Update Undo button: only enabled in metadata mode with data
         self.undo_btn.setEnabled(getattr(self, 'load_mode', '') == 'metadata' and t > 0 and not self.is_loading)
 
@@ -1301,13 +1378,13 @@ class BulkRenamer(QDialog):
         self.progress.setVisible(True)
         self.progress.setRange(0,0)
         
-        status_msg = f'Scanning for {prefix}*...'
+        status_msg = f'Scanning for {prefix}*'
         if mode == 'metadata':
-            status_msg = 'Scanning for all renamed functions...'
+            status_msg = 'Scanning for all renamed functions'
         elif mode == 'search':
-            status_msg = f'Searching for "{prefix}"...'
+            status_msg = f'Searching for "{prefix}"'
         elif mode == 'all':
-            status_msg = 'Scanning for all functions...'
+            status_msg = 'Scanning for all functions'
             
         self.update_status(status_msg)
         
@@ -1320,6 +1397,20 @@ class BulkRenamer(QDialog):
         self.load_timer = QTimer(self)
         self.load_timer.timeout.connect(self.load_batch)
         self.load_timer.start(1)
+
+    def finish_load(self):
+        if hasattr(self, 'load_timer'):
+            self.load_timer.stop()
+        self.is_loading = False
+        self.progress.setVisible(False)
+        self.model.set_data(self.temp_funcs)
+        self.update_count()
+        self.add_log(f'Loaded {len(self.temp_funcs)} functions', 'ok')
+        self.update_status('')
+        
+        self.load_btn.setEnabled(True)
+        self.analyze_btn.setEnabled(len(self.temp_funcs) > 0)
+        self.stop_btn.setEnabled(False)
 
     def load_batch(self):
         if not self.is_loading:
@@ -1377,22 +1468,18 @@ class BulkRenamer(QDialog):
         if self.scanned % 10000 < 2000:
             self.update_status(f'Scanning... {self.scanned:,} checked | Found {len(self.temp_funcs):,}')
 
-    def finish_load(self):
-        self.is_loading = False
-        if self.load_timer:
-            self.load_timer.stop()
-            self.load_timer = None
-        self.model.set_data(self.temp_funcs)
-        self.temp_funcs = []
-        self.progress.setVisible(False)
+    def load_eas(self, eas):
+        """Manually load a list of EAs (e.g. from Analyzer)"""
+        self.model.clear()
+        funcs = []
+        for ea in eas:
+            name = idc.get_func_name(ea)
+            if name:
+                funcs.append(FuncData(ea, name))
+        self.model.set_data(funcs)
         self.update_count()
-        self.add_log(f'Loaded {self.model.total():,} functions', 'ok')
+        self.add_log(f'Loaded {len(funcs)} functions from manual request', 'ok')
         self.update_status('')
-        
-        # UI State: Not busy anymore
-        self.load_btn.setEnabled(True)
-        self.analyze_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
 
 
 
@@ -1521,6 +1608,7 @@ class BulkRenamer(QDialog):
         self.update_count()
 
     def stop_all(self):
+        _ai_mod.AI_CANCEL_REQUESTED = True
         self.is_loading = False
         if self.load_timer:
             self.load_timer.stop()
@@ -1655,3 +1743,28 @@ class BulkRenamer(QDialog):
         self.update_count()
         self.add_log(f'Reverted {reverted:,} functions', 'ok')
         self.update_status(f'Reverted {reverted:,} functions')
+
+    def forward_to_analyzer(self):
+        items = self.model.get_checked()
+        if not items:
+            QMessageBox.warning(self, 'Warning', 'No functions selected')
+            return
+            
+        eas = [f.ea for idx, f in items]
+        self.add_log(f"Forwarding {len(eas)} functions to Bulk Analyzer...", 'info')
+        
+        from pseudonote.analyzer import BulkAnalyzer
+        found = None
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, BulkAnalyzer) and widget.isVisible():
+                found = widget
+                break
+                
+        if found:
+            found.load_eas(eas, append=True)
+            found.raise_()
+            found.activateWindow()
+        else:
+            dlg = BulkAnalyzer(self.parent())
+            dlg.show()
+            dlg.load_eas(eas, append=True)

@@ -118,11 +118,11 @@ class ProgressOverlay(QtWidgets.QDialog):
         header_layout.addWidget(self.status_label, 1)
         
         self.stop_btn = QtWidgets.QPushButton("Stop")
-        self.stop_btn.setFixedSize(50, 24)
+        self.stop_btn.setFixedSize(75, 30)
         self.stop_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.stop_btn.setStyleSheet("""
             QPushButton { 
-                background-color: #3E3E3E; border: 1px solid #555555; color: #EEEEEE; border-radius: 4px; font-size: 11px; font-family: 'Inter', sans-serif;
+                background-color: #3E3E3E; border: 1px solid #555555; color: #EEEEEE; border-radius: 6px; font-size: 13px; font-weight: bold; font-family: 'Inter', sans-serif;
             }
             QPushButton:hover { background-color: #D32F2F; border: 1px solid #D32F2F; color: white; }
         """)
@@ -269,10 +269,11 @@ class SavedNotesHandler(idaapi.action_handler_t):
 
 if QtWidgets:
     class SettingsDialog(QtWidgets.QDialog):
-        def __init__(self, config, parent=None, hide_extra_tabs=False):
+        def __init__(self, config, parent=None, hide_extra_tabs=False, mode=None):
             super().__init__(parent)
             self.config = config
             self.hide_extra_tabs = hide_extra_tabs
+            self.mode = mode
             self.setWindowTitle("PseudoNote Settings")
             self.resize(700, 500)
             self.providers = ["OpenAI", "Anthropic", "DeepSeek", "Gemini", "Ollama", "LMStudio", "OpenAICompatible"]
@@ -312,7 +313,13 @@ if QtWidgets:
                 
             self.bulk_tab = QtWidgets.QWidget()
             self.init_bulk_tab()
-            self.tabs.addTab(self.bulk_tab, "Bulk Renamer")
+            if not self.hide_extra_tabs or self.mode == 'renamer':
+                self.tabs.addTab(self.bulk_tab, "Bulk Renamer")
+
+            self.analyze_tab = QtWidgets.QWidget()
+            self.init_analyze_tab()
+            if not self.hide_extra_tabs or self.mode == 'analyzer':
+                self.tabs.addTab(self.analyze_tab, "Bulk Function Analyzer")
             
             self.renaming_tab = QtWidgets.QWidget()
             self.init_rename_tab()
@@ -487,6 +494,36 @@ if QtWidgets:
             layout.addStretch()
             self.bulk_tab.setLayout(layout)
 
+        def init_analyze_tab(self):
+            layout = QtWidgets.QVBoxLayout()
+            grp = QtWidgets.QGroupBox("Analysis Settings")
+            fl = QtWidgets.QFormLayout()
+            
+            info = QtWidgets.QLabel("These settings are shared with the Bulk Renamer but affect how the Bulk Function Analyzer gathers code context.")
+            info.setWordWrap(True)
+            info.setStyleSheet("color: gray; font-style: italic; margin-bottom: 5px;")
+            fl.addRow(info)
+
+            self.analyze_workers_spin = QtWidgets.QSpinBox()
+            self.analyze_workers_spin.setRange(1, 10)
+            self.analyze_workers_spin.setValue(getattr(self.config, 'parallel_workers', 5))
+            fl.addRow("Parallel Workers:", self.analyze_workers_spin)
+
+            self.analyze_batch_spin = QtWidgets.QSpinBox()
+            self.analyze_batch_spin.setRange(1, 100)
+            self.analyze_batch_spin.setValue(getattr(self.config, 'batch_size', 10))
+            fl.addRow("Batch Size:", self.analyze_batch_spin)
+
+            self.analyze_cooldown_spin = QtWidgets.QSpinBox()
+            self.analyze_cooldown_spin.setRange(0, 300)
+            self.analyze_cooldown_spin.setValue(getattr(self.config, 'cooldown_seconds', 22))
+            fl.addRow("Rate Limit Cooldown (s):", self.analyze_cooldown_spin)
+
+            grp.setLayout(fl)
+            layout.addWidget(grp)
+            layout.addStretch()
+            self.analyze_tab.setLayout(layout)
+
         def init_appearance_tab(self):
             layout = QtWidgets.QVBoxLayout()
             db = QtGui.QFontDatabase()
@@ -644,12 +681,16 @@ if QtWidgets:
             c.markdown_font = fw["md"][0].currentText(); c.markdown_font_size = fw["md"][1].value()
             
             # Save Performance
-            c.batch_size = self.batch_spin.value()
-            c.parallel_workers = self.workers_spin.value()
+            if hasattr(self, 'batch_spin'):
+                c.batch_size = self.batch_spin.value()
+            else:
+                c.batch_size = self.analyze_batch_spin.value()
+
+            c.parallel_workers = self.analyze_workers_spin.value()
             c.use_bulk_prefix = not self.disable_bulk_prefix_cb.isChecked()
             c.force_bulk_rename = self.force_rename_cb.isChecked()
             c.rename_prefix = self.prefix_edit.text().strip() or "bulkren_"
-            c.cooldown_seconds = self.cooldown_spin.value()
+            c.cooldown_seconds = self.analyze_cooldown_spin.value()
             c.asm_max_lines = self.asm_max_spin.value()
             c.bulk_append_address = self.bulk_append_addr_cb.isChecked()
             c.bulk_use_0x = self.bulk_use_0x_cb.isChecked()
@@ -2299,6 +2340,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_analyze", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
@@ -2490,7 +2532,7 @@ class ShellcodeAnalystDialog(QtWidgets.QDialog):
         "## Other important findings\n"
         "## Conclusion\n"
         "Conclusion → 2-3 sentences: what it is, what it does, what analyst should do next.\n"
-        "## Pseudocode\n"
+        "## Readable Pseudocode\n"
         "Pseudocode → Full readable C-style code, unlimited lines, inline comments on every section\n"
         )
         
