@@ -1001,6 +1001,35 @@ class BulkAnalyzeHandler(idaapi.action_handler_t):
 
 
 # ---------------------------------------------------------------------------
+# Bulk Variable Renamer Handler
+# ---------------------------------------------------------------------------
+class BulkVarRenameHandler(idaapi.action_handler_t):
+    """Launch the Bulk Variable Renamer Dialog."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+        self.dlg = None
+
+    def activate(self, ctx):
+        if not CONFIG.active_provider:
+            print("[PseudoNote] AI Provider not configured.")
+            return 0
+
+        try:
+            from pseudonote import var_renamer
+
+            self.dlg = var_renamer.BulkVariableRenamer(parent=None)
+            self.dlg.show()
+        except Exception as e:
+            print(f"[PseudoNote] Error launching Bulk Variable Renamer: {e}")
+            import traceback
+            traceback.print_exc()
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+# ---------------------------------------------------------------------------
 # Ask AI (Chat) Handler
 # ---------------------------------------------------------------------------
 class AskAIHandler(idaapi.action_handler_t):

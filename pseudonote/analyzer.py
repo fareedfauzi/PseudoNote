@@ -19,7 +19,8 @@ import pseudonote.view as _view
 
 from pseudonote.renamer import (
     STYLES, is_valid_seg, is_sys_func, get_code_fast, 
-    get_strings_fast, get_calls_fast, ai_request
+    get_strings_fast, get_calls_fast, ai_request,
+    count_sub_calls_fast
 )
 from pseudonote.ai_client import SimpleAI
 import pseudonote.ai_client as _ai_mod
@@ -27,8 +28,15 @@ from pseudonote.idb_storage import save_to_idb, load_from_idb
 
 Qt = QtCore.Qt
 
+def count_sub_calls(code, own_name=None):
+    if not code: return 0
+    matches = re.findall(r'\bsub_[0-9A-Fa-f]+\b', code)
+    if own_name and own_name.startswith('sub_'):
+        matches = [m for m in matches if m != own_name]
+    return len(matches)
+
 class FuncData:
-    __slots__ = ['ea', 'name', 'demangled', 'tag', 'confidence', 'indicators', 'tag_reason', 'status', 'checked', 'code', 'strings', 'calls', 'callers', 'callees']
+    __slots__ = ['ea', 'name', 'demangled', 'tag', 'confidence', 'indicators', 'tag_reason', 'status', 'checked', 'code', 'strings', 'calls', 'callers', 'callees', 'sub_count', 'queue']
     def __init__(self, ea, name):
         self.ea, self.name, self.tag, self.tag_reason, self.status, self.checked = ea, name, '', '', 'Pending', True
         self.confidence = 0
@@ -37,9 +45,11 @@ class FuncData:
         if name.startswith('??') or name.startswith('_Z'):
             self.demangled = ida_name.demangle_name(name, 0)
         self.code = self.strings = self.calls = self.callers = self.callees = None
+        self.sub_count = 0
+        self.queue = 'clear'
 
 class VirtualFuncModel(QAbstractTableModel):
-    HEADERS = ['', 'Address', 'Function Name', 'Tag', 'Confidence', 'Indicators', 'Reason', 'Status']
+    HEADERS = ['', 'Address', 'Function Name', 'Tag', 'Confidence', 'Indicators', 'Queue', 'sub_* Count', 'Reason', 'Status']
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -98,7 +108,7 @@ class VirtualFuncModel(QAbstractTableModel):
         self.endResetModel()
 
     def rowCount(self, p=QModelIndex()): return len(self.filtered)
-    def columnCount(self, p=QModelIndex()): return 8
+    def columnCount(self, p=QModelIndex()): return 10
     def headerData(self, s, o, r=Qt.DisplayRole): return self.HEADERS[s] if r==Qt.DisplayRole and o==Qt.Horizontal else None
 
     def data(self, idx, role=Qt.DisplayRole):
@@ -112,8 +122,10 @@ class VirtualFuncModel(QAbstractTableModel):
             elif c==3: return f.tag.upper() if f.tag else ''
             elif c==4: return f"{f.confidence}%" if f.confidence else ''
             elif c==5: return f.indicators
-            elif c==6: return f.tag_reason
-            elif c==7: return f.status
+            elif c==6: return f.queue.upper()
+            elif c==7: return str(f.sub_count)
+            elif c==8: return f.tag_reason
+            elif c==9: return f.status
             
         elif role == Qt.CheckStateRole and c==0:
             return Qt.Checked if f.checked else Qt.Unchecked
@@ -134,11 +146,23 @@ class VirtualFuncModel(QAbstractTableModel):
                 if f.confidence >= 50: return QColor('#FF9500')
                 if f.confidence > 0: return QColor('#FF3B30')
 
-            if c == 7: # Status colors
-                if f.status == 'OK': return QColor('#34C759')
-                if f.status == 'Cached': return QColor('#34C759')
+            if c == 6: # Queue colors
+                q = f.queue
+                if q == 'clear': return QColor('#34C759')
+                if q == 'blocked': return QColor('#FF9500')
+
+            if c == 6: # Queue colors
+                q = f.queue
+                if q == 'clear': return QColor('#34C759')
+                if q == 'blocked': return QColor('#FF9500')
+                if q == 'done': return QColor('#007AFF')
+                if q == 'skipped': return QColor('#8E8E93')
+
+            if c == 9: # Status colors
+                if f.status == 'OK' or f.status == 'Cached': return QColor('#34C759')
                 if f.status == 'Skip': return QColor('#8E8E93')
                 if f.status == 'Pending': return QColor('#FF9500')
+                if f.status == 'Blocked': return QColor('#FF9500')
             
         return None
 
@@ -173,16 +197,17 @@ class VirtualFuncModel(QAbstractTableModel):
         if not indices: return
         rows = [self.filtered.index(i) for i in indices if i in self.filtered]
         if rows:
-            self.dataChanged.emit(self.index(min(rows), 0), self.index(max(rows), 7))
+            self.dataChanged.emit(self.index(min(rows), 0), self.index(max(rows), 9))
 
     def sort(self, col, ord=Qt.AscendingOrder):
         self.beginResetModel()
         self.sort_col = col
         self.sort_ord = ord
-        
         reverse = (ord == Qt.DescendingOrder)
         
-        if col == 1: # Address
+        if col == 0: # Checkbox
+            self.filtered.sort(key=lambda i: self.funcs[i].checked, reverse=reverse)
+        elif col == 1: # Address
             self.filtered.sort(key=lambda i: self.funcs[i].ea, reverse=reverse)
         elif col == 2: # Name
             self.filtered.sort(key=lambda i: (self.funcs[i].demangled or self.funcs[i].name).lower(), reverse=reverse)
@@ -190,9 +215,14 @@ class VirtualFuncModel(QAbstractTableModel):
             self.filtered.sort(key=self._tag_sort_key, reverse=reverse)
         elif col == 4: # Confidence
             self.filtered.sort(key=lambda i: self.funcs[i].confidence, reverse=reverse)
-        elif col == 7: # Status
+        elif col == 6: # Queue
+            self.filtered.sort(key=lambda i: 0 if self.funcs[i].queue == 'clear' else 1, reverse=reverse)
+        elif col == 7: # sub_count
+            self.filtered.sort(key=lambda i: self.funcs[i].sub_count, reverse=reverse)
+        elif col == 9: # Status
             self.filtered.sort(key=lambda i: self.funcs[i].status.lower(), reverse=reverse)
             
+        self.layoutChanged.emit()
         self.endResetModel()
 
     def _tag_sort_key(self, idx_val):
@@ -230,12 +260,13 @@ class AnalyzeWorker(QThread):
     log = Signal(str, str)
     update_status = Signal(str)
 
-    def __init__(self, cfg, items, include_context):
+    def __init__(self, cfg, items, include_context, is_retry=False):
         super().__init__()
         self.cfg = cfg
         self.items = items
         self.include_context = include_context
         self.running = True
+        self.is_retry = is_retry
 
     def stop(self):
         self.running = False
@@ -292,6 +323,16 @@ class AnalyzeWorker(QThread):
                 func.code = get_code_fast(func.ea, 50000, asm_max=1000)
                 func.strings = get_strings_fast(func.ea)
                 func.calls = get_calls_fast(func.ea)
+
+            # Live Queue Reclassification
+            if func.code:
+                func.sub_count = count_sub_calls(func.code, own_name=func.name)
+                func.queue = 'clear' if func.sub_count == 0 else 'blocked'
+            
+            if func.queue == 'blocked' and not self.is_retry:
+                func.status = 'Blocked'
+                results.append((idx, func, 'DEFERRED', 0, '', 'Blocked: sub_* calls present'))
+                continue
 
             if not func.code:
                 results.append((idx, func, 'benign', 0, '', 'No code found'))
@@ -351,16 +392,14 @@ REASON: 2-3 sentences citing specific evidence including API names, strings, and
             prompt += caller_ctx + callee_ctx
 
             try:
-                self._resp_len = 0
                 def _chunk(t):
-                    self._resp_len += len(t)
-                    ida_kernwin.execute_sync(lambda: _view.update_ai_progress_details(self._resp_len), ida_kernwin.MFF_WRITE)
-                
-                ida_kernwin.execute_sync(lambda: _view.show_ai_progress(f"Analyzing {func.name}"), ida_kernwin.MFF_WRITE)
+                    # Update local status only, no global overlay
+                    self.update_status.emit(f"Analyzing {func.name} ({len(t)} chars)...")
+
                 try:
                     resp = ai_request(self.cfg, prompt, sys_prompt, logger=lambda m: self.log.emit(m, 'info'), on_chunk=_chunk)
                 finally:
-                    ida_kernwin.execute_sync(_view.hide_ai_progress, ida_kernwin.MFF_WRITE)
+                    pass
                 
                 tag, confidence, indicators, reason = self.parse_tag_response(resp)
                 results.append((idx, func, tag, confidence, indicators, reason))
@@ -497,11 +536,39 @@ class StreamingSummaryDialog(QDialog):
 class BulkAnalyzer(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint)
         self.pn_config = CONFIG
         self.workers = []
+        self._deferred_items = []
+        self._is_retry_phase = False
         self.is_loading = False
         self.setup_ui()
         self.worker = None
+        QTimer.singleShot(100, self.check_workflow_tip)
+
+    def check_workflow_tip(self):
+        if not getattr(CONFIG, 'show_pro_tip', True):
+            return
+        
+        msg = (
+            "<b>Pro Tip:</b> For the best results, use the tools in this sequence:<br><br>"
+            "1. <b>Function Renamer</b> → 2. <b>Variable Renamer</b> → 3. <b>Function Analyzer</b><br><br>"
+            "Following this order ensures the AI has the most accurate function names "
+            "and variable context available at each step."
+        )
+        
+        box = QMessageBox(self)
+        box.setWindowTitle("PseudoNote Workflow Tip")
+        box.setText(msg)
+        box.setIcon(QMessageBox.Information)
+        
+        cb = QCheckBox("Don't show this tip again")
+        box.setCheckBox(cb)
+        box.exec_()
+        
+        if cb.isChecked():
+            CONFIG.show_pro_tip = False
+            CONFIG.save()
 
     def setup_ui(self):
         self.setWindowTitle('PseudoNote: Bulk Function Analyzer')
@@ -539,6 +606,47 @@ class BulkAnalyzer(QDialog):
         
         layout.addLayout(tb)
 
+        # Row 1b: Quick Load buttons
+        smart_row = QHBoxLayout()
+
+        entry_btn = QPushButton("Entry Points")
+        entry_btn.setToolTip(
+            "Load entry-point functions: main, WinMain, DllMain, wWinMain, wmain, "
+            "TLS callbacks, and the binary's OEP. These are the first code to run "
+            "and are common starting points for malicious logic."
+        )
+        entry_btn.clicked.connect(self.load_entry_points)
+        smart_row.addWidget(entry_btn)
+
+        exports_btn = QPushButton("Exports")
+        exports_btn.setToolTip(
+            "Load all exported functions from the binary. "
+            "Exports in malware DLLs and shellcode loaders are often primary attack surfaces."
+        )
+        exports_btn.clicked.connect(self.load_exports)
+        smart_row.addWidget(exports_btn)
+
+        high_xref_btn = QPushButton("High Xref")
+        high_xref_btn.setToolTip(
+            "Load functions called by 5 or more other functions (hub functions). "
+            "These are utility or dispatcher functions that many modules depend on, "
+            "making them high-value targets for analysis."
+        )
+        high_xref_btn.clicked.connect(self.load_high_xref)
+        smart_row.addWidget(high_xref_btn)
+
+        import_wrap_btn = QPushButton("Wrapper (Tiny functions)")
+        import_wrap_btn.setToolTip(
+            "Load thin wrapper functions that call exactly one named import. "
+            "Malware often wraps dangerous APIs (VirtualAlloc, CreateRemoteThread, etc.) "
+            "to hide direct import references from static scanners."
+        )
+        import_wrap_btn.clicked.connect(self.load_import_wrappers)
+        smart_row.addWidget(import_wrap_btn)
+
+        smart_row.addStretch()
+        layout.addLayout(smart_row)
+
         # Row 2: Context Selection
         ctx_layout = QHBoxLayout()
         self.include_ctx_cb = QCheckBox("Include callers/callees context (slower)")
@@ -547,17 +655,23 @@ class BulkAnalyzer(QDialog):
         ctx_layout.addStretch()
         layout.addLayout(ctx_layout)
 
-        # Filter
+        # Row 3: Filter & Stats
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(QLabel("Filter Table:"))
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText('Search in current list...')
-        self.filter_edit.textChanged.connect(lambda t: self.model.set_filter(t))
+        self.filter_edit.textChanged.connect(lambda t: self.model.set_filter(t) or self.update_stats_label())
         filter_layout.addWidget(self.filter_edit)
+        
+        filter_layout.addStretch()
+        self.stats_label = QLabel("Clear: 0 | Blocked: 0 | Total: 0")
+        self.stats_label.setObjectName("status_msg")
+        filter_layout.addWidget(self.stats_label)
         layout.addLayout(filter_layout)
 
         # Table
         self.model = VirtualFuncModel(self)
+        self.model.modelReset.connect(self.update_stats_label)
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setSortingEnabled(True) # Enable sorting by header click
@@ -573,11 +687,14 @@ class BulkAnalyzer(QDialog):
         self.table.setColumnWidth(3, 90)   # tag
         self.table.setColumnWidth(4, 100)  # confidence
         self.table.setColumnWidth(5, 220)  # indicators
-        self.table.setColumnWidth(7, 70)   # status
+        self.table.setColumnWidth(6, 80)   # Queue
+        self.table.setColumnWidth(7, 90)   # sub_* count
+        self.table.setColumnWidth(9, 70)   # status
         
-        # Allow interactive resizing but stretch Reason
+        h.setSectionsClickable(True)
+        h.setSortIndicatorShown(True)
         h.setSectionResizeMode(QHeaderView.Interactive)
-        h.setSectionResizeMode(6, QHeaderView.Stretch) # Maximize Reason
+        h.setSectionResizeMode(8, QHeaderView.Stretch) # Maximize Reason
         h.setStretchLastSection(False)
         
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -614,6 +731,19 @@ class BulkAnalyzer(QDialog):
         self.sel_ben_btn = QPushButton('Select Benign')
         self.sel_ben_btn.clicked.connect(lambda: self.model.select_by_tag('benign'))
         sel_row.addWidget(self.sel_ben_btn)
+
+        # Queue Selection
+        sep2 = QLabel("|")
+        sep2.setStyleSheet("color: gray; margin: 0 5px;")
+        sel_row.addWidget(sep2)
+
+        self.sel_clear_btn = QPushButton('Select Clear')
+        self.sel_clear_btn.clicked.connect(lambda: self._select_by_queue('clear'))
+        sel_row.addWidget(self.sel_clear_btn)
+
+        self.sel_blocked_btn = QPushButton('Select Blocked')
+        self.sel_blocked_btn.clicked.connect(lambda: self._select_by_queue('blocked'))
+        sel_row.addWidget(self.sel_blocked_btn)
         
         sel_row.addStretch()
         layout.addLayout(sel_row)
@@ -667,8 +797,27 @@ class BulkAnalyzer(QDialog):
         self.export_btn.clicked.connect(self.export_csv)
         actions.addWidget(self.export_btn)
 
+        self.export_json_btn = QPushButton('Export JSON')
+        self.export_json_btn.setObjectName("secondary")
+        self.export_json_btn.setToolTip("Export the current table data to a JSON file (richer format, includes all fields)")
+        self.export_json_btn.clicked.connect(self.export_json)
+        actions.addWidget(self.export_json_btn)
+
         layout.addLayout(actions)
         self.update_button_states()
+
+    def update_button_states(self):
+        has_content = self.model.total() > 0
+        has_checked = len(self.model.get_checked()) > 0
+        is_busy = bool(self.workers) or self.is_loading
+        
+        self.analyze_btn.setEnabled(has_checked and not is_busy)
+        self.summarize_btn.setEnabled(has_checked and not is_busy)
+        self.forward_btn.setEnabled(has_checked and not is_busy)
+        self.stop_btn.setEnabled(is_busy)
+        self.unload_btn.setEnabled(has_content and not is_busy)
+        self.export_btn.setEnabled(has_content and not is_busy)
+        self.export_json_btn.setEnabled(has_content and not is_busy)
 
     def check_sub_ratio(self, items):
         # Only scan functions where code is already cached
@@ -802,25 +951,164 @@ class BulkAnalyzer(QDialog):
         self.log.append(f'<span style="color: gray;">[{ts}]</span> <span style="color: {color};">{msg}</span>')
         self.log.ensureCursorVisible()
 
-    def update_button_states(self):
-        has_content = self.model.total() > 0
-        has_checked = len(self.model.get_checked()) > 0
-        
-        self.unload_btn.setEnabled(has_content)
-        self.export_btn.setEnabled(has_content)
-        
-        self.analyze_btn.setEnabled(has_checked)
-        self.summarize_btn.setEnabled(has_checked)
-        self.forward_btn.setEnabled(has_checked)
+    def update_stats_label(self):
+        clear = sum(1 for f in self.model.funcs if f.queue == 'clear')
+        blocked = sum(1 for f in self.model.funcs if f.queue == 'blocked')
+        total = self.model.total()
+        self.stats_label.setText(f"Clear: {clear} | Blocked: {blocked} | Total: {total}")
+
+    def _select_by_queue(self, q_type):
+        for i in self.model.filtered:
+            f = self.model.funcs[i]
+            if f.queue == q_type:
+                f.checked = True
+            else:
+                f.checked = False
+        if self.model.filtered:
+            self.model.dataChanged.emit(self.model.index(0,0), self.model.index(len(self.model.filtered)-1,0))
 
     def load_pattern(self):
         pat = self.load_input.text().strip()
         if not pat: return
         self.load_funcs(pattern=pat, replace=False)
 
-    def load_funcs(self, prefix=None, pattern=None, replace=True):
+    def load_entry_points(self):
+        """Load main-like entry-point functions + OEP."""
+        # Keywords to match (substring, case-insensitive, after stripping leading _ and @suffix)
+        ENTRY_KEYWORDS = [
+            'main', 'wmain', 'winmain', 'wwinmain', 'dllmain',
+            'dllentrypoint', 'wstartup', 'rtlentrypoint',
+            'tlscallback', 'tls_callback', 'crtstart', 'crtmain',
+            'wincrt', 'startup',
+        ]
+        funcs = []
+        seen = set()
+
+        def _name_matches(name):
+            raw_lc = name.lower()
+            # Fast path: any name containing 'main' matches (DllMain, WinMain,
+            # DllMain(HINSTANCE,...), _DllMain@12, __DllMainCRTStartup, etc.)
+            if 'main' in raw_lc:
+                return True
+            # Normalise the rest: strip leading _, strip @NN stdcall suffix,
+            # strip ( for demangled forms like DllEntryPoint(...)
+            n = raw_lc.lstrip('_')
+            for sep in ('@', '('):
+                if sep in n:
+                    n = n[:n.index(sep)]
+            # Keyword substring match
+            return any(kw == n or kw in n for kw in ENTRY_KEYWORDS)
+
+        # Walk all IDA entry points (covers OEP + all exports for DLLs)
+        for _, ordinal, ea, name in idautils.Entries():
+            if ea == idaapi.BADADDR or ea in seen: continue
+            if not is_valid_seg(ea): continue
+            if not name:
+                name = idc.get_func_name(ea) or idc.get_name(ea) or ''
+            if _name_matches(name):
+                fdata = self._make_fdata(ea, name)
+                funcs.append(fdata)
+                seen.add(ea)
+
+        # Also scan all functions by name (catches non-exported entries)
+        for ea in idautils.Functions():
+            if ea in seen or not is_valid_seg(ea): continue
+            name = idc.get_func_name(ea)
+            if name and _name_matches(name):
+                fdata = self._make_fdata(ea, name)
+                funcs.append(fdata)
+                seen.add(ea)
+
+        self._finish_smart_load(funcs, "entry point")
+
+    def load_exports(self):
+        """Load all exported functions (uses idautils.Entries — works for EXE and DLL)."""
+        funcs = []
+        seen = set()
+        # idautils.Entries() yields (index, ordinal, ea, name) for every entry in the export table
+        for _, ordinal, ea, name in idautils.Entries():
+            if ea == idaapi.BADADDR or ea in seen: continue
+            if not is_valid_seg(ea): continue
+            if not name:
+                name = idc.get_func_name(ea) or idc.get_name(ea) or f'export_{hex(ea)}'
+            fdata = self._make_fdata(ea, name)
+            funcs.append(fdata)
+            seen.add(ea)
+        self._finish_smart_load(funcs, "export")
+
+    def load_high_xref(self):
+        """Load functions that are called by 5 or more distinct callers."""
+        MIN_XREF = 5
         funcs = []
         for ea in idautils.Functions():
+            if not is_valid_seg(ea): continue
+            name = idc.get_func_name(ea)
+            if not name: continue
+            callers = {xref.frm for xref in idautils.XrefsTo(ea, idaapi.XREF_FAR) if xref.type in (idaapi.fl_CN, idaapi.fl_CF)}
+            if len(callers) >= MIN_XREF:
+                funcs.append(self._make_fdata(ea, name))
+        self._finish_smart_load(funcs, f"high-xref (≥{MIN_XREF} callers)")
+
+    def load_import_wrappers(self):
+        """Load thin functions that call exactly one named (non-sub_*) external."""
+        funcs = []
+        for ea in idautils.Functions():
+            if not is_valid_seg(ea): continue
+            name = idc.get_func_name(ea)
+            if not name: continue
+
+            # Count unique named callees in this function
+            named_callees = set()
+            for item in idautils.FuncItems(ea):
+                for xref in idautils.CodeRefsFrom(item, False):
+                    callee_name = idc.get_func_name(xref)
+                    if callee_name and not callee_name.startswith('sub_') and callee_name != name:
+                        named_callees.add(callee_name)
+
+            # Broad function size check: import wrappers tend to be tiny
+            f = ida_funcs.get_func(ea)
+            func_size = (f.size() if f else 0)
+
+            if len(named_callees) == 1 and func_size < 80:
+                funcs.append(self._make_fdata(ea, name))
+
+        self._finish_smart_load(funcs, "import wrapper")
+
+    def _make_fdata(self, ea, name):
+        """Create a FuncData with cached IDB tag if available."""
+        fdata = FuncData(ea, name)
+        fdata.sub_count = 0
+        fdata.queue = 'clear'
+        fdata.code = None
+        stored = load_from_idb(ea, tag=90)
+        if stored and '|' in stored:
+            parts = stored.split('|', 3)
+            if len(parts) == 4:
+                fdata.tag = parts[0]
+                fdata.confidence = int(parts[1]) if parts[1].isdigit() else 0
+                fdata.indicators = parts[2]
+                fdata.tag_reason = parts[3]
+                fdata.status = 'Cached'
+        return fdata
+
+    def _finish_smart_load(self, funcs, kind):
+        """Append smart-loaded functions to the table."""
+        if funcs:
+            self.model.append_data(funcs)
+            self.update_stats_label()
+            self.update_button_states()
+            self.add_log(f"Loaded {len(funcs)} {kind} function(s).", 'ok')
+        else:
+            self.add_log(f"No {kind} functions found.", 'warn')
+
+    def load_funcs(self, prefix=None, pattern=None, replace=True):
+        funcs = []
+        seen_eas = set()
+        if not replace:
+            seen_eas = {f.ea for f in self.model.funcs}
+
+        for ea in idautils.Functions():
+            if ea in seen_eas: continue
             if not is_valid_seg(ea): continue
             name = idc.get_func_name(ea)
             if not name:
@@ -834,6 +1122,11 @@ class BulkAnalyzer(QDialog):
             
             if match:
                 fdata = FuncData(ea, name)
+                # Optimized: No decompilation during table load.
+                fdata.sub_count = 0
+                fdata.queue = 'clear'
+                fdata.code = None
+
                 stored = load_from_idb(ea, tag=90)
                 if stored and '|' in stored:
                     parts = stored.split('|', 3)
@@ -844,11 +1137,16 @@ class BulkAnalyzer(QDialog):
                 funcs.append(fdata)
                 
         if funcs:
-            self.model.set_data(funcs)
+            if replace:
+                self.model.set_data(funcs)
+            else:
+                self.model.append_data(funcs)
+            self.update_stats_label()
             self.add_log(f"Loaded {len(funcs)} functions.", 'ok')
         elif replace:
             # Full replace intent (e.g. Load sub_*): clear even if empty
             self.model.set_data([])
+            self.update_stats_label()
             self.add_log("No functions found. Table cleared.", 'warn')
         else:
             # Search intent: preserve existing list on no match
@@ -866,6 +1164,11 @@ class BulkAnalyzer(QDialog):
             name = idc.get_func_name(ea)
             if name:
                 fdata = FuncData(ea, name)
+                # Optimized: No decompilation during table load.
+                fdata.sub_count = 0
+                fdata.queue = 'clear'
+                fdata.code = None
+
                 stored = load_from_idb(ea, tag=90)
                 if stored and '|' in stored:
                     parts = stored.split('|', 3)
@@ -895,9 +1198,21 @@ class BulkAnalyzer(QDialog):
             QMessageBox.warning(self, 'Warning', 'No functions selected')
             return
 
-        if not self.check_sub_ratio(items):
-            return
+        self._deferred_items = []
+        self._runtime_deferred = []
+        self._is_retry_phase = False
+        
+        # Build config dict for worker
+        from pseudonote.renamer import BulkRenamer
+        temp_renamer = BulkRenamer(self.pn_config)
+        cfg = temp_renamer.build_cfg(self.pn_config)
+        self._last_cfg = cfg
+        temp_renamer.deleteLater()
+        
+        self.add_log(f"Starting analysis: {len(items)} functions. Live classification enabled.", 'info')
+        self._start_worker_items(items, cfg)
 
+    def _start_worker_items(self, items, cfg, is_retry=False):
         # Reset cancel flag before new analysis
         _ai_mod.AI_CANCEL_REQUESTED = False
 
@@ -908,20 +1223,13 @@ class BulkAnalyzer(QDialog):
         self.progress.setRange(0, len(items))
         self.progress.setValue(0)
 
-        # Build config dict for worker
-        from pseudonote.renamer import BulkRenamer
-        temp_renamer = BulkRenamer(self.pn_config)
-        cfg = temp_renamer.build_cfg(self.pn_config)
-        self._last_cfg = cfg # Enhancement 5: Store last used cfg
-        temp_renamer.deleteLater()
-
         num_workers = cfg.get('parallel_workers', 1)
         batch_size = cfg.get('batch_size', 1)
         
         for w in self.workers:
             w.stop()
         self.workers = []
-        self._worker_progress = {} # Bug 2: initialize worker progress tracking
+        self._worker_progress = {}
         self.completed_count = 0
         self.total_count = len(items)
         self.progress.setRange(0, self.total_count)
@@ -929,9 +1237,9 @@ class BulkAnalyzer(QDialog):
         if num_workers > 1 and len(items) > 1:
             chunk_size = max(1, len(items) // num_workers)
             chunks = [items[i:i+chunk_size] for i in range(0, len(items), chunk_size)]
-            self.add_log(f"Starting analysis with {len(chunks)} parallel workers (batch={batch_size})...", 'info')
+            self.add_log(f"Starting {len(chunks)} workers (batch={batch_size})...", 'info')
             for chunk in chunks:
-                w = AnalyzeWorker(cfg, chunk, self.include_ctx_cb.isChecked())
+                w = AnalyzeWorker(cfg, chunk, self.include_ctx_cb.isChecked(), is_retry=is_retry)
                 w.batch_done.connect(self.on_batch_done)
                 w.progress.connect(self.on_progress)
                 w.finished.connect(self.on_worker_finished)
@@ -940,15 +1248,63 @@ class BulkAnalyzer(QDialog):
                 self.workers.append(w)
                 w.start()
         else:
-            self.add_log(f"Starting sequential analysis (batch={batch_size})...", 'info')
-            self.worker = AnalyzeWorker(cfg, items, self.include_ctx_cb.isChecked())
-            self.worker.batch_done.connect(self.on_batch_done)
-            self.worker.progress.connect(self.on_progress) # Connect to global progress handler
-            self.worker.finished.connect(self.on_worker_finished) # Connect to global finished handler
-            self.worker.log.connect(self.add_log)
-            self.worker.update_status.connect(self.on_update_status)
-            self.workers.append(self.worker)
-            self.worker.start()
+            w = AnalyzeWorker(cfg, items, self.include_ctx_cb.isChecked(), is_retry=is_retry)
+            w.batch_done.connect(self.on_batch_done)
+            w.progress.connect(self.on_progress)
+            w.finished.connect(self.on_worker_finished)
+            w.log.connect(self.add_log)
+            w.update_status.connect(self.on_update_status)
+            self.workers.append(w)
+            w.start()
+
+    def retry_deferred(self):
+        if not self._deferred_items:
+            self.finish_analyze()
+            return
+        
+        self._is_retry_phase = True
+        self.add_log(
+            f"Retry pass: re-scanning {len(self._deferred_items)} BLOCKED functions...",
+            'info'
+        )
+        
+        promoted = []
+        still_blocked = []
+        
+        for idx, func in self._deferred_items:
+            # Re-fetch fresh code — callees may have been renamed
+            new_code = get_code_fast(func.ea, 50000, asm_max=1000)
+            if new_code is not None:
+                func.code = new_code
+                func.strings = get_strings_fast(func.ea)
+                func.calls = get_calls_fast(func.ea)
+            
+            func.sub_count = count_sub_calls(func.code, own_name=func.name)
+            if func.sub_count == 0:
+                func.queue = 'clear'
+                func.status = 'Pending'
+                promoted.append((idx, func))
+            else:
+                func.queue = 'blocked'
+                still_blocked.append((idx, func))
+        
+        self._deferred_items = still_blocked
+        self.add_log(
+            f"Retry: {len(promoted)} promoted to CLEAR, {len(still_blocked)} still BLOCKED.",
+            'info' if promoted else 'warn'
+        )
+        self.model.sort(self.model.sort_col, self.model.sort_ord)
+        
+        self._deferred_items = []
+        if promoted:
+            self._start_worker_items(promoted, self._last_cfg, is_retry=True)
+        elif still_blocked:
+            for idx, func in still_blocked:
+                func.status = 'Analyzed (with sub_*)'
+            self.add_log(f"Proceeding to analyze {len(still_blocked)} functions despite unresolved callees.", 'warn')
+            self._start_worker_items(still_blocked, self._last_cfg, is_retry=True)
+        else:
+            self.finish_analyze()
 
     def on_update_status(self, text):
         if not text:
@@ -985,7 +1341,13 @@ class BulkAnalyzer(QDialog):
         
         # Only finish when all workers are done
         if not self.workers:
-            self.finish_analyze()
+            self._deferred_items.extend(self._runtime_deferred)
+            self._runtime_deferred = []
+            
+            if self._deferred_items:
+                self.retry_deferred()
+            else:
+                self.finish_analyze()
             if _ai_mod.AI_CANCEL_REQUESTED:
                 self.add_log("Analysis stopped by user.", 'warn')
 
@@ -996,20 +1358,24 @@ class BulkAnalyzer(QDialog):
         
         indices = []
         for idx, func, tag, confidence, indicators, reason in results:
-            func.tag = tag
-            func.confidence = confidence
-            func.indicators = indicators
-            func.tag_reason = reason
-            func.status = 'OK'
+            if tag == 'DEFERRED':
+                func.queue = 'blocked'
+                func.status = 'Blocked'
+                self._runtime_deferred.append((idx, func))
+            else:
+                func.tag = tag
+                func.confidence = confidence
+                func.indicators = indicators
+                func.tag_reason = reason
+                func.status = 'OK'
+                func.queue = 'done'
+                # Save to IDB
+                save_to_idb(func.ea, f"{func.tag}|{func.confidence}|{func.indicators}|{func.tag_reason}", tag=90)
+            
             indices.append(idx)
             
-            # Save to IDB
-            save_to_idb(func.ea, f"{func.tag}|{func.confidence}|{func.indicators}|{func.tag_reason}", tag=90)
-            
-        # sort() calls beginResetModel/endResetModel which redraws all rows.
-        # No need to call refresh_rows() after — it would operate on a
-        # stale indices list and is redundant.
         self.model.sort(sort_col, sort_ord)
+        self.update_stats_label()
 
     def finish_analyze(self):
         self.progress.setVisible(False)
@@ -1158,27 +1524,55 @@ Do not pad with generic statements."""
         try:
             with open(path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                # Use headers from model but skip the checkbox column
-                writer.writerow(self.model.HEADERS[1:])
-                
-                # Export all functions in the current model (respecting filter if we want, 
-                # but usually "export" means the current view. Let's export what's visible)
-                for i in self.model.filtered:
-                    func = self.model.funcs[i]
+                writer.writerow(['Address', 'Name', 'Tag', 'Confidence', 'Indicators', 'Queue', 'sub_* Count', 'Reason', 'Status'])
+                for func in self.model.funcs:
                     writer.writerow([
-                        f"{func.ea:X}",
+                        hex(func.ea),
                         func.demangled or func.name,
-                        func.tag,
+                        func.tag.upper(),
                         func.confidence,
                         func.indicators,
+                        func.queue.upper(),
+                        func.sub_count,
                         func.tag_reason,
                         func.status
                     ])
-            self.add_log(f"Exported {len(self.model.filtered)} rows to {os.path.basename(path)}", 'ok')
-            QMessageBox.information(self, "Success", f"Data exported successfully to {path}")
+            self.add_log(f"Exported CSV to {path}", 'ok')
         except Exception as e:
+            self.add_log(f"Export error: {e}", 'err')
             QMessageBox.critical(self, "Error", f"Failed to export CSV: {str(e)}")
-            self.add_log(f"Export error: {str(e)}", 'err')
+
+    def export_json(self):
+        if not self.model.funcs:
+            QMessageBox.warning(self, 'Warning', 'Table is empty')
+            return
+
+        path, _ = QFileDialog.getSaveFileName(self, "Export JSON", "", "JSON Files (*.json)")
+        if not path: return
+
+        try:
+            import json as _json
+            rows = []
+            for func in self.model.funcs:
+                rows.append({
+                    'address': hex(func.ea),
+                    'name': func.demangled or func.name,
+                    'tag': func.tag,
+                    'confidence': func.confidence,
+                    'indicators': func.indicators,
+                    'queue': func.queue,
+                    'sub_count': func.sub_count,
+                    'reason': func.tag_reason,
+                    'status': func.status,
+                    'strings': func.strings or '',
+                    'calls': func.calls or '',
+                })
+            with open(path, 'w', encoding='utf-8') as f:
+                _json.dump(rows, f, indent=2, ensure_ascii=False)
+            self.add_log(f"Exported JSON to {path}", 'ok')
+        except Exception as e:
+            self.add_log(f"Export JSON error: {e}", 'err')
+            QMessageBox.critical(self, "Error", f"Failed to export JSON: {str(e)}")
 
     def show_summary_dialog(self, text):
         dlg = QDialog(self)

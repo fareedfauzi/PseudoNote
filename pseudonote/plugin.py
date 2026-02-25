@@ -31,6 +31,7 @@ from pseudonote.handlers import (
     AskAIHandler,
     ShellcodeAnalystHandler,
     BulkAnalyzeHandler,
+    BulkVarRenameHandler,
 )
 
 # These will be imported lazily to avoid circular imports
@@ -267,6 +268,18 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(bulk_analyze_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bulk Function Analyzer", "pseudonote:bulk_analyze", idaapi.SETMENU_APP)
 
+        # Bulk Variable Renamer Action
+        bulk_var_rename_desc = idaapi.action_desc_t(
+            "pseudonote:bulk_var_rename",
+            "Bulk Variable Renamer",
+            BulkVarRenameHandler(),
+            "Ctrl+Shift+V",
+            "Rename local variables in bulk using AI",
+            206
+        )
+        idaapi.register_action(bulk_var_rename_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename", idaapi.SETMENU_APP)
+
         # Ask AI Chat Action
         ask_chat_desc = idaapi.action_desc_t(
             "pseudonote:ask_chat",
@@ -304,6 +317,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Shellcode Analysis (Static)", "pseudonote:shellcode_analyst")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename")
 
         # Unregister all actions
         for action_id in [
@@ -314,6 +328,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:add_asm_comments", "pseudonote:delete_asm_comments",
             "pseudonote:shellcode_analyst",
             "pseudonote:analyze_struct", "pseudonote:bulk_rename",
+            "pseudonote:bulk_var_rename",
             "pseudonote:highlight_on", "pseudonote:highlight_off",
             "pseudonote:disasm_highlight_on", "pseudonote:disasm_highlight_off",
             "pseudonote:ask_chat",

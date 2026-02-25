@@ -78,6 +78,9 @@ class Config:
         self.bulk_use_0x = False
         self.rename_append_address = False
         self.rename_use_0x = False
+        self.var_auto_apply = True
+        self.auto_apply_bulk = False
+        self.show_pro_tip = True
 
         self.load()
 
@@ -198,6 +201,9 @@ class Config:
             self.bulk_use_0x = parser.getboolean("Analysis", "BULK_USE_0X", fallback=False)
             self.rename_append_address = parser.getboolean("Analysis", "RENAME_APPEND_ADDR", fallback=False)
             self.rename_use_0x = parser.getboolean("Analysis", "RENAME_USE_0X", fallback=False)
+            self.var_auto_apply = parser.getboolean("Analysis", "VAR_AUTO_APPLY", fallback=True)
+            self.auto_apply_bulk = parser.getboolean("Analysis", "BULK_AUTO_APPLY", fallback=False)
+            self.show_pro_tip = parser.getboolean("Analysis", "SHOW_PRO_TIP", fallback=True)
 
     def save(self):
         parser = configparser.ConfigParser()
@@ -269,6 +275,9 @@ class Config:
         parser.set("Analysis", "BULK_USE_0X", str(self.bulk_use_0x))
         parser.set("Analysis", "RENAME_APPEND_ADDR", str(self.rename_append_address))
         parser.set("Analysis", "RENAME_USE_0X", str(self.rename_use_0x))
+        parser.set("Analysis", "VAR_AUTO_APPLY", str(self.var_auto_apply))
+        parser.set("Analysis", "BULK_AUTO_APPLY", str(self.auto_apply_bulk))
+        parser.set("Analysis", "SHOW_PRO_TIP", str(self.show_pro_tip))
 
         # Try saving. Handle Permission Denied (e.g. Program Files) by falling back to user home.
         success = False

@@ -320,7 +320,12 @@ if QtWidgets:
             self.init_analyze_tab()
             if not self.hide_extra_tabs or self.mode == 'analyzer':
                 self.tabs.addTab(self.analyze_tab, "Bulk Function Analyzer")
-            
+
+            self.var_renamer_tab = QtWidgets.QWidget()
+            self.init_var_renamer_tab()
+            if not self.hide_extra_tabs or self.mode == 'var_renamer':
+                self.tabs.addTab(self.var_renamer_tab, "Bulk Variable Renamer")
+
             self.renaming_tab = QtWidgets.QWidget()
             self.init_rename_tab()
             if not self.hide_extra_tabs:
@@ -423,83 +428,156 @@ if QtWidgets:
 
         def init_bulk_tab(self):
             layout = QtWidgets.QVBoxLayout()
-            
+
             grp = QtWidgets.QGroupBox("Batching and Performance")
             fl = QtWidgets.QFormLayout()
 
             self.force_rename_cb = QtWidgets.QCheckBox("Force renaming; do not skip functions, even if they are large.")
             self.force_rename_cb.setChecked(getattr(self.config, 'force_bulk_rename', False))
             fl.addRow(self.force_rename_cb)
-            
+
             force_warn = QtWidgets.QLabel("Caution: Forcing large functions into big batches may cause truncated results or timeouts.\nRecommendation: Don't tick this box.")
             force_warn.setStyleSheet("color: #d10e00; font-style: italic; font-size: 12px; margin-left: 0px;")
             force_warn.setWordWrap(True)
             fl.addRow(force_warn)
             
-            self.batch_spin = QtWidgets.QSpinBox()
-            self.batch_spin.setRange(1, 100)
-            self.batch_spin.setValue(getattr(self.config, 'batch_size', 10))
-            fl.addRow("Batch Size (Functions per AI call):", self.batch_spin)
-            
-            self.workers_spin = QtWidgets.QSpinBox()
-            self.workers_spin.setRange(1, 10)
-            self.workers_spin.setValue(getattr(self.config, 'parallel_workers', 5))
-            fl.addRow("Batch Workers (Multi-Threads):", self.workers_spin)
-            
-            warn_info = QtWidgets.QLabel("Increasing the number of workers beyond 8 may cause IDA to crash.")
-            warn_info.setStyleSheet("color: gray; font-style: italic; font-size: 11px; margin-left: 10px;")
-            warn_info.setWordWrap(True)
-            fl.addRow("", warn_info)
-            
+            self.auto_apply_bulk_cb = QtWidgets.QCheckBox("Auto-Apply renamed functions (Rename automatically as processed)")
+            self.auto_apply_bulk_cb.setToolTip("If checked, functions with no unresolved callees will be renamed in the IDB immediately after the AI response.")
+            self.auto_apply_bulk_cb.setChecked(getattr(self.config, 'auto_apply_bulk', False))
+            fl.addRow("", self.auto_apply_bulk_cb)
+
             self.cooldown_spin = QtWidgets.QSpinBox()
             self.cooldown_spin.setRange(0, 300)
             self.cooldown_spin.setValue(getattr(self.config, 'cooldown_seconds', 22))
             fl.addRow("Cooldown seconds (Avoid rate limits):", self.cooldown_spin)
-            
+
             self.asm_max_spin = QtWidgets.QSpinBox()
             self.asm_max_spin.setRange(5, 500)
             self.asm_max_spin.setValue(getattr(self.config, 'asm_max_lines', 25))
             fl.addRow("Max Assembly Lines (Fallback):", self.asm_max_spin)
-            
+
             self.disable_bulk_prefix_cb = QtWidgets.QCheckBox("Disable prefix")
             self.disable_bulk_prefix_cb.setChecked(not getattr(self.config, 'use_bulk_prefix', True))
             fl.addRow("", self.disable_bulk_prefix_cb)
-            
+
             self.prefix_edit = QtWidgets.QLineEdit()
             self.prefix_edit.setText(getattr(self.config, 'rename_prefix', 'bulkren_'))
             self.prefix_edit.setPlaceholderText("bulkren_")
             fl.addRow("Rename Prefix:", self.prefix_edit)
-            
+
             # Gray out logic for bulk
             self.disable_bulk_prefix_cb.toggled.connect(lambda checked: self.prefix_edit.setEnabled(not checked))
             self.prefix_edit.setEnabled(not self.disable_bulk_prefix_cb.isChecked())
-            
+
             self.bulk_append_addr_cb = QtWidgets.QCheckBox("Append offset address (e.g., {prefix}_FunctionName_18001db0)")
             self.bulk_append_addr_cb.setChecked(getattr(self.config, 'bulk_append_address', False))
             fl.addRow("", self.bulk_append_addr_cb)
-            
+
             self.bulk_use_0x_cb = QtWidgets.QCheckBox("Use 0x prefix for address (e.g., _0x18001db0)")
             self.bulk_use_0x_cb.setChecked(getattr(self.config, 'bulk_use_0x', False))
             self.bulk_use_0x_cb.setEnabled(self.bulk_append_addr_cb.isChecked())
             self.bulk_append_addr_cb.toggled.connect(self.bulk_use_0x_cb.setEnabled)
             fl.addRow("", self.bulk_use_0x_cb)
             
+
             grp.setLayout(fl)
             layout.addWidget(grp)
-            
-            info = QtWidgets.QLabel("Note: Reducing batch size can improve accuracy but increases API costs and analysis time.")
+
+            info = QtWidgets.QLabel("Note: Batch Size and Parallel Workers for the Bulk Renamer are configured in the \"Bulk Variable Renamer\" tab.")
             info.setStyleSheet("color: gray; font-style: italic;")
             info.setWordWrap(True)
             layout.addWidget(info)
             layout.addStretch()
             self.bulk_tab.setLayout(layout)
 
+        def init_var_renamer_tab(self):
+            layout = QtWidgets.QVBoxLayout()
+
+            grp_bulk = QtWidgets.QGroupBox("Bulk Renamer — Batch & Workers")
+            fl_bulk = QtWidgets.QFormLayout()
+
+            note_bulk = QtWidgets.QLabel(
+                "These Batch Size and Workers settings apply to the Bulk Function Renamer.\n"
+                "They are shown here to keep variance from variable renaming settings separate."
+            )
+            note_bulk.setWordWrap(True)
+            note_bulk.setStyleSheet("color: gray; font-style: italic; margin-bottom: 4px;")
+            fl_bulk.addRow(note_bulk)
+
+            self.bulk_batch_spin = QtWidgets.QSpinBox()
+            self.bulk_batch_spin.setRange(1, 100)
+            self.bulk_batch_spin.setValue(getattr(self.config, 'batch_size', 10))
+            fl_bulk.addRow("Batch Size (functions per AI call):", self.bulk_batch_spin)
+
+            self.bulk_workers_spin = QtWidgets.QSpinBox()
+            self.bulk_workers_spin.setRange(1, 10)
+            self.bulk_workers_spin.setValue(getattr(self.config, 'parallel_workers', 5))
+            fl_bulk.addRow("Parallel Workers (threads):", self.bulk_workers_spin)
+
+            warn_workers = QtWidgets.QLabel("Increasing the number of workers beyond 8 may cause IDA to crash.")
+            warn_workers.setStyleSheet("color: gray; font-style: italic; font-size: 11px;")
+            warn_workers.setWordWrap(True)
+            fl_bulk.addRow("", warn_workers)
+
+            grp_bulk.setLayout(fl_bulk)
+            layout.addWidget(grp_bulk)
+
+            grp_var = QtWidgets.QGroupBox("Bulk Variable Renamer — Performance")
+            fl_var = QtWidgets.QFormLayout()
+
+            note_var = QtWidgets.QLabel(
+                "Variable renaming sends one function per AI call using the Parallel Workers setting above.\n"
+                "Each worker handles its own slice of functions concurrently.\n"
+                "The cooldown below avoids rate-limiting between requests within each worker."
+            )
+            note_var.setWordWrap(True)
+            note_var.setStyleSheet("color: gray; font-style: italic; margin-bottom: 4px;")
+            fl_var.addRow(note_var)
+
+            self.var_cooldown_spin = QtWidgets.QSpinBox()
+            self.var_cooldown_spin.setRange(0, 300)
+            self.var_cooldown_spin.setValue(getattr(self.config, 'cooldown_seconds', 22))
+            fl_var.addRow("Cooldown seconds (Avoid rate limits):", self.var_cooldown_spin)
+
+            self.var_asm_max_spin = QtWidgets.QSpinBox()
+            self.var_asm_max_spin.setRange(5, 500)
+            self.var_asm_max_spin.setValue(getattr(self.config, 'asm_max_lines', 25))
+            fl_var.addRow("Max Assembly Lines (Fallback):", self.var_asm_max_spin)
+
+            grp_var.setLayout(fl_var)
+            layout.addWidget(grp_var)
+
+            grp_apply = QtWidgets.QGroupBox("Auto-Apply")
+            fl_apply = QtWidgets.QFormLayout()
+
+            self.var_auto_apply_cb = QtWidgets.QCheckBox(
+                "Automatically apply renames as each function completes (no need to click Apply Suggestions)"
+            )
+            self.var_auto_apply_cb.setChecked(getattr(self.config, 'var_auto_apply', True))
+            fl_apply.addRow(self.var_auto_apply_cb)
+
+            auto_warn = QtWidgets.QLabel(
+                "When enabled, renames are written to IDA immediately after each function's AI response.\n"
+                "This means you cannot review suggestions before they are applied."
+            )
+            auto_warn.setWordWrap(True)
+            auto_warn.setStyleSheet("color: #d10e00; font-style: italic; font-size: 11px;")
+            fl_apply.addRow(auto_warn)
+
+            grp_apply.setLayout(fl_apply)
+            layout.addWidget(grp_apply)
+            layout.addStretch()
+            self.var_renamer_tab.setLayout(layout)
+
         def init_analyze_tab(self):
             layout = QtWidgets.QVBoxLayout()
             grp = QtWidgets.QGroupBox("Analysis Settings")
             fl = QtWidgets.QFormLayout()
-            
-            info = QtWidgets.QLabel("These settings are shared with the Bulk Renamer but affect how the Bulk Function Analyzer gathers code context.")
+
+            info = QtWidgets.QLabel(
+                "These settings affect the Bulk Function Analyzer.\n"
+                "Batch Size and Workers are configured here since the Analyzer supports parallelism."
+            )
             info.setWordWrap(True)
             info.setStyleSheet("color: gray; font-style: italic; margin-bottom: 5px;")
             fl.addRow(info)
@@ -675,32 +753,63 @@ if QtWidgets:
             active_data = s.get(c.active_provider, {})
             if active_data.get("model"):
                 c.model = active_data.get("model")
-            fw = self.font_widgets
-            c.ui_font = fw["ui"][0].currentText(); c.ui_font_size = fw["ui"][1].value()
-            c.code_font = fw["code"][0].currentText(); c.code_font_size = fw["code"][1].value()
-            c.markdown_font = fw["md"][0].currentText(); c.markdown_font_size = fw["md"][1].value()
-            
-            # Save Performance
-            if hasattr(self, 'batch_spin'):
-                c.batch_size = self.batch_spin.value()
-            else:
-                c.batch_size = self.analyze_batch_spin.value()
 
-            c.parallel_workers = self.analyze_workers_spin.value()
-            c.use_bulk_prefix = not self.disable_bulk_prefix_cb.isChecked()
-            c.force_bulk_rename = self.force_rename_cb.isChecked()
-            c.rename_prefix = self.prefix_edit.text().strip() or "bulkren_"
-            c.cooldown_seconds = self.analyze_cooldown_spin.value()
-            c.asm_max_lines = self.asm_max_spin.value()
-            c.bulk_append_address = self.bulk_append_addr_cb.isChecked()
-            c.bulk_use_0x = self.bulk_use_0x_cb.isChecked()
-            
-            # Save Function Rename
-            c.use_rename_prefix = not self.disable_prefix_cb.isChecked()
-            c.function_prefix = self.func_prefix_edit.text().strip()
-            c.rename_append_address = self.rename_append_addr_cb.isChecked()
-            c.rename_use_0x = self.rename_use_0x_cb.isChecked()
-            
+            # Appearance (only present when hide_extra_tabs=False)
+            if hasattr(self, 'font_widgets'):
+                fw = self.font_widgets
+                c.ui_font = fw["ui"][0].currentText(); c.ui_font_size = fw["ui"][1].value()
+                c.code_font = fw["code"][0].currentText(); c.code_font_size = fw["code"][1].value()
+                c.markdown_font = fw["md"][0].currentText(); c.markdown_font_size = fw["md"][1].value()
+
+            # Bulk Renamer tab settings
+            if hasattr(self, 'force_rename_cb'):
+                c.force_bulk_rename = self.force_rename_cb.isChecked()
+            if hasattr(self, 'cooldown_spin'):
+                c.cooldown_seconds = self.cooldown_spin.value()
+            if hasattr(self, 'asm_max_spin'):
+                c.asm_max_lines = self.asm_max_spin.value()
+            if hasattr(self, 'disable_bulk_prefix_cb'):
+                c.use_bulk_prefix = not self.disable_bulk_prefix_cb.isChecked()
+            if hasattr(self, 'prefix_edit'):
+                c.rename_prefix = self.prefix_edit.text().strip() or "bulkren_"
+            if hasattr(self, 'bulk_append_addr_cb'):
+                c.bulk_append_address = self.bulk_append_addr_cb.isChecked()
+            if hasattr(self, 'bulk_use_0x_cb'):
+                c.bulk_use_0x = self.bulk_use_0x_cb.isChecked()
+            if hasattr(self, 'auto_apply_bulk_cb'):
+                c.auto_apply_bulk = self.auto_apply_bulk_cb.isChecked()
+
+            # Bulk Function Analyzer tab settings
+            if hasattr(self, 'analyze_workers_spin'):
+                c.parallel_workers = self.analyze_workers_spin.value()
+            if hasattr(self, 'analyze_batch_spin'):
+                c.batch_size = self.analyze_batch_spin.value()
+            if hasattr(self, 'analyze_cooldown_spin') and (not self.hide_extra_tabs or self.mode == 'analyzer'):
+                c.cooldown_seconds = self.analyze_cooldown_spin.value()
+
+            # Bulk Variable Renamer tab settings (bulk_batch/workers + var cooldown/asm)
+            if hasattr(self, 'bulk_batch_spin'):
+                c.batch_size = self.bulk_batch_spin.value()
+            if hasattr(self, 'bulk_workers_spin'):
+                c.parallel_workers = self.bulk_workers_spin.value()
+            if hasattr(self, 'var_cooldown_spin') and (not self.hide_extra_tabs or self.mode == 'var_renamer'):
+                c.cooldown_seconds = self.var_cooldown_spin.value()
+            if hasattr(self, 'var_asm_max_spin'):
+                c.asm_max_lines = self.var_asm_max_spin.value()
+
+            # Function Rename tab settings
+            if hasattr(self, 'disable_prefix_cb'):
+                c.use_rename_prefix = not self.disable_prefix_cb.isChecked()
+            if hasattr(self, 'func_prefix_edit'):
+                c.function_prefix = self.func_prefix_edit.text().strip()
+            if hasattr(self, 'rename_append_addr_cb'):
+                c.rename_append_address = self.rename_append_addr_cb.isChecked()
+            if hasattr(self, 'rename_use_0x_cb'):
+                c.rename_use_0x = self.rename_use_0x_cb.isChecked()
+
+            if hasattr(self, 'var_auto_apply_cb'):
+                c.var_auto_apply = self.var_auto_apply_cb.isChecked()
+
             c.save()
             self.accept()
 
@@ -2339,7 +2448,9 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_variables", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_var_rename", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_analyze", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
