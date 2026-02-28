@@ -55,18 +55,48 @@ class Config:
         self.gemini_model = "gemini-1.5-pro"
         self.lmstudio_model = "local-model"
 
-        self.ui_font = "Segoe UI"
+        self.ui_font = "'Inter', 'Segoe UI'"
         self.ui_font_size = 9
         self.code_font = "Consolas"
         self.code_font_size = 10
         self.markdown_font = "Consolas"
         self.markdown_font_size = 10
 
-        # Analysis Defaults
+        # Analysis Defaults (Shared/Fallback)
         self.batch_size = 10
         self.parallel_workers = 1
-        self.rename_prefix = "bulkren_"
         self.cooldown_seconds = 22
+
+        # Bulk Function Renamer (Specific)
+        self.bulk_batch_size = 10
+        self.bulk_parallel_workers = 5
+        self.bulk_cooldown = 22
+        self.bulk_asm_max = 25
+
+        # Bulk Variable Renamer (Specific)
+        self.var_batch_size = 5
+        self.var_parallel_workers = 3
+        self.var_cooldown = 15
+        self.var_asm_max = 25
+
+        # Bulk Function Analyzer (Specific)
+        self.analyze_batch_size = 10
+        self.analyze_parallel_workers = 5
+        self.analyze_cooldown = 22
+
+        # Deep Summarizer (Specific)
+        self.deep_batch_size = 10
+        self.deep_parallel_workers = 1
+        self.deep_cooldown = 0
+        self.deep_max_lines = 200
+
+        self.deep_do_var_rename = True
+        self.deep_do_func_comment = True
+        self.deep_do_analysis_rename = True
+        self.deep_do_refinement = True
+        self.deep_do_bottom_up_rename = True
+        
+        self.rename_prefix = "bulkren_"
         self.function_prefix = "fn_"
         self.use_rename_prefix = True
         self.use_bulk_prefix = True
@@ -78,7 +108,13 @@ class Config:
         self.bulk_use_0x = False
         self.rename_append_address = False
         self.rename_use_0x = False
+        self.deep_use_0x = False
+        self.analyzer_use_prefix = True
+        self.analyzer_prefix = "an_"
+        self.analyzer_append_address = True
         self.var_auto_apply = True
+        self.var_force_rename = False
+        self.bulk_force_rename_sub = False
         self.auto_apply_bulk = False
         self.show_pro_tip = True
 
@@ -178,7 +214,7 @@ class Config:
             self.custom_model = parser.get("OpenAICompatible", "MODEL_NAME", fallback="")
 
         if parser.has_section("Fonts"):
-            self.ui_font = parser.get("Fonts", "UI_FONT", fallback="Segoe UI")
+            self.ui_font = parser.get("Fonts", "UI_FONT", fallback="'Inter', 'Segoe UI'")
             self.ui_font_size = parser.getint("Fonts", "UI_SIZE", fallback=9)
             self.code_font = parser.get("Fonts", "CODE_FONT", fallback="Consolas")
             self.code_font_size = parser.getint("Fonts", "CODE_SIZE", fallback=10)
@@ -197,13 +233,54 @@ class Config:
             self.cooldown_seconds = parser.getint("Analysis", "COOLDOWN_SECONDS", fallback=22)
             self.asm_max_lines = parser.getint("Analysis", "ASM_MAX_LINES", fallback=25)
             self.force_bulk_rename = parser.getboolean("Analysis", "FORCE_RENAME", fallback=False)
+            self.bulk_force_rename_sub = parser.getboolean("Analysis", "BULK_FORCE_RENAME_SUB", fallback=False)
             self.bulk_append_address = parser.getboolean("Analysis", "BULK_APPEND_ADDR", fallback=False)
             self.bulk_use_0x = parser.getboolean("Analysis", "BULK_USE_0X", fallback=False)
             self.rename_append_address = parser.getboolean("Analysis", "RENAME_APPEND_ADDR", fallback=False)
             self.rename_use_0x = parser.getboolean("Analysis", "RENAME_USE_0X", fallback=False)
-            self.var_auto_apply = parser.getboolean("Analysis", "VAR_AUTO_APPLY", fallback=True)
+            self.deep_use_prefix = parser.getboolean("Analysis", "DEEP_USE_PREFIX", fallback=True)
+            self.deep_prefix = parser.get("Analysis", "DEEP_PREFIX", fallback="da_")
+            self.deep_append_address = parser.getboolean("Analysis", "DEEP_APPEND_ADDR", fallback=True)
+            self.deep_use_0x = parser.getboolean("General", "deep_use_0x", fallback=False)
+            self.analyzer_use_prefix = parser.getboolean("General", "analyzer_use_prefix", fallback=True)
+            self.analyzer_prefix = parser.get("General", "analyzer_prefix", fallback="an_")
+            self.analyzer_append_address = parser.getboolean("General", "analyzer_append_address", fallback=True)
+            self.var_auto_apply = parser.getboolean("General", "var_auto_apply", fallback=True)
+            self.var_force_rename = parser.getboolean("Analysis", "VAR_FORCE_RENAME", fallback=False)
             self.auto_apply_bulk = parser.getboolean("Analysis", "BULK_AUTO_APPLY", fallback=False)
+            
+            # Specifics
+            self.bulk_batch_size = parser.getint("Analysis", "BULK_BATCH_SIZE", fallback=10)
+            self.bulk_parallel_workers = parser.getint("Analysis", "BULK_WORKERS", fallback=5)
+            self.bulk_cooldown = parser.getint("Analysis", "BULK_COOLDOWN", fallback=22)
+            self.bulk_asm_max = parser.getint("Analysis", "BULK_ASM_MAX", fallback=25)
+            
+            self.var_batch_size = parser.getint("Analysis", "VAR_BATCH_SIZE", fallback=5)
+            self.var_parallel_workers = parser.getint("Analysis", "VAR_WORKERS", fallback=3)
+            self.var_cooldown = parser.getint("Analysis", "VAR_COOLDOWN", fallback=15)
+            self.var_asm_max = parser.getint("Analysis", "VAR_ASM_MAX", fallback=25)
+            
+            self.analyze_parallel_workers = parser.getint("Analysis", "ANALYZE_WORKERS", fallback=5)
+            self.analyze_batch_size = parser.getint("Analysis", "ANALYZE_BATCH_SIZE", fallback=10)
+            self.analyze_cooldown = parser.getint("Analysis", "ANALYZE_COOLDOWN", fallback=22)
+
+            # Deep Summarizer
+            self.deep_batch_size = parser.getint("Analysis", "DEEP_BATCH_SIZE", fallback=10)
+            self.deep_parallel_workers = parser.getint("Analysis", "DEEP_WORKERS", fallback=1)
+            self.deep_cooldown = parser.getint("Analysis", "DEEP_COOLDOWN", fallback=0)
+            self.deep_max_lines = parser.getint("Analysis", "DEEP_MAX_LINES", fallback=200)
+
+            self.deep_do_var_rename = parser.getboolean("Analysis", "DEEP_VAR_RENAME", fallback=True)
+            self.deep_do_func_comment = parser.getboolean("Analysis", "DEEP_FUNC_COMMENT", fallback=True)
+            self.deep_do_analysis_rename = parser.getboolean("Analysis", "DEEP_ANALYSIS_RENAME", fallback=True)
+            self.deep_do_refinement = parser.getboolean("Analysis", "DEEP_REFINEMENT", fallback=True)
+            self.deep_do_bottom_up_rename = parser.getboolean("Analysis", "DEEP_BOTTOM_UP_RENAME", fallback=True)
+
             self.show_pro_tip = parser.getboolean("Analysis", "SHOW_PRO_TIP", fallback=True)
+
+    def reload(self):
+        new = type(self)()  # create fresh config from disk
+        self.__dict__.update(new.__dict__)
 
     def save(self):
         parser = configparser.ConfigParser()
@@ -271,12 +348,49 @@ class Config:
         parser.set("Analysis", "COOLDOWN_SECONDS", str(self.cooldown_seconds))
         parser.set("Analysis", "ASM_MAX_LINES", str(self.asm_max_lines))
         parser.set("Analysis", "FORCE_RENAME", str(self.force_bulk_rename))
+        parser.set("Analysis", "BULK_FORCE_RENAME_SUB", str(self.bulk_force_rename_sub))
         parser.set("Analysis", "BULK_APPEND_ADDR", str(self.bulk_append_address))
         parser.set("Analysis", "BULK_USE_0X", str(self.bulk_use_0x))
         parser.set("Analysis", "RENAME_APPEND_ADDR", str(self.rename_append_address))
         parser.set("Analysis", "RENAME_USE_0X", str(self.rename_use_0x))
-        parser.set("Analysis", "VAR_AUTO_APPLY", str(self.var_auto_apply))
+        parser.set("Analysis", "DEEP_USE_PREFIX", str(self.deep_use_prefix))
+        parser.set("Analysis", "DEEP_PREFIX", self.deep_prefix)
+        parser.set("Analysis", "DEEP_APPEND_ADDR", str(self.deep_append_address))
+        if not parser.has_section("General"): parser.add_section("General")
+        parser.set("General", "deep_use_0x", str(self.deep_use_0x))
+        parser.set("General", "analyzer_use_prefix", str(self.analyzer_use_prefix))
+        parser.set("General", "analyzer_prefix", str(self.analyzer_prefix))
+        parser.set("General", "analyzer_append_address", str(self.analyzer_append_address))
+        parser.set("General", "var_auto_apply", str(self.var_auto_apply))
+        parser.set("Analysis", "VAR_FORCE_RENAME", str(self.var_force_rename))
         parser.set("Analysis", "BULK_AUTO_APPLY", str(self.auto_apply_bulk))
+        
+        parser.set("Analysis", "BULK_BATCH_SIZE", str(self.bulk_batch_size))
+        parser.set("Analysis", "BULK_WORKERS", str(self.bulk_parallel_workers))
+        parser.set("Analysis", "BULK_COOLDOWN", str(self.bulk_cooldown))
+        parser.set("Analysis", "BULK_ASM_MAX", str(self.bulk_asm_max))
+        
+        parser.set("Analysis", "VAR_BATCH_SIZE", str(self.var_batch_size))
+        parser.set("Analysis", "VAR_WORKERS", str(self.var_parallel_workers))
+        parser.set("Analysis", "VAR_COOLDOWN", str(self.var_cooldown))
+        parser.set("Analysis", "VAR_ASM_MAX", str(self.var_asm_max))
+        
+        parser.set("Analysis", "ANALYZE_BATCH_SIZE", str(self.analyze_batch_size))
+        parser.set("Analysis", "ANALYZE_WORKERS", str(self.analyze_parallel_workers))
+        parser.set("Analysis", "ANALYZE_COOLDOWN", str(self.analyze_cooldown))
+
+        # Deep Summarizer
+        parser.set("Analysis", "DEEP_BATCH_SIZE", str(self.deep_batch_size))
+        parser.set("Analysis", "DEEP_WORKERS", str(self.deep_parallel_workers))
+        parser.set("Analysis", "DEEP_COOLDOWN", str(self.deep_cooldown))
+        parser.set("Analysis", "DEEP_MAX_LINES", str(self.deep_max_lines))
+
+        parser.set("Analysis", "DEEP_VAR_RENAME", str(self.deep_do_var_rename))
+        parser.set("Analysis", "DEEP_FUNC_COMMENT", str(self.deep_do_func_comment))
+        parser.set("Analysis", "DEEP_ANALYSIS_RENAME", str(self.deep_do_analysis_rename))
+        parser.set("Analysis", "DEEP_REFINEMENT", str(self.deep_do_refinement))
+        parser.set("Analysis", "DEEP_BOTTOM_UP_RENAME", str(self.deep_do_bottom_up_rename))
+
         parser.set("Analysis", "SHOW_PRO_TIP", str(self.show_pro_tip))
 
         # Try saving. Handle Permission Denied (e.g. Program Files) by falling back to user home.

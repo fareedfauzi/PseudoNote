@@ -11,7 +11,7 @@ import ida_hexrays
 import idc
 import idautils
 
-from pseudonote.qt_compat import QtWidgets, QtCore, QtGui, get_text_width, set_tab_stop_width
+from pseudonote.qt_compat import QtWidgets, QtCore, QtGui, get_text_width, set_tab_stop_width, Signal
 from pseudonote.config import CONFIG, LOGGER
 from pseudonote.syntax import MultiHighlighter
 from pseudonote.editors import CodeEditor, MarkdownEditor
@@ -59,11 +59,14 @@ def update_ai_progress_details(chars, status_text=None):
 def hide_ai_progress():
     global _global_overlay, _progress_ref_count, _force_cancelled
     _progress_ref_count -= 1
-    if _progress_ref_count <= 0 or _force_cancelled:
+    if _progress_ref_count <= 0 or getattr(sys.modules[__name__], '_force_cancelled', False):
         _progress_ref_count = 0
         _force_cancelled = False
-        if _global_overlay:
-            _global_overlay.hide()
+        if _global_overlay is not None:
+            try:
+                _global_overlay.hide()
+            except RuntimeError:
+                pass # C++ object deleted
 
 
 class ProgressOverlay(QtWidgets.QDialog):
@@ -268,6 +271,23 @@ class SavedNotesHandler(idaapi.action_handler_t):
 
 
 if QtWidgets:
+    class TestConnectionWorker(QtCore.QThread):
+        finished_signal = Signal(bool, str)
+
+        def __init__(self, cfg):
+            super().__init__()
+            self.cfg = cfg
+
+        def run(self):
+            from pseudonote.ai_client import SimpleAI
+            try:
+                # Use a fresh client for testing
+                tester = SimpleAI(self.cfg)
+                success, message = tester.test_connection()
+                self.finished_signal.emit(success, message)
+            except Exception as e:
+                self.finished_signal.emit(False, str(e))
+
     class SettingsDialog(QtWidgets.QDialog):
         def __init__(self, config, parent=None, hide_extra_tabs=False, mode=None):
             super().__init__(parent)
@@ -300,6 +320,31 @@ if QtWidgets:
             self.init_ui()
 
         def init_ui(self):
+            # Application-wide styling for this dialog to match Deep Summarizer aesthetic
+            self.setStyleSheet("""
+                QTabWidget::tab-bar {
+                    alignment: left;
+                }
+                QTabWidget::pane {
+                    border: 1px solid #D1D1D6;
+                    border-radius: 8px;
+                    background: #FFFFFF;
+                }
+                QTabBar::tab {
+                    background: #F2F2F7;
+                    border: 1px solid #D1D1D6;
+                    border-bottom: none;
+                    padding: 8px 16px;
+                    border-radius: 6px 6px 0 0;
+                    font-weight: bold;
+                    color: #636366;
+                }
+                QTabBar::tab:selected {
+                    background: #FFFFFF;
+                    color: #1C1C1E;
+                    border-top: 2px solid #007AFF;
+                }
+            """)
             main_layout = QtWidgets.QVBoxLayout()
             self.tabs = QtWidgets.QTabWidget()
             self.provider_tab = QtWidgets.QWidget()
@@ -314,7 +359,7 @@ if QtWidgets:
             self.bulk_tab = QtWidgets.QWidget()
             self.init_bulk_tab()
             if not self.hide_extra_tabs or self.mode == 'renamer':
-                self.tabs.addTab(self.bulk_tab, "Bulk Renamer")
+                self.tabs.addTab(self.bulk_tab, "Bulk Function Renamer")
 
             self.analyze_tab = QtWidgets.QWidget()
             self.init_analyze_tab()
@@ -325,6 +370,11 @@ if QtWidgets:
             self.init_var_renamer_tab()
             if not self.hide_extra_tabs or self.mode == 'var_renamer':
                 self.tabs.addTab(self.var_renamer_tab, "Bulk Variable Renamer")
+
+            self.summarizer_tab = QtWidgets.QWidget()
+            self.init_summarizer_tab()
+            if not self.hide_extra_tabs or self.mode == 'summarizer':
+                self.tabs.addTab(self.summarizer_tab, "Deep Summarizer")
 
             self.renaming_tab = QtWidgets.QWidget()
             self.init_rename_tab()
@@ -389,9 +439,9 @@ if QtWidgets:
             self.load_fields(self.current_provider)
 
         def on_test_connection(self):
+            self.test_conn_btn.setEnabled(False)
             self.test_result_label.setText("Testing... please wait.")
             self.test_result_label.setStyleSheet("color: black; font-size: 11px;")
-            QtWidgets.QApplication.processEvents()
             
             # Temporary save fields to config for testing
             self.save_fields_to_temp(self.current_provider)
@@ -412,18 +462,18 @@ if QtWidgets:
             active_data = s.get(self.current_provider, {})
             test_cfg.model = active_data.get("model", test_cfg.model)
 
-            from pseudonote.ai_client import SimpleAI
-            try:
-                tester = SimpleAI(test_cfg)
-                success, message = tester.test_connection()
-                if success:
-                    self.test_result_label.setText(message)
-                    self.test_result_label.setStyleSheet("color: #4EC9B0; font-size: 11px; font-weight: bold;")
-                else:
-                    self.test_result_label.setText(f"Fail: {message}")
-                    self.test_result_label.setStyleSheet("color: #F44336; font-size: 11px;")
-            except Exception as e:
-                self.test_result_label.setText(f"Error: {e}")
+            # Use background worker to keep UI alive
+            self.test_worker = TestConnectionWorker(test_cfg)
+            self.test_worker.finished_signal.connect(self.on_test_result)
+            self.test_worker.start()
+
+        def on_test_result(self, success, message):
+            self.test_conn_btn.setEnabled(True)
+            if success:
+                self.test_result_label.setText(message)
+                self.test_result_label.setStyleSheet("color: #4EC9B0; font-size: 11px; font-weight: bold;")
+            else:
+                self.test_result_label.setText(f"Fail: {message}")
                 self.test_result_label.setStyleSheet("color: #F44336; font-size: 11px;")
 
         def init_bulk_tab(self):
@@ -436,24 +486,23 @@ if QtWidgets:
             self.force_rename_cb.setChecked(getattr(self.config, 'force_bulk_rename', False))
             fl.addRow(self.force_rename_cb)
 
+            self.bulk_force_rename_sub_cb = QtWidgets.QCheckBox("Force renaming even if it contains sub_* functions within it.")
+            self.bulk_force_rename_sub_cb.setChecked(getattr(self.config, 'bulk_force_rename_sub', False))
+            fl.addRow(self.bulk_force_rename_sub_cb)
+
             force_warn = QtWidgets.QLabel("Caution: Forcing large functions into big batches may cause truncated results or timeouts.\nRecommendation: Don't tick this box.")
             force_warn.setStyleSheet("color: #d10e00; font-style: italic; font-size: 12px; margin-left: 0px;")
             force_warn.setWordWrap(True)
             fl.addRow(force_warn)
             
-            self.auto_apply_bulk_cb = QtWidgets.QCheckBox("Auto-Apply renamed functions (Rename automatically as processed)")
-            self.auto_apply_bulk_cb.setToolTip("If checked, functions with no unresolved callees will be renamed in the IDB immediately after the AI response.")
-            self.auto_apply_bulk_cb.setChecked(getattr(self.config, 'auto_apply_bulk', False))
-            fl.addRow("", self.auto_apply_bulk_cb)
-
             self.cooldown_spin = QtWidgets.QSpinBox()
             self.cooldown_spin.setRange(0, 300)
-            self.cooldown_spin.setValue(getattr(self.config, 'cooldown_seconds', 22))
+            self.cooldown_spin.setValue(getattr(self.config, 'bulk_cooldown', 22))
             fl.addRow("Cooldown seconds (Avoid rate limits):", self.cooldown_spin)
 
             self.asm_max_spin = QtWidgets.QSpinBox()
             self.asm_max_spin.setRange(5, 500)
-            self.asm_max_spin.setValue(getattr(self.config, 'asm_max_lines', 25))
+            self.asm_max_spin.setValue(getattr(self.config, 'bulk_asm_max', 25))
             fl.addRow("Max Assembly Lines (Fallback):", self.asm_max_spin)
 
             self.disable_bulk_prefix_cb = QtWidgets.QCheckBox("Disable prefix")
@@ -480,78 +529,55 @@ if QtWidgets:
             fl.addRow("", self.bulk_use_0x_cb)
             
 
+            self.custom_batch_spin = QtWidgets.QSpinBox()
+            self.custom_batch_spin.setRange(1, 100)
+            self.custom_batch_spin.setValue(getattr(self.config, 'bulk_batch_size', 10))
+            fl.addRow("Batch Size (Functions per prompt):", self.custom_batch_spin)
+            
+            self.custom_workers_spin = QtWidgets.QSpinBox()
+            self.custom_workers_spin.setRange(1, 10)
+            self.custom_workers_spin.setValue(getattr(self.config, 'bulk_parallel_workers', 5))
+            fl.addRow("Parallel Workers (Simultaneous threads):", self.custom_workers_spin)
+
             grp.setLayout(fl)
             layout.addWidget(grp)
-
-            info = QtWidgets.QLabel("Note: Batch Size and Parallel Workers for the Bulk Renamer are configured in the \"Bulk Variable Renamer\" tab.")
-            info.setStyleSheet("color: gray; font-style: italic;")
-            info.setWordWrap(True)
-            layout.addWidget(info)
             layout.addStretch()
             self.bulk_tab.setLayout(layout)
 
         def init_var_renamer_tab(self):
             layout = QtWidgets.QVBoxLayout()
 
-            grp_bulk = QtWidgets.QGroupBox("Bulk Renamer — Batch & Workers")
-            fl_bulk = QtWidgets.QFormLayout()
+            grp_perf = QtWidgets.QGroupBox("Bulk Variable Renamer — Performance")
+            fl_perf = QtWidgets.QFormLayout()
 
-            note_bulk = QtWidgets.QLabel(
-                "These Batch Size and Workers settings apply to the Bulk Function Renamer.\n"
-                "They are shown here to keep variance from variable renaming settings separate."
-            )
-            note_bulk.setWordWrap(True)
-            note_bulk.setStyleSheet("color: gray; font-style: italic; margin-bottom: 4px;")
-            fl_bulk.addRow(note_bulk)
+            self.var_batch_spin = QtWidgets.QSpinBox()
+            self.var_batch_spin.setRange(1, 100)
+            self.var_batch_spin.setValue(getattr(self.config, 'var_batch_size', 5))
+            fl_perf.addRow("Batch Size (Functions per prompt):", self.var_batch_spin)
 
-            self.bulk_batch_spin = QtWidgets.QSpinBox()
-            self.bulk_batch_spin.setRange(1, 100)
-            self.bulk_batch_spin.setValue(getattr(self.config, 'batch_size', 10))
-            fl_bulk.addRow("Batch Size (functions per AI call):", self.bulk_batch_spin)
-
-            self.bulk_workers_spin = QtWidgets.QSpinBox()
-            self.bulk_workers_spin.setRange(1, 10)
-            self.bulk_workers_spin.setValue(getattr(self.config, 'parallel_workers', 5))
-            fl_bulk.addRow("Parallel Workers (threads):", self.bulk_workers_spin)
-
-            warn_workers = QtWidgets.QLabel("Increasing the number of workers beyond 8 may cause IDA to crash.")
-            warn_workers.setStyleSheet("color: gray; font-style: italic; font-size: 11px;")
-            warn_workers.setWordWrap(True)
-            fl_bulk.addRow("", warn_workers)
-
-            grp_bulk.setLayout(fl_bulk)
-            layout.addWidget(grp_bulk)
-
-            grp_var = QtWidgets.QGroupBox("Bulk Variable Renamer — Performance")
-            fl_var = QtWidgets.QFormLayout()
-
-            note_var = QtWidgets.QLabel(
-                "Variable renaming sends one function per AI call using the Parallel Workers setting above.\n"
-                "Each worker handles its own slice of functions concurrently.\n"
-                "The cooldown below avoids rate-limiting between requests within each worker."
-            )
-            note_var.setWordWrap(True)
-            note_var.setStyleSheet("color: gray; font-style: italic; margin-bottom: 4px;")
-            fl_var.addRow(note_var)
-
+            self.var_workers_spin = QtWidgets.QSpinBox()
+            self.var_workers_spin.setRange(1, 10)
+            self.var_workers_spin.setValue(getattr(self.config, 'var_parallel_workers', 3))
+            fl_perf.addRow("Parallel Workers (Simultaneous threads):", self.var_workers_spin)
+            
             self.var_cooldown_spin = QtWidgets.QSpinBox()
             self.var_cooldown_spin.setRange(0, 300)
-            self.var_cooldown_spin.setValue(getattr(self.config, 'cooldown_seconds', 22))
-            fl_var.addRow("Cooldown seconds (Avoid rate limits):", self.var_cooldown_spin)
+            self.var_cooldown_spin.setValue(getattr(self.config, 'var_cooldown', 15))
+            fl_perf.addRow("Cooldown seconds (Avoid rate limits):", self.var_cooldown_spin)
 
             self.var_asm_max_spin = QtWidgets.QSpinBox()
             self.var_asm_max_spin.setRange(5, 500)
-            self.var_asm_max_spin.setValue(getattr(self.config, 'asm_max_lines', 25))
-            fl_var.addRow("Max Assembly Lines (Fallback):", self.var_asm_max_spin)
+            self.var_asm_max_spin.setValue(getattr(self.config, 'var_asm_max', 25))
+            fl_perf.addRow("Max Assembly Lines (Fallback):", self.var_asm_max_spin)
 
-            grp_var.setLayout(fl_var)
-            layout.addWidget(grp_var)
-
-            grp_apply = QtWidgets.QGroupBox("Auto-Apply")
+            grp_perf.setLayout(fl_perf)
+            layout.addWidget(grp_perf)
+            
+            grp_apply = QtWidgets.QGroupBox("Bulk Variable Renamer — Options")
             fl_apply = QtWidgets.QFormLayout()
 
             self.var_auto_apply_cb = QtWidgets.QCheckBox(
-                "Automatically apply renames as each function completes (no need to click Apply Suggestions)"
+                "Automatically apply renames as each function completes"
             )
             self.var_auto_apply_cb.setChecked(getattr(self.config, 'var_auto_apply', True))
             fl_apply.addRow(self.var_auto_apply_cb)
@@ -564,8 +590,15 @@ if QtWidgets:
             auto_warn.setStyleSheet("color: #d10e00; font-style: italic; font-size: 11px;")
             fl_apply.addRow(auto_warn)
 
+            self.var_force_rename_cb = QtWidgets.QCheckBox(
+                "Force variable renaming even if it contains sub_* functions within it."
+            )
+            self.var_force_rename_cb.setChecked(getattr(self.config, 'var_force_rename', False))
+            fl_apply.addRow(self.var_force_rename_cb)
+
             grp_apply.setLayout(fl_apply)
             layout.addWidget(grp_apply)
+            
             layout.addStretch()
             self.var_renamer_tab.setLayout(layout)
 
@@ -584,17 +617,17 @@ if QtWidgets:
 
             self.analyze_workers_spin = QtWidgets.QSpinBox()
             self.analyze_workers_spin.setRange(1, 10)
-            self.analyze_workers_spin.setValue(getattr(self.config, 'parallel_workers', 5))
+            self.analyze_workers_spin.setValue(getattr(self.config, 'analyze_parallel_workers', 5))
             fl.addRow("Parallel Workers:", self.analyze_workers_spin)
 
             self.analyze_batch_spin = QtWidgets.QSpinBox()
             self.analyze_batch_spin.setRange(1, 100)
-            self.analyze_batch_spin.setValue(getattr(self.config, 'batch_size', 10))
+            self.analyze_batch_spin.setValue(getattr(self.config, 'analyze_batch_size', 10))
             fl.addRow("Batch Size:", self.analyze_batch_spin)
 
             self.analyze_cooldown_spin = QtWidgets.QSpinBox()
             self.analyze_cooldown_spin.setRange(0, 300)
-            self.analyze_cooldown_spin.setValue(getattr(self.config, 'cooldown_seconds', 22))
+            self.analyze_cooldown_spin.setValue(getattr(self.config, 'analyze_cooldown', 22))
             fl.addRow("Rate Limit Cooldown (s):", self.analyze_cooldown_spin)
 
             grp.setLayout(fl)
@@ -620,7 +653,7 @@ if QtWidgets:
                 current_fam = self.font_settings[f"{key}_font"]
                 idx = font_combo.findText(current_fam)
                 if idx >= 0: font_combo.setCurrentIndex(idx)
-                else: font_combo.setCurrentText("Segoe UI" if key=="ui" else "Consolas")
+                else: font_combo.setCurrentText("Inter" if key=="ui" else "Consolas")
                 size_spin = QtWidgets.QSpinBox()
                 size_spin.setRange(6, 72)
                 size_spin.setValue(self.font_settings[f"{key}_size"])
@@ -634,6 +667,96 @@ if QtWidgets:
                 self.font_widgets[key] = (font_combo, size_spin)
             layout.addStretch()
             self.appearance_tab.setLayout(layout)
+
+        def init_summarizer_tab(self):
+            layout = QtWidgets.QVBoxLayout()
+
+
+
+            # Components
+            comp_grp = QtWidgets.QGroupBox("Analysis Components")
+            comp_layout = QtWidgets.QGridLayout()
+
+            self.deep_bottom_up_rename_cb = QtWidgets.QCheckBox("Automated bottom-up function renaming")
+            self.deep_bottom_up_rename_cb.setChecked(getattr(self.config, 'deep_do_bottom_up_rename', True))
+            comp_layout.addWidget(self.deep_bottom_up_rename_cb, 0, 0)
+            
+            self.deep_var_rename_cb = QtWidgets.QCheckBox("Rename variables")
+            self.deep_var_rename_cb.setChecked(getattr(self.config, 'deep_do_var_rename', True))
+            comp_layout.addWidget(self.deep_var_rename_cb, 0, 1)
+            
+            self.deep_func_comment_cb = QtWidgets.QCheckBox("Add function's purpose as comments")
+            self.deep_func_comment_cb.setChecked(getattr(self.config, 'deep_do_func_comment', True))
+            comp_layout.addWidget(self.deep_func_comment_cb, 1, 0)
+            
+            self.deep_analysis_rename_cb = QtWidgets.QCheckBox("Final Rename based on whole-code semantic")
+            self.deep_analysis_rename_cb.setChecked(getattr(self.config, 'deep_do_analysis_rename', True))
+            comp_layout.addWidget(self.deep_analysis_rename_cb, 1, 1)
+
+            comp_grp.setLayout(comp_layout)
+            layout.addWidget(comp_grp)
+
+            # Performance
+            perf_grp = QtWidgets.QGroupBox("Performance & Rates")
+            fl = QtWidgets.QFormLayout()
+            
+            self.deep_workers_spin = QtWidgets.QSpinBox()
+            self.deep_workers_spin.setRange(1, 50)
+            self.deep_workers_spin.setValue(getattr(self.config, 'deep_parallel_workers', 1))
+            fl.addRow("Parallel Workers:", self.deep_workers_spin)
+            
+            self.deep_batch_spin = QtWidgets.QSpinBox()
+            self.deep_batch_spin.setRange(1, 100)
+            self.deep_batch_spin.setValue(getattr(self.config, 'deep_batch_size', 10))
+            fl.addRow("Batch Size (Funcs):", self.deep_batch_spin)
+            
+            self.deep_lines_spin = QtWidgets.QSpinBox()
+            self.deep_lines_spin.setRange(10, 5000)
+            self.deep_lines_spin.setValue(getattr(self.config, 'deep_max_lines', 200))
+            fl.addRow("Max Lines per Func:", self.deep_lines_spin)
+
+            self.deep_cooldown_spin = QtWidgets.QSpinBox()
+            self.deep_cooldown_spin.setRange(0, 300)
+            self.deep_cooldown_spin.setValue(getattr(self.config, 'deep_cooldown', 0))
+            fl.addRow("Cooldown (s):", self.deep_cooldown_spin)
+
+            perf_grp.setLayout(fl)
+            layout.addWidget(perf_grp)
+
+            # Naming
+            name_grp = QtWidgets.QGroupBox("Naming Convention")
+            nl = QtWidgets.QVBoxLayout()
+            
+            h1 = QtWidgets.QHBoxLayout()
+            self.deep_use_prefix_cb = QtWidgets.QCheckBox("Use Prefix")
+            self.deep_use_prefix_cb.setChecked(getattr(self.config, 'deep_use_prefix', True))
+            h1.addWidget(self.deep_use_prefix_cb)
+            
+            self.deep_prefix_edit = QtWidgets.QLineEdit()
+            self.deep_prefix_edit.setText(getattr(self.config, 'deep_prefix', 'da_'))
+            self.deep_prefix_edit.setPlaceholderText("da_")
+            self.deep_prefix_edit.setFixedWidth(100)
+            self.deep_prefix_edit.setEnabled(self.deep_use_prefix_cb.isChecked())
+            self.deep_use_prefix_cb.toggled.connect(self.deep_prefix_edit.setEnabled)
+            h1.addWidget(self.deep_prefix_edit)
+            h1.addStretch()
+            nl.addLayout(h1)
+            
+            self.deep_append_addr_cb = QtWidgets.QCheckBox("Append address postfix")
+            self.deep_append_addr_cb.setChecked(getattr(self.config, 'deep_append_address', True))
+            nl.addWidget(self.deep_append_addr_cb)
+            
+            self.deep_use_0x_cb = QtWidgets.QCheckBox("Use 0x for address (e.g., _0x18001db0)")
+            self.deep_use_0x_cb.setChecked(getattr(self.config, 'deep_use_0x', False))
+            self.deep_use_0x_cb.setEnabled(self.deep_append_addr_cb.isChecked())
+            self.deep_append_addr_cb.toggled.connect(self.deep_use_0x_cb.setEnabled)
+            nl.addWidget(self.deep_use_0x_cb)
+            
+            name_grp.setLayout(nl)
+            layout.addWidget(name_grp)
+
+            layout.addStretch()
+            self.summarizer_tab.setLayout(layout)
 
         def on_provider_changed(self, text):
             self.save_fields_to_temp(self.current_provider)
@@ -733,6 +856,9 @@ if QtWidgets:
             self.log_view.appendPlainText(text)
 
         def closeEvent(self, event):
+            if hasattr(self, 'test_worker') and self.test_worker.isRunning():
+                self.test_worker.terminate()
+                self.test_worker.wait()
             if hasattr(LOGGER, 'log_signal'):
                 try: LOGGER.log_signal.disconnect(self.append_log)
                 except: pass
@@ -764,38 +890,45 @@ if QtWidgets:
             # Bulk Renamer tab settings
             if hasattr(self, 'force_rename_cb'):
                 c.force_bulk_rename = self.force_rename_cb.isChecked()
+            if hasattr(self, 'bulk_force_rename_sub_cb'):
+                c.bulk_force_rename_sub = self.bulk_force_rename_sub_cb.isChecked()
             if hasattr(self, 'cooldown_spin'):
-                c.cooldown_seconds = self.cooldown_spin.value()
+                c.bulk_cooldown = self.cooldown_spin.value()
             if hasattr(self, 'asm_max_spin'):
-                c.asm_max_lines = self.asm_max_spin.value()
+                c.bulk_asm_max = self.asm_max_spin.value()
             if hasattr(self, 'disable_bulk_prefix_cb'):
                 c.use_bulk_prefix = not self.disable_bulk_prefix_cb.isChecked()
             if hasattr(self, 'prefix_edit'):
                 c.rename_prefix = self.prefix_edit.text().strip() or "bulkren_"
             if hasattr(self, 'bulk_append_addr_cb'):
                 c.bulk_append_address = self.bulk_append_addr_cb.isChecked()
-            if hasattr(self, 'bulk_use_0x_cb'):
                 c.bulk_use_0x = self.bulk_use_0x_cb.isChecked()
-            if hasattr(self, 'auto_apply_bulk_cb'):
-                c.auto_apply_bulk = self.auto_apply_bulk_cb.isChecked()
+            if hasattr(self, 'custom_batch_spin'):
+                c.bulk_batch_size = self.custom_batch_spin.value()
+            if hasattr(self, 'custom_workers_spin'):
+                c.bulk_parallel_workers = self.custom_workers_spin.value()
 
             # Bulk Function Analyzer tab settings
             if hasattr(self, 'analyze_workers_spin'):
-                c.parallel_workers = self.analyze_workers_spin.value()
+                c.analyze_parallel_workers = self.analyze_workers_spin.value()
             if hasattr(self, 'analyze_batch_spin'):
-                c.batch_size = self.analyze_batch_spin.value()
+                c.analyze_batch_size = self.analyze_batch_spin.value()
             if hasattr(self, 'analyze_cooldown_spin') and (not self.hide_extra_tabs or self.mode == 'analyzer'):
-                c.cooldown_seconds = self.analyze_cooldown_spin.value()
+                c.analyze_cooldown = self.analyze_cooldown_spin.value()
 
-            # Bulk Variable Renamer tab settings (bulk_batch/workers + var cooldown/asm)
-            if hasattr(self, 'bulk_batch_spin'):
-                c.batch_size = self.bulk_batch_spin.value()
-            if hasattr(self, 'bulk_workers_spin'):
-                c.parallel_workers = self.bulk_workers_spin.value()
+            # Bulk Variable Renamer tab settings
+            if hasattr(self, 'var_batch_spin'):
+                c.var_batch_size = self.var_batch_spin.value()
+            if hasattr(self, 'var_workers_spin'):
+                c.var_parallel_workers = self.var_workers_spin.value()
             if hasattr(self, 'var_cooldown_spin') and (not self.hide_extra_tabs or self.mode == 'var_renamer'):
-                c.cooldown_seconds = self.var_cooldown_spin.value()
+                c.var_cooldown = self.var_cooldown_spin.value()
             if hasattr(self, 'var_asm_max_spin'):
-                c.asm_max_lines = self.var_asm_max_spin.value()
+                c.var_asm_max = self.var_asm_max_spin.value()
+            if hasattr(self, 'var_auto_apply_cb'):
+                c.var_auto_apply = self.var_auto_apply_cb.isChecked()
+            if hasattr(self, 'var_force_rename_cb'):
+                c.var_force_rename = self.var_force_rename_cb.isChecked()
 
             # Function Rename tab settings
             if hasattr(self, 'disable_prefix_cb'):
@@ -807,8 +940,22 @@ if QtWidgets:
             if hasattr(self, 'rename_use_0x_cb'):
                 c.rename_use_0x = self.rename_use_0x_cb.isChecked()
 
-            if hasattr(self, 'var_auto_apply_cb'):
-                c.var_auto_apply = self.var_auto_apply_cb.isChecked()
+            # Deep Summarizer settings
+            if hasattr(self, 'deep_batch_spin'):
+                c.deep_batch_size = self.deep_batch_spin.value()
+                c.deep_parallel_workers = self.deep_workers_spin.value()
+                c.deep_cooldown = self.deep_cooldown_spin.value()
+                c.deep_max_lines = self.deep_lines_spin.value()
+
+                c.deep_do_var_rename = self.deep_var_rename_cb.isChecked()
+                c.deep_do_func_comment = self.deep_func_comment_cb.isChecked()
+                c.deep_do_analysis_rename = self.deep_analysis_rename_cb.isChecked()
+                c.deep_do_refinement = True
+                c.deep_do_bottom_up_rename = self.deep_bottom_up_rename_cb.isChecked()
+                c.deep_use_prefix = self.deep_use_prefix_cb.isChecked()
+                c.deep_prefix = self.deep_prefix_edit.text().strip() or "da_"
+                c.deep_append_address = self.deep_append_addr_cb.isChecked()
+                c.deep_use_0x = self.deep_use_0x_cb.isChecked()
 
             c.save()
             self.accept()
@@ -1152,7 +1299,7 @@ if QtWidgets:
             self.note_stack = QtWidgets.QStackedWidget()
             self.note_viewer = QtWidgets.QTextBrowser()
             self.note_viewer.setOpenExternalLinks(True)
-            self.note_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 11pt; }")
+            self.note_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 11pt; }")
             self.note_viewer.setPlaceholderText("Click 'Edit' button to add notes.")
             self.note_stack.addWidget(self.note_viewer)
 
@@ -1169,7 +1316,7 @@ if QtWidgets:
             self.note_splitter.addWidget(self.note_editor)
             self.note_previewer = QtWidgets.QTextBrowser()
             self.note_previewer.setOpenExternalLinks(True)
-            self.note_previewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border-left: 1px solid #3E3E42; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 11pt; }")
+            self.note_previewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border-left: 1px solid #3E3E42; padding: 10px; font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 11pt; }")
             self.note_splitter.addWidget(self.note_previewer)
             self.note_splitter.setStretchFactor(0, 1)
             self.note_splitter.setStretchFactor(1, 1)
@@ -1190,7 +1337,7 @@ if QtWidgets:
             # Function Explain tab
             self.explanation_viewer = QtWidgets.QTextBrowser()
             self.explanation_viewer.setOpenExternalLinks(True)
-            self.explanation_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 11pt; }")
+            self.explanation_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 11pt; }")
             self.explanation_viewer.setPlaceholderText("Click 'Explain (AI)' to generate an explanation for the current function.")
             ex_widget = QtWidgets.QWidget()
             ex_layout = QtWidgets.QVBoxLayout()
@@ -1202,7 +1349,7 @@ if QtWidgets:
             # Function Graph tab
             self.gflow_viewer = QtWidgets.QTextBrowser()
             self.gflow_viewer.setOpenExternalLinks(True)
-            self.gflow_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 11pt; }")
+            self.gflow_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 11pt; }")
             self.gflow_viewer.setPlaceholderText("Click 'Get graph' to generate a text flow graph.")
             gf_widget = QtWidgets.QWidget()
             gf_layout = QtWidgets.QVBoxLayout()
@@ -1214,7 +1361,7 @@ if QtWidgets:
             # Function Details tab
             self.suggestion_viewer = QtWidgets.QTextBrowser()
             self.suggestion_viewer.setOpenExternalLinks(True)
-            self.suggestion_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 11pt; }")
+            self.suggestion_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 11pt; }")
             self.suggestion_viewer.setPlaceholderText("Click 'Function Details (AI)' to generate details.")
             sg_widget = QtWidgets.QWidget()
             sg_layout = QtWidgets.QVBoxLayout()
@@ -1410,7 +1557,7 @@ if QtWidgets:
                 width = 40 if len(label) > 2 else 30
                 btn.setFixedWidth(width); btn.setFixedHeight(24)
                 btn.setStyleSheet("""
-                    QPushButton { background-color: #3E3E42; color: #E0E0E0; border: none; border-radius: 3px; font-family: 'Segoe UI'; font-weight: bold; }
+                    QPushButton { background-color: #3E3E42; color: #E0E0E0; border: none; border-radius: 3px; font-family: 'Inter', 'Segoe UI'; font-weight: bold; }
                     QPushButton:hover { background-color: #4E4E52; }
                     QPushButton:pressed { background-color: #007ACC; color: white; }
                 """)
@@ -1581,6 +1728,7 @@ if QtWidgets:
         def get_tab_style(self):
             fam = self.config.ui_font; size = self.config.ui_font_size
             return f"""
+                QTabWidget::tab-bar {{ alignment: left; }}
                 QTabWidget::pane {{ border: 0; }}
                 QTabBar::tab {{ background: #2D2D2D; color: #CCCCCC; min-width: 160px; padding: 8px 12px; margin-right: 2px; outline: 0; font-family: '{fam}'; font-size: {size}pt; }}
                 QTabBar::tab:selected {{ background: #1E1E1E; color: #FFFFFF; font-weight: bold; border-top: 2px solid #007ACC; }}
@@ -1717,12 +1865,10 @@ if QtWidgets:
              if hasattr(self, 'note_stack'): self.toggle_note_mode(edit=(self.note_stack.currentWidget() == self.note_editor))
 
         def on_settings(self):
-            from pseudonote.ai_client import SimpleAI as _SimpleAI
-            dlg = SettingsDialog(self.config, self.parent)
+            dlg = SettingsDialog(CONFIG, self.parent)
             if dlg.exec_():
-                _ai_mod.AI_CLIENT = _SimpleAI(self.config)
-                AI = _get_ai()
-                if AI: AI.log_provider_info()
+                CONFIG.reload()
+                _ai_mod.AI_CLIENT = _get_ai()
                 self.apply_fonts_and_styles()
                 self.on_lang_changed(self.current_lang)
                 # Restart timer to catch any new AI client state
@@ -2449,11 +2595,13 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:deep_summarizer", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_var_rename", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_analyze", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
 
         if wtype == idaapi.BWN_PSEUDOCODE:

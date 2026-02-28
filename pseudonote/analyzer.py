@@ -24,7 +24,8 @@ from pseudonote.renamer import (
 )
 from pseudonote.ai_client import SimpleAI
 import pseudonote.ai_client as _ai_mod
-from pseudonote.idb_storage import save_to_idb, load_from_idb
+from pseudonote.idb_storage import save_to_idb, load_from_idb, delete_from_idb
+from pseudonote.api_taxonomy import derive_risk_from_api_tags
 
 Qt = QtCore.Qt
 
@@ -317,12 +318,32 @@ class AnalyzeWorker(QThread):
                 if callees:
                     callee_ctx = "\nCALLEES CONTEXT:\n" + "\n".join(callees)
 
-            # Fetch existing code if not already present
             if not func.code:
                 # Increased to 50k to handle 1000+ lines (avg 40-50 chars/line)
                 func.code = get_code_fast(func.ea, 50000, asm_max=1000)
                 func.strings = get_strings_fast(func.ea)
                 func.calls = get_calls_fast(func.ea)
+            
+            # Perform taxonomic risk check (Heuristic baseline)
+            tax_risk, tax_conf, tax_reason = "benign", 0, "No hits"
+            try:
+                # Efficiently collect all callee EAs and names for taxonomy
+                all_callees = []
+                names_cache = {}
+                def _get_callees():
+                    for item in idautils.FuncItems(func.ea):
+                        for xref in idautils.CodeRefsFrom(item, False):
+                            f = ida_funcs.get_func(xref)
+                            if f:
+                                ea = f.start_ea
+                                all_callees.append(ea)
+                                if ea not in names_cache:
+                                    names_cache[ea] = idc.get_func_name(ea)
+                idaapi.execute_sync(_get_callees, idaapi.MFF_READ)
+                
+                tax_risk, tax_conf, tax_reason = derive_risk_from_api_tags(func.ea, all_callees, names_map=names_cache, detailed=True)
+            except Exception as e:
+                self.log.emit(f"Taxonomy check error for {hex(func.ea)}: {str(e)}", 'warn')
 
             # Live Queue Reclassification
             if func.code:
@@ -370,9 +391,11 @@ CONFIDENCE RULES:
 IMPORTANT RULES:
 - If function body consists mostly of unnamed sub_XXXXX calls with no strings or known APIs,
   tag as suspicious, confidence <= 40, and note lack of context in REASON.
-- Base classification ONLY on observable evidence in code, strings, and calls provided.
 - Do NOT assume malicious intent from complexity alone.
 - Do NOT assume benign intent from simplicity alone.
+- You will be provided with "HEURISTIC INDICATORS" from a local API taxonomy.
+  Use these as factual context, but perform your own reasoning on the code logic to 
+  decide the final TAG and CONFIDENCE.
 
 OUTPUT FORMAT (strictly follow, no extra text before or after):
 TAG: malicious|suspicious|benign
@@ -389,6 +412,12 @@ REASON: 2-3 sentences citing specific evidence including API names, strings, and
                     prompt += f"Named API/function calls: {named}\n"
                 if unnamed_count:
                     prompt += f"Unnamed sub_* calls: {unnamed_count} (context unavailable)\n"
+            
+            if tax_conf > 0:
+                prompt += f"\nHEURISTIC INDICATORS (Local API Taxonomy):\n"
+                prompt += f"- Local Risk Level: {tax_risk}\n"
+                prompt += f"- Observed Patterns: {tax_reason}\n"
+
             prompt += caller_ctx + callee_ctx
 
             try:
@@ -512,6 +541,11 @@ class StreamingSummaryDialog(QDialog):
         self.copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.raw_text))
         btns.addWidget(self.copy_btn)
         
+        self.save_btn = QPushButton("Save as Markdown")
+        self.save_btn.setEnabled(False)
+        self.save_btn.clicked.connect(self.save_markdown)
+        btns.addWidget(self.save_btn)
+        
         self.close_btn = QPushButton("Close")
         self.close_btn.clicked.connect(self.accept)
         btns.addWidget(self.close_btn)
@@ -531,7 +565,18 @@ class StreamingSummaryDialog(QDialog):
         else:
             self.viewer.setHtml(full_text) # Fallback
         self.copy_btn.setEnabled(True)
+        self.save_btn.setEnabled(True)
         self.close_btn.setText("Done")
+
+    def save_markdown(self):
+        if not self.raw_text: return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Behavioral Summary", "", "Markdown Files (*.md);;Text Files (*.txt)")
+        if not path: return
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(self.raw_text)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save file: {str(e)}")
 
 class BulkAnalyzer(QDialog):
     def __init__(self, parent=None):
@@ -544,31 +589,22 @@ class BulkAnalyzer(QDialog):
         self.is_loading = False
         self.setup_ui()
         self.worker = None
-        QTimer.singleShot(100, self.check_workflow_tip)
+        QTimer.singleShot(100, self.load_table_state)
+        QTimer.singleShot(200, self.check_workflow_tip)
 
     def check_workflow_tip(self):
-        if not getattr(CONFIG, 'show_pro_tip', True):
-            return
-        
         msg = (
             "<b>Pro Tip:</b> For the best results, use the tools in this sequence:<br><br>"
             "1. <b>Function Renamer</b> → 2. <b>Variable Renamer</b> → 3. <b>Function Analyzer</b><br><br>"
             "Following this order ensures the AI has the most accurate function names "
             "and variable context available at each step."
         )
-        
+
         box = QMessageBox(self)
         box.setWindowTitle("PseudoNote Workflow Tip")
         box.setText(msg)
         box.setIcon(QMessageBox.Information)
-        
-        cb = QCheckBox("Don't show this tip again")
-        box.setCheckBox(cb)
         box.exec_()
-        
-        if cb.isChecked():
-            CONFIG.show_pro_tip = False
-            CONFIG.save()
 
     def setup_ui(self):
         self.setWindowTitle('PseudoNote: Bulk Function Analyzer')
@@ -791,17 +827,19 @@ class BulkAnalyzer(QDialog):
         self.unload_btn.clicked.connect(self.unload_table)
         actions.addWidget(self.unload_btn)
 
+        self.delete_ana_btn = QPushButton('Delete Analysis')
+        self.delete_ana_btn.setObjectName("danger")
+        self.delete_ana_btn.setToolTip("Permanently clear analysis results from table AND IDA database")
+        self.delete_ana_btn.clicked.connect(self.delete_analysis)
+        actions.addWidget(self.delete_ana_btn)
+
         self.export_btn = QPushButton('Export CSV')
         self.export_btn.setObjectName("secondary")
         self.export_btn.setToolTip("Export the current table data to a CSV file")
         self.export_btn.clicked.connect(self.export_csv)
         actions.addWidget(self.export_btn)
 
-        self.export_json_btn = QPushButton('Export JSON')
-        self.export_json_btn.setObjectName("secondary")
-        self.export_json_btn.setToolTip("Export the current table data to a JSON file (richer format, includes all fields)")
-        self.export_json_btn.clicked.connect(self.export_json)
-        actions.addWidget(self.export_json_btn)
+
 
         layout.addLayout(actions)
         self.update_button_states()
@@ -816,8 +854,8 @@ class BulkAnalyzer(QDialog):
         self.forward_btn.setEnabled(has_checked and not is_busy)
         self.stop_btn.setEnabled(is_busy)
         self.unload_btn.setEnabled(has_content and not is_busy)
+        self.delete_ana_btn.setEnabled(has_content and not is_busy)
         self.export_btn.setEnabled(has_content and not is_busy)
-        self.export_json_btn.setEnabled(has_content and not is_busy)
 
     def check_sub_ratio(self, items):
         # Only scan functions where code is already cached
@@ -938,7 +976,8 @@ class BulkAnalyzer(QDialog):
     def open_settings(self):
         from pseudonote.view import SettingsDialog
         d = SettingsDialog(self.pn_config, self, hide_extra_tabs=True, mode='analyzer')
-        d.exec_()
+        if d.exec_():
+            CONFIG.reload()
 
     def add_log(self, msg, lv='info'):
         color = '#D4D4D4'
@@ -1143,11 +1182,13 @@ class BulkAnalyzer(QDialog):
                 self.model.append_data(funcs)
             self.update_stats_label()
             self.add_log(f"Loaded {len(funcs)} functions.", 'ok')
+            self.save_table_state()
         elif replace:
             # Full replace intent (e.g. Load sub_*): clear even if empty
             self.model.set_data([])
             self.update_stats_label()
             self.add_log("No functions found. Table cleared.", 'warn')
+            self.save_table_state()
         else:
             # Search intent: preserve existing list on no match
             msg = "No functions found"
@@ -1187,10 +1228,35 @@ class BulkAnalyzer(QDialog):
             else:
                 self.model.set_data(funcs)
                 self.add_log(f"Loaded {len(funcs)} functions.", 'ok')
+            self.save_table_state()
+
+    def delete_analysis(self):
+        if not self.model.funcs: return
+        
+        res = QMessageBox.question(self, "Confirm Delete", 
+            "This will permanently delete analysis results for all functions currently in the table from the IDA database.\n\n"
+            "Are you sure?", QMessageBox.Yes | QMessageBox.No)
+        
+        if res != QMessageBox.Yes: return
+        
+        for f in self.model.funcs:
+            delete_from_idb(f.ea, tag=90)
+            f.tag = ''
+            f.confidence = 0
+            f.indicators = ''
+            f.tag_reason = ''
+            f.status = 'Pending'
+            f.queue = 'clear'
+            
+        self.model.layoutChanged.emit()
+        self.update_stats_label()
+        self.add_log("Analysis results deleted for functions in table.", 'ok')
+        self.save_table_state()
 
     def unload_table(self):
         self.model.clear()
         self.add_log("Table unloaded.", 'info')
+        self.save_table_state()
 
     def start_analyze(self):
         items = self.model.get_checked()
@@ -1383,6 +1449,7 @@ class BulkAnalyzer(QDialog):
         self.add_log("Analysis complete.", 'ok')
         _ai_mod.AI_CANCEL_REQUESTED = False   # always reset after finish
         self.update_button_states()  # handles analyze/summarize/forward correctly
+        self.save_table_state()
 
     def stop_all(self):
         _ai_mod.AI_CANCEL_REQUESTED = True
@@ -1542,37 +1609,7 @@ Do not pad with generic statements."""
             self.add_log(f"Export error: {e}", 'err')
             QMessageBox.critical(self, "Error", f"Failed to export CSV: {str(e)}")
 
-    def export_json(self):
-        if not self.model.funcs:
-            QMessageBox.warning(self, 'Warning', 'Table is empty')
-            return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Export JSON", "", "JSON Files (*.json)")
-        if not path: return
-
-        try:
-            import json as _json
-            rows = []
-            for func in self.model.funcs:
-                rows.append({
-                    'address': hex(func.ea),
-                    'name': func.demangled or func.name,
-                    'tag': func.tag,
-                    'confidence': func.confidence,
-                    'indicators': func.indicators,
-                    'queue': func.queue,
-                    'sub_count': func.sub_count,
-                    'reason': func.tag_reason,
-                    'status': func.status,
-                    'strings': func.strings or '',
-                    'calls': func.calls or '',
-                })
-            with open(path, 'w', encoding='utf-8') as f:
-                _json.dump(rows, f, indent=2, ensure_ascii=False)
-            self.add_log(f"Exported JSON to {path}", 'ok')
-        except Exception as e:
-            self.add_log(f"Export JSON error: {e}", 'err')
-            QMessageBox.critical(self, "Error", f"Failed to export JSON: {str(e)}")
 
     def show_summary_dialog(self, text):
         dlg = QDialog(self)
@@ -1597,3 +1634,29 @@ Do not pad with generic statements."""
         vbox.addLayout(h)
         
         dlg.exec_()
+
+    def save_table_state(self):
+        """Save the list of currently visible EAs to the IDB for persistence."""
+        try:
+            eas = [str(f.ea) for f in self.model.funcs]
+            save_to_idb(idaapi.BADADDR, ",".join(eas), tag=92)
+        except Exception as e:
+            self.add_log(f"Error saving table state: {e}", 'warn')
+
+    def load_table_state(self):
+        """Restore the table state from the IDB."""
+        try:
+            stored = load_from_idb(idaapi.BADADDR, tag=92)
+            if not stored: return
+            
+            eas = []
+            for s in stored.split(','):
+                if not s: continue
+                try: eas.append(int(s))
+                except: pass
+            
+            if eas:
+                self.load_eas(eas, append=False)
+                self.add_log(f"Restored {len(eas)} functions from previous session.", 'info')
+        except Exception as e:
+            self.add_log(f"Error loading table state: {e}", 'warn')

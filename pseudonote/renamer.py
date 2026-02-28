@@ -297,38 +297,123 @@ SYS_MODULES = ('kernel32.','ntdll.','user32.','advapi32.','msvcrt.','ucrtbase.',
 
 DEFAULT_PROMPT = """Expert reverse engineer. Name this function in snake_case.
 
-THUNK RULE (overrides all): Single return/jmp to unnamed/opaque target →
-name it thunk_<offset> or wrap_<offset>, confidence ≤20%. No semantic names.
+THUNK RULE (overrides all):
+If the function only returns, jumps, or forwards directly to another unnamed/opaque target →
+name it thunk_<offset> or wrap_<offset>, confidence ≤20%.
+Do NOT create semantic names for pure thunks or wrappers.
 
-SUB RULE: sub_XXXXX calls are unnamed black boxes — zero semantic information.
+SUB RULE:
+sub_XXXXX calls are unnamed black boxes — zero semantic information.
 Do NOT infer purpose from sub_* patterns, argument count, or call order alone.
-If body contains ONLY sub_* calls with no strings/known APIs/constants → confidence ≤30%,
-use a conservative name (e.g. wrap_<offset>).
+If body contains ONLY sub_* calls with no strings/known APIs/constants →
+confidence ≤30% and use wrap_<offset>.
 
-Otherwise: name reflects WHAT code does, based on evidence only.
-Evidence = named API calls, strings, constants, recognizable patterns.
-Prefixes only if evidence supports: init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
-Length: 3-40 chars. No generic filler (func1, do_something).
-Confidence: no evidence=≤30%, weak=31-60%, strong=61-95%.
+STRICT NAMING RULES (MANDATORY):
+1. NEVER reuse meaningless tokens from the current function name.
+2. NEVER produce names like:
+   the_, calls_, wrap_, func_, process_data_, work_, etc.
+3. Forbidden generic words:
+   the, calls, call, wrap, func, function, do, run, exec, work,
+   handler, routine, logic, stuff, thing.
+4. Minimum 2 meaningful semantic tokens required (e.g. parse_flags, compute_size).
+5. If meaning is unclear → use wrap_<offset> (≤30% confidence).
+6. DO NOT invent purpose.
+7. DO NOT guess.
+8. DO NOT summarize structure.
+9. DO NOT reuse existing name fragments unless they are semantically meaningful.
 
-Output: suggested_name [score]
-Example: decrypt_payload [95]"""
+Otherwise:
+Name must reflect WHAT the code actually does, based strictly on evidence.
+
+Valid evidence:
+- Named API calls
+- Meaningful strings
+- Constants or magic values
+- Recognizable parsing/crypto/memory patterns
+- Clear algorithmic intent
+
+If function is primarily:
+- Bitwise flag extraction → use parse_* or decode_*
+- Size arithmetic → compute_* or calculate_*
+- Memory copying → copy_* or clone_*
+- Dispatch logic → dispatch_* or route_*
+
+Allowed prefixes ONLY if supported by evidence:
+init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
+compute_ decode_ encode_ dispatch_ allocate_ copy_
+
+Length: 3–40 characters.
+No filler names.
+No creativity without evidence.
+
+Confidence:
+- No evidence = ≤30%
+- Weak evidence = 31–60%
+- Strong evidence = 61–95%
+- NEVER output 100%.
+
+Output format:
+suggested_name [score]
+
+Example:
+decrypt_payload [95]"""
 
 DEFAULT_BATCH_PROMPT = """Expert reverse engineer. Name each function in snake_case.
 
-THUNK RULE (overrides all): Single return/jmp to unnamed/opaque target →
-thunk_<offset> or wrap_<offset>, confidence ≤20%. No semantic names.
+THUNK RULE (overrides all):
+If a function only returns, jumps, or forwards directly to another unnamed/opaque target →
+name it thunk_<offset> or wrap_<offset>, confidence ≤20%.
+Do NOT create semantic names for pure thunks or wrappers.
 
-SUB RULE: sub_XXXXX calls are unnamed black boxes — zero semantic information.
+SUB RULE:
+sub_XXXXX calls are unnamed black boxes — zero semantic information.
 Do NOT infer purpose from sub_* patterns, argument count, or call order alone.
-Body contains ONLY sub_* calls with no strings/known APIs/constants → confidence ≤30%,
-use conservative name (e.g. wrap_<offset>).
+If body contains ONLY sub_* calls with no strings/known APIs/constants →
+confidence ≤30% and use wrap_<offset>.
 
-Otherwise: name what code clearly does, evidence only.
-Evidence = named API calls, strings, constants, recognizable patterns.
-Prefixes only if evidence supports: init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
-Length: 3-40 chars. No generic filler.
-Confidence: no evidence=≤30%, weak=31-60%, strong=61-95%.
+STRICT NAMING RULES (MANDATORY):
+1. NEVER reuse meaningless tokens from the current function name.
+2. NEVER produce names like:
+   the_, calls_, wrap_, func_, process_data_, work_, etc.
+3. Forbidden generic words:
+   the, calls, call, wrap, func, function, do, run, exec, work,
+   handler, routine, logic, stuff, thing.
+4. Minimum 2 meaningful semantic tokens required.
+5. If meaning is unclear → use wrap_<offset> (≤30% confidence).
+6. DO NOT invent purpose.
+7. DO NOT guess.
+8. DO NOT summarize structure.
+9. DO NOT reuse existing name fragments unless semantically meaningful.
+
+Otherwise:
+Name must reflect WHAT the code clearly does, strictly based on evidence.
+
+Valid evidence:
+- Named API calls
+- Meaningful strings
+- Constants or magic values
+- Recognizable parsing/crypto/memory patterns
+- Clear algorithmic intent
+
+If function is primarily:
+- Bitwise flag extraction → parse_* or decode_*
+- Size arithmetic → compute_* or calculate_*
+- Memory copying → copy_* or clone_*
+- Dispatch logic → dispatch_* or route_*
+
+Allowed prefixes ONLY if supported by evidence:
+init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
+compute_ decode_ encode_ dispatch_ allocate_ copy_
+
+Length: 3–40 characters.
+No filler names.
+No creativity without evidence.
+
+Confidence:
+- No evidence = ≤30%
+- Weak evidence = 31–60%
+- Strong evidence = 61–95%
+- NEVER output 100%.
 
 Output one per line:
 1. name [score]
@@ -516,22 +601,36 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None):
 
         except Exception as e:
             # Generic retry on any error (429, timeout, network, etc)
-            if attempt == 0:
+
+            max_attempts = 5  # total attempts including initial try
+
+            if attempt < max_attempts - 1:
                 err_msg = str(e)
+
                 try:
                     import requests
                     if isinstance(e, requests.exceptions.RequestException) and e.response is not None:
                         err_msg += f" (Status: {e.response.status_code}) | {e.response.text[:150]}"
-                except: pass
+                except:
+                    pass
 
-                msg = f"API Request Failed: {err_msg}. Sleeping 120s before retry..."
-                if logger: logger(msg)
-                else: print(f"[PseudoNote] {msg}")
-                
-                time.sleep(120)
+                # Increase by +2 minutes each retry
+                sleep_seconds = 120 * (attempt + 1)  # 120, 240, 360, 480
+
+                msg = (
+                    f"API Request Failed (Attempt {attempt + 1}/{max_attempts}). "
+                    f"Sleeping {sleep_seconds}s ({sleep_seconds // 60} minutes) before retry..."
+                )
+
+                if logger:
+                    logger(msg)
+                else:
+                    print(f"[PseudoNote] {msg}")
+
+                time.sleep(sleep_seconds)
                 continue
-            
-            # Second failure (attempt 1) -> terminate request
+
+            # Final failure -> terminate
             raise e
 
 def clean_name(name, existing=None, ea=None):
@@ -855,7 +954,7 @@ class AnalyzeWorker(QThread):
                 func.queue = 'clear' if func.sub_count == 0 else 'blocked'
             
             if func.queue == 'blocked' and not self.is_retry:
-                func.status = 'Blocked'
+                func.status = 'Temporary Blocked - Waiting for sub-function analysis'
                 results.append((idx, func, 'DEFERRED', ''))
                 continue
             elif func.queue == 'blocked' and self.is_retry:
@@ -881,7 +980,11 @@ class AnalyzeWorker(QThread):
                 results.append((idx, func, None, ''))
 
         if not valid:
-            self.log.emit("Batch empty (no valid functions with code)", 'warn')
+            deferred = sum(1 for r in results if r[2] == 'DEFERRED')
+            if deferred:
+                self.log.emit(f"Batch deferred: all {deferred} functions contain sub_* calls and are waiting for targets.", 'info')
+            else:
+                self.log.emit("Batch empty (no valid functions with code)", 'warn')
             return results
 
         try:
@@ -911,7 +1014,9 @@ class AnalyzeWorker(QThread):
                     name_part = resp
                     s_match = re.search(r'\[(\d+)%?\]', resp)
                     if s_match:
-                        score_part = f"{s_match.group(1)}%"
+                        raw_score = int(s_match.group(1))
+                        clamped = max(0, min(raw_score, 100))
+                        score_part = f"{clamped}%"
                         name_part = resp.replace(s_match.group(0), "").strip()
                 
                 name = clean_name(name_part, self.existing, ea=f.ea) if name_part else None
@@ -990,7 +1095,12 @@ class AnalyzeWorker(QThread):
             
             # Split line to find [score]
             score_match = re.search(r'\[(\d+)%?\]', line)
-            score_val = f"{score_match.group(1)}%" if score_match else ""
+            if score_match:
+                raw_score = int(score_match.group(1))
+                clamped = max(0, min(raw_score, 100))
+                score_val = f"{clamped}%"
+            else:
+                score_val = ""
             
             # Extract the first token that looks like an identifier
             parts = re.split(r'[\s,\:\(\)\|\[\]]+', clean)
@@ -1036,6 +1146,7 @@ class BulkRenamer(QDialog):
         self.workers = []
         self._deferred_items = []
         self._is_retry_phase = False
+        self._session_always_apply = False
         self.is_loading = False
         self.load_mode = 'prefix' # prefix or search
         self.load_timer = None
@@ -1059,8 +1170,10 @@ class BulkRenamer(QDialog):
         # Hide extra tabs in Bulk Renamer settings, but show the renamer settings
         d = SettingsDialog(self.pn_config, self, hide_extra_tabs=True, mode='renamer')
         if d.exec_():
+            CONFIG.reload()
             # Refresh local config from updated pn_config
             self.cfg = self.build_cfg(self.pn_config)
+            
             
 
             
@@ -1242,9 +1355,8 @@ class BulkRenamer(QDialog):
 
         self.auto_apply_cb = QCheckBox("Auto-Rename Functions once analyzed")
         self.auto_apply_cb.setToolTip("Automatically rename functions once analyzed")
-        self.auto_apply_cb.setChecked(getattr(CONFIG, 'auto_apply_bulk', False))
+        self.auto_apply_cb.setChecked(getattr(CONFIG, 'auto_apply_bulk', True))
         tb_row2.addWidget(self.auto_apply_cb)
-        
         tb_container.addWidget(tb_row2_widget)
         
         # Row 3: Stats row
@@ -1407,6 +1519,14 @@ class BulkRenamer(QDialog):
         self.forward_btn.clicked.connect(self.forward_to_analyzer)
         actions.addWidget(self.forward_btn)
 
+        self.forward_var_btn = QPushButton('Forward to Variable Renamer')
+        self.forward_var_btn.setObjectName("secondary")
+        self.forward_var_btn.setMinimumHeight(32)
+        self.forward_var_btn.setMinimumWidth(150)
+        self.forward_var_btn.setToolTip("Forward ticked functions to the Bulk Variable Renamer tool")
+        self.forward_var_btn.clicked.connect(self.forward_to_var_renamer)
+        actions.addWidget(self.forward_var_btn)
+
         self.undo_btn = QPushButton('Undo Renames')
         self.undo_btn.setToolTip("Revert selected functions to their names before PseudoNote renaming")
         self.undo_btn.setObjectName("danger")
@@ -1550,28 +1670,19 @@ class BulkRenamer(QDialog):
         self._finish_smart_load(funcs, "import wrapper")
 
     def check_workflow_tip(self):
-        if not getattr(CONFIG, 'show_pro_tip', True):
-            return
-        
         msg = (
             "<b>Pro Tip:</b> For the best results, use the tools in this sequence:<br><br>"
             "1. <b>Function Renamer</b> → 2. <b>Variable Renamer</b> → 3. <b>Function Analyzer</b><br><br>"
             "Following this order ensures the AI has the most accurate function names "
             "and variable context available at each step."
         )
-        
+
         box = QMessageBox(self)
         box.setWindowTitle("PseudoNote Workflow Tip")
         box.setText(msg)
         box.setIcon(QMessageBox.Information)
-        
-        cb = QCheckBox("Don't show this tip again")
-        box.setCheckBox(cb)
+
         box.exec_()
-        
-        if cb.isChecked():
-            CONFIG.show_pro_tip = False
-            CONFIG.save()
 
     def update_status(self, text):
         if not text:
@@ -1832,6 +1943,9 @@ class BulkRenamer(QDialog):
         self._deferred_items = []
         self._runtime_deferred = []
         self._is_retry_phase = False
+        self._session_always_apply = False
+        self._pending_still_blocked = []
+        _ai_mod.AI_CANCEL_REQUESTED = False
 
         self.add_log(
             f"Starting rename: {len(items)} functions. Live classification enabled.",
@@ -1901,8 +2015,16 @@ class BulkRenamer(QDialog):
         if not self._deferred_items:
             self.finish_analyze()
             return
-        
+
         self._is_retry_phase = True
+
+        # ✅ Reset progress tracking
+        self._last_done = 0
+        self.completed = 0
+        self.progress.setValue(0)
+        self.progress.setRange(0, len(self._deferred_items))
+        self.total_items = len(self._deferred_items)
+
         self.add_log(
             f"Retry pass: re-scanning {len(self._deferred_items)} BLOCKED functions...",
             'info'
@@ -1968,6 +2090,7 @@ class BulkRenamer(QDialog):
         self.progress.setRange(0, len(still_blocked))
         self.progress.setValue(0)
         self.completed = 0
+        self._last_done = 0
         self.total_items = len(still_blocked)
 
         sys_prompt = self.get_system_prompt(False)  # Single-function prompt
@@ -1990,7 +2113,7 @@ class BulkRenamer(QDialog):
             idx, func, name, score = res
             if name == 'DEFERRED':
                 func.queue = 'blocked'
-                func.status = 'Blocked'
+                func.status = 'Temporary Blocked - Waiting for sub-function analysis'
                 self._runtime_deferred.append((idx, func))
             elif name:
                 func.suggested = name
@@ -2029,9 +2152,16 @@ class BulkRenamer(QDialog):
         self.update_stats_label()
 
     def on_progress(self, done, total):
-        self.completed += done - getattr(self, '_last_done', 0)
+        delta = done - getattr(self, '_last_done', 0)
         self._last_done = done
-        self.progress.setValue(min(self.completed, self.total_items))
+
+        # Prevent negative deltas
+        if delta < 0:
+            delta = 0
+
+        self.completed += delta
+        self.completed = max(0, min(self.completed, self.total_items))
+        self.progress.setValue(self.completed)
         self.update_status(f'Analyzing: {self.completed:,}/{self.total_items:,}')
 
     def on_worker_finished(self, count):
@@ -2040,27 +2170,57 @@ class BulkRenamer(QDialog):
             self.workers.remove(sender)
         
         if not self.workers:
-            self._deferred_items.extend(self._runtime_deferred)
-            self._runtime_deferred = []
-
-            # Handle still-blocked functions queued during retry
-            pending = getattr(self, '_pending_still_blocked', [])
-            if pending:
-                self._pending_still_blocked = []
-                self.add_log(
-                    f"Fallback pass: sending {len(pending)} still-BLOCKED functions to AI with batch_size=1...",
-                    'warn'
-                )
-                self._start_fallback_blocked(pending)
+            if _ai_mod.AI_CANCEL_REQUESTED:
+                self.finish_analyze()
                 return
 
-            if self._deferred_items:
-                self.retry_deferred()
-            else:
+            # Consolidate all pending items into a single queue for the next pass
+            items_to_process = self._deferred_items + self._runtime_deferred + getattr(self, '_pending_still_blocked', [])
+            self._deferred_items = []
+            self._runtime_deferred = []
+            self._pending_still_blocked = []
+
+            if not items_to_process:
                 self.finish_analyze()
+                return
+
+            # Check for suggestions that could benefit the next round
+            has_sug = any(f.suggested for f in self.model.funcs)
+            if has_sug and not self.auto_apply_cb.isChecked() and not self._session_always_apply:
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Apply Current Suggestions?")
+                msg_box.setIcon(QMessageBox.Question)
+                msg_box.setText(f"A round of analysis is complete ({len(items_to_process)} functions remain blocked).\n\n"
+                                "Applying current suggestions now will provide semantic context for the "
+                                "next round of blocked functions, leading to better results.")
+                
+                # Custom buttons
+                btn_yes = msg_box.addButton("Yes: Apply + Continue", QMessageBox.AcceptRole)
+                btn_always = msg_box.addButton("Always Apply + Continue", QMessageBox.AcceptRole)
+                btn_no = msg_box.addButton("No: Continue Only", QMessageBox.RejectRole)
+                btn_stop = msg_box.addButton("Stop", QMessageBox.DestructiveRole)
+                
+                msg_box.exec_()
+                res = msg_box.clickedButton()
+
+                if res == btn_yes:
+                    self.apply_renames()
+                elif res == btn_always:
+                    self._session_always_apply = True
+                    self.apply_renames()
+                elif res == btn_stop:
+                    self.finish_analyze()
+                    return
+            elif has_sug and self._session_always_apply:
+                # Bypass prompt and apply automatically
+                self.apply_renames()
+
+            self._deferred_items = items_to_process
+            self.retry_deferred()
 
     def finish_analyze(self):
         self.progress.setVisible(False)
+        _ai_mod.AI_CANCEL_REQUESTED = False
         suggestions = sum(1 for f in self.model.funcs if f.suggested)
         self.update_status(f'Done: {suggestions:,} suggestions')
         self.add_log(f'Analysis complete: {suggestions:,} suggestions', 'ok')
@@ -2239,5 +2399,30 @@ class BulkRenamer(QDialog):
             found.activateWindow()
         else:
             dlg = BulkAnalyzer(self.parent())
+            dlg.show()
+            dlg.load_eas(eas, append=True)
+
+    def forward_to_var_renamer(self):
+        items = self.model.get_checked()
+        if not items:
+            QMessageBox.warning(self, 'Warning', 'No functions selected')
+            return
+            
+        eas = [f.ea for idx, f in items]
+        self.add_log(f"Forwarding {len(eas)} functions to Bulk Variable Renamer...", 'info')
+        
+        from pseudonote.var_renamer import BulkVariableRenamer
+        found = None
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, BulkVariableRenamer) and widget.isVisible():
+                found = widget
+                break
+                
+        if found:
+            found.load_eas(eas, append=True)
+            found.raise_()
+            found.activateWindow()
+        else:
+            dlg = BulkVariableRenamer(self.parent())
             dlg.show()
             dlg.load_eas(eas, append=True)

@@ -30,9 +30,10 @@ from pseudonote.handlers import (
     SettingsHandler,
     AskAIHandler,
     ShellcodeAnalystHandler,
-    BulkAnalyzeHandler,
     BulkVarRenameHandler,
+    BulkAnalyzeHandler,
 )
+from pseudonote.summarizer import DeepSummarizerHandler
 
 # These will be imported lazily to avoid circular imports
 _view_module = None
@@ -73,23 +74,23 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:highlight_on", "Enable Highlighting (Pseudocode)",
             toggle_highlight_on_handler(), "",
-            "Enable function call highlighting in pseudocode", 199
+            "Enable function call highlighting in pseudocode", 48
         ))
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:highlight_off", "Disable Highlighting (Pseudocode)",
             toggle_highlight_off_handler(), "",
-            "Disable function call highlighting in pseudocode", 199
+            "Disable function call highlighting in pseudocode", 48
         ))
         # Register Highlighter Actions (Disasm)
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:disasm_highlight_on", "Enable Highlighting (Graph/Linear)",
             toggle_disasm_highlight_on_handler(), "",
-            "Enable function call highlighting in Graph/Linear view", 199
+            "Enable function call highlighting in Graph/Linear view", 48
         ))
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:disasm_highlight_off", "Disable Highlighting (Graph/Linear)",
             toggle_disasm_highlight_off_handler(), "",
-            "Disable function call highlighting in Graph/Linear view", 199
+            "Disable function call highlighting in Graph/Linear view", 48
         ))
 
         if ida_hexrays.init_hexrays_plugin():
@@ -109,7 +110,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             vm.PseudoNoteHandler(),
             "Ctrl+Alt+G",
             "Open PseudoNote AI Assistant",
-            199
+            109
         )
         idaapi.register_action(action_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Show PseudoNote Panes", "pseudonote:action", idaapi.SETMENU_APP)
@@ -132,7 +133,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             SettingsHandler(),
             "",
             "Configure AI Provider and Performance settings",
-            128
+            147
         ))
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Configure Settings...", "pseudonote:settings", idaapi.SETMENU_APP)
 
@@ -142,7 +143,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             RenameFunctionHandler(),
             "Ctrl+Alt+N",
             "Use AI to rename the current function based on its code logic",
-            203
+            204
         )
         idaapi.register_action(rename_func_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Rename Function (Code)", "pseudonote:rename_function", idaapi.SETMENU_APP)
@@ -164,7 +165,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             RenameVariablesHandler(),
             "Ctrl+Alt+R",
             "Use AI to rename variables in the current function",
-            19
+            203
         )
         idaapi.register_action(rename_vars_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Rename Variables", "pseudonote:rename_variables", idaapi.SETMENU_APP)
@@ -221,7 +222,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             ShellcodeAnalystHandler(),
             "",
             "Open the static shellcode analysis window",
-            161
+            124
         )
         idaapi.register_action(shell_analyst_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Shellcode Analysis (Static)", "pseudonote:shellcode_analyst", idaapi.SETMENU_APP)
@@ -248,7 +249,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         # Bulk Rename Functions Action
         bulk_rename_desc = idaapi.action_desc_t(
             "pseudonote:bulk_rename",
-            "Bulk Rename Functions",
+            "Bulk Functions Renamer",
             BulkRenameHandler(),
             "Ctrl+Shift+R",
             "Rename multiple functions using AI strategies",
@@ -263,10 +264,22 @@ class PseudoNotePlugin(idaapi.plugin_t):
             BulkAnalyzeHandler(),
             "Ctrl+Shift+A",
             "Open the AI bulk function analysis and tagging window",
-            204
+            110
         )
         idaapi.register_action(bulk_analyze_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bulk Function Analyzer", "pseudonote:bulk_analyze", idaapi.SETMENU_APP)
+
+        # Deep Summarizer Action
+        deep_summarizer_desc = idaapi.action_desc_t(
+            "pseudonote:deep_summarizer",
+            "Deep Summarizer",
+            DeepSummarizerHandler(),
+            "Ctrl+Shift+S",
+            "Automated bottom-up recursive function analysis and summarization",
+            122
+        )
+        idaapi.register_action(deep_summarizer_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Deep Summarizer", "pseudonote:deep_summarizer", idaapi.SETMENU_APP)
 
         # Bulk Variable Renamer Action
         bulk_var_rename_desc = idaapi.action_desc_t(
@@ -318,6 +331,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Deep Summarizer", "pseudonote:deep_summarizer")
 
         # Unregister all actions
         for action_id in [
@@ -331,7 +345,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:bulk_var_rename",
             "pseudonote:highlight_on", "pseudonote:highlight_off",
             "pseudonote:disasm_highlight_on", "pseudonote:disasm_highlight_off",
-            "pseudonote:ask_chat",
+            "pseudonote:ask_chat", "pseudonote:deep_summarizer",
         ]:
             idaapi.unregister_action(action_id)
 

@@ -51,39 +51,32 @@ def _pn_rename_callback(address, view, response):
             print(f"[PseudoNote] Rename Variables: failed to parse JSON response: {e}")
             return
 
-    function_addr = idaapi.get_func(address).start_ea
-    replaced = []
-    for n in names:
-        success = False
-        # Try as local variable first
-        if idaapi.IDA_SDK_VERSION < 760:
-            lvars = {lvar.name: lvar for lvar in view.cfunc.lvars}
-            if n in lvars:
-                if view.rename_lvar(lvars[n], names[n], True):
-                    success = True
-        else:
-            if ida_hexrays.rename_lvar(function_addr, n, names[n]):
-                success = True
-        
-        # If not a local variable, try as a global name
-        if not success:
-            ea = idc.get_name_ea_simple(n)
-            if ea != idaapi.BADADDR:
-                if idc.set_name(ea, names[n], idc.SN_AUTO):
-                    success = True
-        
-        if success:
-            replaced.append(n)
+    func = idaapi.get_func(address)
+    if not func:
+        print("[PseudoNote] Rename Variables: no function at cursor.")
+        return
 
-    comment = idc.get_func_cmt(address, 0)
-    if comment and len(replaced) > 0:
-        for n in replaced:
-            comment = re.sub(fr'\b{n}\b', names[n], comment)
-        idc.set_func_cmt(address, comment, 0)
+    try:
+        from pseudonote.var_renamer import apply_var_renames
+    except Exception as e:
+        print(f"[PseudoNote] Rename Variables: failed to import var_renamer: {e}")
+        return
+
+    applied, failed = apply_var_renames(func.start_ea, names, log_fn=None)
+    if applied > 0:
+        idaapi.execute_sync(lambda: save_to_idb(func.start_ea, "variables_renamed", tag=86), idaapi.MFF_WRITE)
+
+    # Update comment if any names actually changed
+    if applied > 0:
+        comment = idc.get_func_cmt(address, 0)
+        if comment:
+            for old_name, new_name in names.items():
+                comment = re.sub(fr'\\b{re.escape(old_name)}\\b', new_name, comment)
+            idc.set_func_cmt(address, comment, 0)
 
     if view:
         view.refresh_view(True)
-    print(f"[PseudoNote] Rename Variables: {len(replaced)} item(s) renamed.")
+    print(f"[PseudoNote] Rename Variables: {applied} renamed, {failed} failed.")
 
 
 class RenameVariablesHandler(idaapi.action_handler_t):

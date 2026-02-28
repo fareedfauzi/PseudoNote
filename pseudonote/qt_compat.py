@@ -5,17 +5,18 @@ Handles PyQt5 / PySide2 / PySide6 differences.
 """
 
 try:
-    from PyQt5 import QtWidgets, QtCore, QtGui
+    from PyQt5 import QtWidgets, QtCore, QtGui, QtPrintSupport
 except ImportError:
     try:
-        from PySide2 import QtWidgets, QtCore, QtGui
+        from PySide2 import QtWidgets, QtCore, QtGui, QtPrintSupport
     except ImportError:
         try:
-            from PySide6 import QtWidgets, QtCore, QtGui
+            from PySide6 import QtWidgets, QtCore, QtGui, QtPrintSupport
         except ImportError:
             QtWidgets = None
             QtCore = None
             QtGui = None
+            QtPrintSupport = None
             print("[PseudoNote] Qt not found (PyQt5, PySide2 or PySide6 required).")
 
 # Flattening for easier imports
@@ -27,6 +28,8 @@ if QtGui:
     globals().update({k: v for k, v in QtGui.__dict__.items() if not k.startswith('__')})
 if QtCore:
     globals().update({k: v for k, v in QtCore.__dict__.items() if not k.startswith('__')})
+if QtPrintSupport:
+    globals().update({k: v for k, v in QtPrintSupport.__dict__.items() if not k.startswith('__')})
 
 
 def get_text_width(fm, text):
@@ -103,11 +106,13 @@ if QtWidgets and not hasattr(QtCore, "QRegExp"):
 
     QtCore.QRegExp = QRegExpWrapper
 
-# ---------- Signal compatibility ----------
+# ---------- Signal/Slot compatibility ----------
 if QtCore:
     Signal = getattr(QtCore, "pyqtSignal", getattr(QtCore, "Signal", None))
+    Slot = getattr(QtCore, "pyqtSlot", getattr(QtCore, "Slot", None))
 else:
     Signal = None
+    Slot = None
 
 # ---------- Optional AI libraries ----------
 try:

@@ -52,6 +52,14 @@ def load_from_idb(func_ea, tag=0):
     return None
 
 
+def delete_from_idb(func_ea, tag=0):
+    node = get_netnode(create=False)
+    if not node: return
+    try:
+        node.delblob(func_ea, tag)
+    except: pass
+
+
 def gather_function_context(func_ea, max_callers=8, max_caller_lines=40):
     """
     Gather context for a function optimized for performance: callers, callees, and string references.

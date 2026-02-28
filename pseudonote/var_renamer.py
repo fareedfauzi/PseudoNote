@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import idaapi, idautils, idc, ida_hexrays, ida_funcs, ida_name, ida_segment
+import idaapi, idautils, idc, ida_hexrays, ida_funcs, ida_name, ida_segment, ida_kernwin
 import json, os, re, time, csv
 from pseudonote.qt_compat import QtWidgets, QtGui, QtCore, Signal
 from pseudonote.config import CONFIG, LOGGER
@@ -42,45 +42,28 @@ def count_sub_calls(code, own_name=None):
     return len(matches)
 
 
-def apply_var_renames(ea, suggestions, log_fn=None):
-    """Apply variable renames using ida_hexrays. Returns (applied, failed) counts.
+class _RenameState:
+    def __init__(self):
+        self.applied = 0
+        self.failed = 0
+        self.details = {}
 
-    IMPORTANT: rename_lvar must NOT be called inside execute_sync(MFF_WRITE).
-    MFF_WRITE acquires an IDB write lock that conflicts with HexRays internal
-    locking, causing rename_lvar to consistently return False. handlers.py
-    calls rename_lvar directly from a background thread (no execute_sync) and
-    it works — we match that pattern exactly.
+def apply_var_renames(ea, suggestions, log_fn=None):
+    """
+    Apply variable renames. Suggestions is a dict {old_name: new_name}.
+    Returns (applied_count, failed_count, results_dict).
     """
     if not suggestions:
-        return 0, 0
+        return 0, 0, {}
 
-    applied = 0
-    failed = 0
+    f_obj = idaapi.get_func(ea)
+    if not f_obj:
+        if log_fn: log_fn(f"  [{hex(ea)}] get_func() failed", 'err')
+        return 0, len(suggestions), {}
 
-    # Get canonical function start_ea (same as handlers.py)
-    func_obj = idaapi.get_func(ea)
-    if not func_obj:
-        if log_fn:
-            log_fn(f"  [{hex(ea)}] get_func() returned None — skipping", 'err')
-        return 0, len(suggestions)
-    func_ea = func_obj.start_ea
-
-    # Decompile first to populate the HexRays cfunc cache.
-    # rename_lvar needs a cached cfunc — decompile() ensures it exists.
-    try:
-        cfunc = ida_hexrays.decompile(func_ea)
-    except Exception as ex:
-        if log_fn:
-            log_fn(f"  [{hex(ea)}] decompile() raised: {ex}", 'err')
-        return 0, len(suggestions)
-
-    if log_fn:
-        if cfunc:
-            lvar_names = sorted(l.name for l in cfunc.get_lvars())[:30]
-            log_fn(f"  [{hex(ea)}] lvar names present: {lvar_names}", 'info')
-        log_fn(f"  [{hex(ea)}] AI suggestions keys: {sorted(suggestions.keys())[:30]}", 'info')
-
-    # C reserved words IDA will reject as variable names
+    fe = f_obj.start_ea
+    st = _RenameState()
+    
     C_KEYWORDS = {
         'auto','break','case','char','const','continue','default','do',
         'double','else','enum','extern','float','for','goto','if','inline',
@@ -89,83 +72,208 @@ def apply_var_renames(ea, suggestions, log_fn=None):
         'void','volatile','while','_Bool','_Complex','_Imaginary',
     }
 
-    for old_name, new_name in suggestions.items():
-        # Sanitize to a valid C identifier
-        new_name = re.sub(r'[^A-Za-z0-9_]', '_', new_name)
-        if not new_name or new_name[0].isdigit():
-            new_name = '_' + new_name
-        new_name = new_name[:60]
+    def _sync_apply():
+        # fetch cf and lvars once to build the plan
+        cf = ida_hexrays.decompile(fe)
+        if not cf:
+            time.sleep(0.05)
+            cf = ida_hexrays.decompile(fe)
+            
+        if not cf:
+            if log_fn: log_fn(f"  [{hex(ea)}] decompile() failed — skipping batch", 'warn')
+            st.failed = len(suggestions)
+            return
 
-        if new_name in C_KEYWORDS:
-            if log_fn:
-                log_fn(f"  [{hex(ea)}] '{new_name}' is a C keyword — skipping '{old_name}'", 'warn')
-            failed += 1
-            continue
+        lvars = cf.get_lvars()
+        
+        # 1. Build a "Plan" and resolve all AI suggestions to stable targets
+        # This avoiding using 'lvars' pointers inside the rename loop which re-decompiles
+        local_plan = [] # items to rename via rename_lvar
+        global_plan = [] # items to rename via set_name
+        
+        # Build maps for current state
+        name_to_lvar = {lv.name: lv for lv in lvars}
+        
+        reg_map = {} # lowercase_reg -> lv.name
+        for lv in lvars:
+            v_loc = getattr(lv, 'vloc', getattr(lv, 'v', None))
+            if v_loc is not None:
+                # Use hasattr check for is_reg if the type is unknown to linter
+                if hasattr(v_loc, 'is_reg') and v_loc.is_reg():
+                    rn = v_loc.reg1()
+                    if rn >= 0:
+                        for width in [8, 4, 2, 1]:
+                            rname = idaapi.get_reg_name(rn, width)
+                            if rname:
+                                reg_map[rname.lower()] = str(lv.name)
 
-        ok = False
+        applied_names_map = {} # ai_old -> final_name
 
-        # --- Primary: rename_lvar called DIRECTLY (no execute_sync) ---
-        # Matches handlers.py exactly. execute_sync(MFF_WRITE) conflicts with
-        # HexRays locking and causes rename_lvar to return False consistently.
-        try:
-            ok = bool(ida_hexrays.rename_lvar(func_ea, old_name, new_name))
-            if ok and log_fn:
-                log_fn(f"  [{hex(ea)}] OK (lvar): '{old_name}' -> '{new_name}'", 'info')
-        except Exception as ex:
-            if log_fn:
-                log_fn(f"  rename_lvar('{old_name}') raised: {ex}", 'warn')
+        for old_ai_name, proposed_name in suggestions.items():
+            if not old_ai_name or not proposed_name: continue
+            
+            s_old = str(old_ai_name)
+            s_new = str(proposed_name)
+            st.details[s_old] = {"success": False, "final_name": s_new, "error": ""}
 
-        # --- Fallback: global symbol (dword_XXXX, qword_XXXX, byte_XXXX ...) ---
-        # idc.set_name modifies the IDB directly, so it does need execute_sync.
-        if not ok:
-            try:
-                _gr = [False]
+            # Sanitize
+            cl = re.sub(r'[^A-Za-z0-9_]', '_', s_new)
+            if not cl or cl[0:1].isdigit():
+                cl = '_' + cl
+            cl = cl[:60]
 
-                def _rename_global(_gr=_gr, old_name=old_name, new_name=new_name):
-                    gea = idc.get_name_ea_simple(old_name)
-                    if gea != idaapi.BADADDR:
-                        _gr[0] = bool(idc.set_name(gea, new_name, idc.SN_AUTO))
+            if cl in C_KEYWORDS:
+                st.failed += 1
+                st.details[s_old]["error"] = "C keyword"
+                continue
 
-                idaapi.execute_sync(_rename_global, idaapi.MFF_WRITE)
-                ok = _gr[0]
-                if ok and log_fn:
-                    log_fn(f"  [{hex(ea)}] OK (global): '{old_name}' -> '{new_name}'", 'info')
-                elif log_fn:
-                    log_fn(f"  [{hex(ea)}] not a local or global: '{old_name}'", 'warn')
-            except Exception as ex:
-                if log_fn:
-                    log_fn(f"  set_name('{old_name}') raised: {ex}", 'warn')
+            # Candidate finding logic
+            cur_idb_name = None
+            is_global = False
 
-        if ok:
-            applied += 1
-        else:
-            failed += 1
+            # A. Check lvar name match
+            if s_old in name_to_lvar:
+                cur_idb_name = s_old
+            # B. Check register alias
+            elif s_old.lower() in reg_map:
+                cur_idb_name = reg_map[s_old.lower()]
+            # C. Check v# -> a# alias
+            elif s_old.startswith('v'):
+                a_name = 'a' + s_old[1:]
+                if a_name in name_to_lvar:
+                    cur_idb_name = a_name
+            # D. Global symbol check
+            else:
+                gea = idc.get_name_ea_simple(s_old)
+                if gea != idaapi.BADADDR:
+                    cur_idb_name = s_old
+                    is_global = True
 
-    return applied, failed
+            if not cur_idb_name:
+                st.failed += 1
+                st.details[s_old]["error"] = "Variable not found in current decompiler view"
+                continue
 
+            if is_global:
+                global_plan.append((s_old, cur_idb_name, cl))
+            else:
+                local_plan.append((s_old, cur_idb_name, cl))
+
+        # 2. Execute Local Renames
+        for s_old, cur_name, cl in local_plan:
+            ok = False
+            # If name is already cl, it's a "success"
+            if cur_name == cl:
+                ok = True
+                final_name = cl
+            else:
+                ok = bool(ida_hexrays.rename_lvar(fe, cur_name, cl))
+                final_name = cl
+                if not ok:
+                    for i in range(1, 15):
+                        cand = f"{cl}_{i}"
+                        if bool(ida_hexrays.rename_lvar(fe, cur_name, cand)):
+                            final_name = cand
+                            ok = True
+                            break
+            
+            if ok:
+                st.applied += 1
+                st.details[s_old]["success"] = True
+                st.details[s_old]["final_name"] = final_name
+                applied_names_map[s_old] = final_name
+                if log_fn: log_fn(f"  [{hex(ea)}] OK: '{s_old}' -> '{final_name}'", 'info')
+            else:
+                st.failed += 1
+                st.details[s_old]["error"] = "Rename rejected by Hex-Rays"
+
+        # 3. Execute Global Renames
+        for s_old, cur_name, cl in global_plan:
+            gea = idc.get_name_ea_simple(cur_name)
+            g_n = cl
+            # Handle collisions
+            if idc.get_name_ea_simple(g_n) != idaapi.BADADDR and idc.get_name_ea_simple(g_n) != gea:
+                for i in range(1, 15):
+                    cand = f"{cl}_{i}"
+                    if idc.get_name_ea_simple(cand) == idaapi.BADADDR:
+                        g_n = cand
+                        break
+            
+            flags = idc.SN_AUTO | getattr(idc, 'SN_NOWARN', 0x800)
+            if idc.set_name(gea, g_n, flags):
+                st.applied += 1
+                st.details[s_old]["success"] = True
+                st.details[s_old]["final_name"] = g_n
+                applied_names_map[s_old] = g_n
+                if log_fn: log_fn(f"  [{hex(ea)}] OK Global: '{s_old}' -> '{g_n}'", 'info')
+            else:
+                st.failed += 1
+                st.details[s_old]["error"] = "Rejected global rename"
+
+        # 4. Update Comments
+        if applied_names_map:
+            for cmt_type in [0, 1]:
+                comment = idc.get_func_cmt(fe, cmt_type)
+                if comment:
+                    changed = False
+                    new_cmt = str(comment)
+                    for o, n in applied_names_map.items():
+                        pat = fr'\b{re.escape(str(o))}\b'
+                        if re.search(pat, new_cmt):
+                            new_cmt = re.sub(pat, str(n), new_cmt)
+                            changed = True
+                    if changed: idc.set_func_cmt(fe, new_cmt, cmt_type)
+
+    idaapi.execute_sync(_sync_apply, idaapi.MFF_WRITE)
+
+    if st.applied > 0:
+        def _sync_post():
+            save_to_idb(fe, "variables_renamed", tag=86)
+            vdui = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_widget())
+            if vdui and vdui.cfunc and vdui.cfunc.entry_ea == fe:
+                vdui.refresh_view(True)
+        idaapi.execute_sync(_sync_post, idaapi.MFF_WRITE)
+
+    return int(st.applied), int(st.failed), st.details
 
 
 def parse_var_response(resp, log_fn=None):
-    """
-    Parse AI response lines of the form:
-        old_name -> new_name
-    Returns dict {old_name: new_name}. Returns {} if NO_RENAMES or empty.
-    """
-    if not resp or resp.strip().upper() == 'NO_RENAMES':
+    """Parse AI response for variable renames. Supports JSON (new) and arrows (legacy)."""
+    if not resp or resp.strip().upper() == 'NO_RENAMES' or resp.strip().upper() == 'NO_RENAME':
         return {}
 
+    text = resp.strip()
+    # Try JSON first
+    try:
+        # Strip optional markdown fences
+        clean_text = text
+        if "```" in clean_text:
+            matches = re.findall(r"```(?:json)?\s*(.*?)\s*```", clean_text, re.DOTALL)
+            if matches: clean_text = matches[0].strip()
+        
+        # Isolate JSON part between {}
+        start = clean_text.find('{')
+        end = clean_text.rfind('}')
+        if start != -1 and end != -1:
+            return json.loads(clean_text[start:end+1])
+    except:
+        pass
+
+    # Legacy arrow parsing fallback (v1 -> count)
     result = {}
     pattern = re.compile(r'^\s*(\w+)\s*->\s*(\w+)\s*$')
-    for line in resp.splitlines():
+    for line in text.splitlines():
+        line = line.strip()
+        if not line: continue
         m = pattern.match(line)
         if m:
             old, new = m.group(1), m.group(2)
             if old != new:
                 result[old] = new
-
-    if not result and resp.strip().upper() != 'NO_RENAMES':
+    
+    if not result and resp.strip().upper() not in ('NO_RENAMES', 'NO_RENAME'):
         if log_fn:
-            log_fn(f"Warning: AI response yielded 0 renames. Raw (first 120 chars): {resp[:120]!r}", 'warn')
+            log_fn(f"Note: AI response yielded 0 renames. Raw (first 100): {resp[:100]!r}", 'warn')
 
     return result
 
@@ -417,48 +525,41 @@ class VirtualFuncModel(QAbstractTableModel):
 # VarRenameWorker
 # ---------------------------------------------------------------------------
 
-VAR_SYS_PROMPT = """You are an expert reverse engineer analyzing decompiled C code.
-Your task is to suggest meaningful variable names to replace the generic 
-compiler-generated names (v1, v2, a1, a2, result, etc.).
+VAR_SYS_PROMPT = """You are an expert reverse engineer. Review the C function code provided.
+Identify variables with generic or unhelpful names (e.g., v1, a2, result, qword_1234, dword_5678).
+Propose more descriptive names based on their usage, context, and data flow.
 
 RULES:
-- Only rename variables where you have STRONG evidence of their purpose
-- Evidence = how the variable is used, what APIs it is passed to, 
-  what values are assigned to it, what conditions it appears in
-- Use snake_case for all variable names
-- Keep names short but descriptive: 3-30 characters
-- Do NOT rename variables if their purpose is unclear
-- Do NOT rename loop counters like i, j, k unless context is very clear
-- Do NOT suggest names that are already descriptive
-- Parameter names (a1, a2, etc.) should be renamed based on how they 
-  are used in the function body
+- Do NOT suggest renames for bare register names (e.g., rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8-r15, eax, ebx, ecx, edx, esi, edi, ebp, esp, x0-x30, r0-r15). 
+- Do NOT rename registers appearing in comments (e.g., "// r10", "// x0").
+- Only rename actual C variable names (v1, a1, v2, result, etc.) that appear in the code.
 
-OUTPUT FORMAT (strictly follow, one variable per line):
-old_name -> new_name
-old_name -> new_name
-
-If no variables can be confidently renamed, output exactly:
-NO_RENAMES"""
-
-
-VAR_BATCH_SYS_PROMPT = """You are an expert reverse engineer analyzing decompiled C code.
-Your task is to suggest meaningful variable names to replace generic compiler-generated names for MULTIPLE functions.
-
-RULES:
-- Only rename variables where you have STRONG evidence (usage, API calls, assignments).
-- Use snake_case for all variable names (3-30 characters).
-- Parameter names (a1, a2, etc.) should be renamed based on body context.
-
-OUTPUT FORMAT (strictly follow):
-For EACH function, start with a marker [Function: func_name] and list its renames below.
-If a function has no renames, output NO_RENAMES under its marker.
+OUTPUT FORMAT (strict):
+Output ONLY a valid JSON object mapping the original variable names (keys) to the suggested new names (values).
+Do NOT include any explanations or markdown formatting outside the JSON.
 
 Example:
-[Function: sub_12345]
-v1 -> bytes_read
-a1 -> out_buffer
+{"v1": "bytes_read", "a2": "out_buffer"}
+"""
 
-[Function: sub_67890]
+
+VAR_BATCH_SYS_PROMPT = """You are an expert reverse engineer. Review the C functions provided.
+Instructions:
+For EACH function, provide a JSON object mapping original variable names to new suggested names.
+Use numeric [ID: N] markers to indicate which function you are analyzing.
+
+RULES:
+- Use snake_case for new names.
+- Identify parameters (a1, a2) and locals (v1, v2).
+- Do NOT suggest renames for bare register names (rax, ebx, x0, r10, etc., or registers in comments).
+- Only rename actual C variables that appear in the function code.
+- Output ONLY the [ID: N] marker followed by the JSON.
+
+Example:
+[ID: 1]
+{"v1": "status", "a1": "buffer_ptr"}
+
+[ID: 2]
 NO_RENAMES
 """
 
@@ -467,32 +568,58 @@ def parse_var_batch_response(resp, expected_funcs, log_fn=None):
     if not resp:
         return [{} for _ in expected_funcs]
 
-    # Initialize results map for expected functions
-    results_map = {f.name: {} for f in expected_funcs}
-    current_func = None
+    # results_map maps 1-based numeric ID (from the prompt) to data
+    results_map = {i+1: {} for i in range(len(expected_funcs))}
     
-    line_pattern = re.compile(r'^\s*(\w+)\s*->\s*(\w+)\s*$')
-    marker_pattern = re.compile(r'\[Function:\s*([^\]]+)\]')
+    # Matches [ID: 1] or [ID:1] or [Function #1]
+    id_pattern = re.compile(r'\[(?:ID:\s*|Function\s*#|Func\s*#)(\d+)[:\]]')
+    
+    lines = resp.splitlines()
+    for i, line in enumerate(lines):
+        line_s = line.strip()
+        if not line_s: continue
 
-    for line in resp.splitlines():
-        line = line.strip()
-        if not line: continue
-
-        m_func = marker_pattern.search(line)
-        if m_func:
-            current_func = m_func.group(1).strip()
+        m_id = id_pattern.search(line_s)
+        if m_id:
+            try:
+                fid = int(m_id.group(1))
+            except:
+                continue
+            
+            json_str = ""
+            # Capture any JSON start on the same line as the ID marker
+            l_str = str(line_s)
+            l_end = m_id.end()
+            l_payload = l_str[l_end:].strip()
+            if l_payload:
+                json_str += l_payload
+            
+            for j in range(i+1, len(lines)):
+                nxt_l = str(lines[j]).strip()
+                if not nxt_l: continue
+                if id_pattern.search(nxt_l): break
+                if nxt_l.upper().startswith('NO_RENAME'): break
+                json_str += nxt_l
+            
+            if json_str and fid in results_map:
+                try:
+                    # Clean markdown if AI wrapped it
+                    if "```" in json_str:
+                        matches = re.findall(r"```(?:json)?\s*(.*?)\s*```", json_str, re.DOTALL)
+                        if matches: json_str = matches[0].strip()
+                    
+                    # Target inner JSON between {}
+                    start = json_str.find('{')
+                    end = json_str.rfind('}')
+                    if start != -1 and end != -1:
+                        data = json.loads(json_str[start:end+1])
+                        results_map[fid] = data
+                except Exception as e:
+                    if log_fn: log_fn(f"Failed to parse ID {fid} JSON: {str(e)[:40]}", 'warn')
             continue
 
-        if current_func and current_func in results_map:
-            if line.upper() == 'NO_RENAMES' or line.upper() == '(NO_RENAMES)':
-                continue
-            m = line_pattern.match(line)
-            if m:
-                old, new = m.group(1), m.group(2)
-                if old != new:
-                    results_map[current_func][old] = new
-
-    return [results_map[f.name] for f in expected_funcs]
+    # Map back to result list based on original order
+    return [results_map[i+1] for i in range(len(expected_funcs))]
 
 
 class VarRenameWorker(QThread):
@@ -553,13 +680,6 @@ class VarRenameWorker(QThread):
                     self.progress.emit(done, total)
                     continue
 
-                if self.is_retry and func.queue == 'blocked':
-                    func.status = 'Skipped: unresolved callees'
-                    # func.queue already 'blocked'
-                    self.batch_done.emit([(idx, func, {})]) # Empty dict = no suggestions
-                    done += 1
-                    self.progress.emit(done, total)
-                    continue
 
                 if not func.code:
                     self.log.emit(f"Skipping {hex(func.ea)}: No code", 'warn')
@@ -582,8 +702,9 @@ class VarRenameWorker(QThread):
                 sys_prompt = VAR_SYS_PROMPT
             else:
                 user_prompt = "Functions to analyze:\n\n"
-                for idx, func in batch_valid:
-                    user_prompt += f"--- [Function: {func.name}] ---\n```\n{func.code}\n```\n\n"
+                for i, (idx, func) in enumerate(batch_valid):
+                    fid = i + 1
+                    user_prompt += f"--- [ID: {fid}] [Function: {func.name}] ---\n```\n{func.code}\n```\n\n"
                 sys_prompt = VAR_BATCH_SYS_PROMPT
 
             self.update_status.emit(f"Analyzing batch ({len(batch_valid)} funcs)")
@@ -646,6 +767,7 @@ class BulkVariableRenamer(QDialog):
         self.total_count = 0
         self._deferred_items = []
         self._is_retry_phase = False
+        self._session_always_apply = False
 
         # Load state for batched scanning
         self.is_loading = False
@@ -659,28 +781,19 @@ class BulkVariableRenamer(QDialog):
         QTimer.singleShot(100, self.check_workflow_tip)
 
     def check_workflow_tip(self):
-        if not getattr(CONFIG, 'show_pro_tip', True):
-            return
-        
         msg = (
-            "<b>Pro Tip:</b> For the best results, use the tools in this sequence:<br><br>"
-            "1. <b>Function Renamer</b> → 2. <b>Variable Renamer</b> → 3. <b>Function Analyzer</b><br><br>"
-            "Following this order ensures the AI has the most accurate function names "
-            "and variable context available at each step."
+            "<b>Pro Tip:</b> Always rename <b>sub_*</b> functions first to get better "
+            "and more accurate context for variable renaming.<br><br>"
+            "The AI performs significantly better when it knows the names of the "
+            "functions being called in the code."
         )
-        
+
         box = QMessageBox(self)
         box.setWindowTitle("PseudoNote Workflow Tip")
         box.setText(msg)
         box.setIcon(QMessageBox.Information)
-        
-        cb = QCheckBox("Don't show this tip again")
-        box.setCheckBox(cb)
+
         box.exec_()
-        
-        if cb.isChecked():
-            CONFIG.show_pro_tip = False
-            CONFIG.save()
 
     # -----------------------------------------------------------------------
     # build_cfg — mirrors BulkRenamer.build_cfg
@@ -688,9 +801,11 @@ class BulkVariableRenamer(QDialog):
     def build_cfg(self, c):
         cfg = {
             'provider': c.active_provider,
-            'parallel_workers': getattr(c, 'parallel_workers', 1),
-            'cooldown_seconds': getattr(c, 'cooldown_seconds', 0),
-            'asm_max_lines': getattr(c, 'asm_max_lines', 25),
+            'parallel_workers': getattr(c, 'var_parallel_workers', 3),
+            'batch_size': getattr(c, 'var_batch_size', 5),
+            'cooldown_seconds': getattr(c, 'var_cooldown', 15),
+            'asm_max_lines': getattr(c, 'var_asm_max', 25),
+            'var_force_rename': getattr(c, 'var_force_rename', False),
         }
         p = c.active_provider.lower()
         if p == 'openai':
@@ -930,7 +1045,7 @@ class BulkVariableRenamer(QDialog):
         self.apply_btn.clicked.connect(self.apply_suggestions)
         actions.addWidget(self.apply_btn)
 
-        self.unload_btn = QPushButton('Unload')
+        self.unload_btn = QPushButton('Unload Table')
         self.unload_btn.setObjectName("danger")
         self.unload_btn.setMinimumHeight(32)
         self.unload_btn.clicked.connect(self._unload_table)
@@ -980,7 +1095,8 @@ class BulkVariableRenamer(QDialog):
     def open_settings(self):
         from pseudonote.view import SettingsDialog
         d = SettingsDialog(self.pn_config, self, hide_extra_tabs=True, mode='var_renamer')
-        d.exec_()
+        if d.exec_():
+            CONFIG.reload()
 
     def _make_fdata(self, ea, name):
         """Create a FuncData with persistent rename state check."""
@@ -1191,6 +1307,52 @@ class BulkVariableRenamer(QDialog):
         self.load_timer.timeout.connect(self._scan_batch)
         self.load_timer.start(1)
 
+    def load_eas(self, eas, append=True):
+        """Manually load a list of EAs."""
+        if not append:
+            self.model.clear()
+            self.temp_funcs = []
+        
+        raw_funcs = []
+        seen_eas = {f.ea for f in self.model.funcs}
+        if not append:
+            seen_eas = set()
+
+        for ea in eas:
+            if ea in seen_eas: continue
+            name = idc.get_func_name(ea)
+            if not name: continue
+            
+            marker = load_from_idb(ea, _IDB_TAG)
+            fd = FuncData(ea, name)
+            if marker == "variables_renamed":
+                fd.queue = 'done'
+                fd.status = 'Already Renamed'
+                fd.checked = False
+            
+            raw_funcs.append(fd)
+            seen_eas.add(ea)
+
+        if not raw_funcs:
+            return
+
+        self.temp_funcs = list(self.model.funcs) + raw_funcs
+        self._scan_idx = len(self.model.funcs)
+        self._scan_total = len(self.temp_funcs)
+        self.is_loading = True
+        
+        self.progress.setVisible(True)
+        self.progress.setRange(0, self._scan_total)
+        self.progress.setValue(self._scan_idx)
+        self.progress.setFormat("Populating table... %v/%m")
+
+        if getattr(self, 'load_timer', None) and self.load_timer.isActive():
+            self.load_timer.stop()
+            
+        self.load_timer = QTimer(self)
+        self.load_timer.timeout.connect(self._scan_batch)
+        self.load_timer.start(1)
+
     def _scan_batch(self):
         """Standard loading pass: no decompilation to keep UI instant."""
         if not self.is_loading:
@@ -1241,12 +1403,10 @@ class BulkVariableRenamer(QDialog):
         self._deferred_items = []
         self._runtime_deferred = []
         self._is_retry_phase = False
+        self._session_always_apply = False
 
         # Build cfg
-        from pseudonote.renamer import BulkRenamer
-        tmp = BulkRenamer(self.pn_config)
-        self._last_cfg = tmp.build_cfg(self.pn_config)
-        tmp.deleteLater()
+        self._last_cfg = self.build_cfg(self.pn_config)
 
         self._start_worker(items, is_retry=False)
 
@@ -1313,10 +1473,13 @@ class BulkVariableRenamer(QDialog):
         still_blocked = []
 
         for idx, func in self._deferred_items:
+            if _ai_mod.AI_CANCEL_REQUESTED:
+                break
             # Re-fetch pseudocode (callees may have been renamed externally)
             new_code = get_code_fast(func.ea, 50000, asm_max=1000)
             if new_code is not None:
                 func.code = new_code
+            
             func.sub_count = count_sub_calls(func.code, own_name=func.name)
             if func.sub_count == 0:
                 func.queue = 'clear'
@@ -1326,21 +1489,36 @@ class BulkVariableRenamer(QDialog):
                 func.queue = 'blocked'
                 still_blocked.append((idx, func))
 
-        self._deferred_items = still_blocked
         self.add_log(
             f"Retry: {len(promoted)} promoted to CLEAR, {len(still_blocked)} still BLOCKED.",
             'info' if promoted else 'warn'
         )
         self.model.sort(self.model.sort_col, self.model.sort_ord)
 
-        self._deferred_items = []
         if promoted:
+            # Multi-round: keep promoting functions as their callees get renamed
+            self._deferred_items = still_blocked
             self._start_worker(promoted, is_retry=True)
         elif still_blocked:
-            for idx, func in still_blocked:
-                func.status = 'Analyzed (with sub_*)'
-            self.add_log(f"Proceeding to analyze {len(still_blocked)} functions despite unresolved callees.", 'warn')
-            self._start_worker(still_blocked, is_retry=True)
+            # No more promotions possible. Final fallback for still-blocked.
+            force_rename_enabled = getattr(self.pn_config, 'var_force_rename', False)
+            if force_rename_enabled:
+                msg = (f"The scan found {len(still_blocked)} functions that still have unresolved 'sub_*' calls.\n\n"
+                       "Since 'Force Variable Renaming' is enabled in your settings, do you want to proceed with AI analysis "
+                       "for these functions anyway? (Results may be less accurate without context for callees).")
+                res = QMessageBox.question(self, "Proceed with Blocked Functions?", msg,
+                                            QMessageBox.Yes | QMessageBox.No)
+                if res == QMessageBox.Yes:
+                    for idx, func in still_blocked:
+                        func.status = 'Analyzing (Forced)'
+                    self.add_log(f"Proceeding to forced analysis of {len(still_blocked)} blocked functions.", 'info')
+                    self._deferred_items = []
+                    self._start_worker(still_blocked, is_retry=True)
+                else:
+                    self.finish_rename()
+            else:
+                self.add_log(f"Analysis finished. {len(still_blocked)} functions remain blocked (force rename disabled).", 'warn')
+                self.finish_rename()
         else:
             self.finish_rename()
 
@@ -1362,21 +1540,21 @@ class BulkVariableRenamer(QDialog):
             func.var_suggestions = suggestions
             if suggestions:
                 if auto_apply:
-                    # Apply immediately — don't store suggestions for later
-                    applied, failed = apply_var_renames(func.ea, suggestions, log_fn=self.add_log)
-                    if applied > 0 or failed == 0:
-                        func.status = f"Applied: {applied} renamed"
-                        if failed > 0:
-                            func.status += f", {failed} failed"
-                        if applied > 0:
-                            save_to_idb(func.ea, _IDB_TAG, "variables_renamed")
+                    # Fix: Unpack 3 values
+                    applied_c, failed_c, res_dict = apply_var_renames(func.ea, suggestions, log_fn=self.add_log)
+                    if applied_c > 0 or failed_c == 0:
+                        func.status = f"Applied: {applied_c} renamed"
+                        if failed_c > 0:
+                            func.status += f", {failed_c} failed"
                     else:
-                        func.status = f"Apply failed ({failed} variables)"
-                    func.var_suggestions = {}  # clear — already applied
-                    func.applied_renames = dict(suggestions)  # keep for detail view
+                        func.status = f"Apply failed ({failed_c} variables)"
+                    
+                    func.var_suggestions = {}
+                    func.applied_renames = res_dict
                     func.queue = 'done'
                 else:
-                    func.status = f"Done: {len(suggestions)} suggestions"
+                    count = len(suggestions)
+                    func.status = f"Done: {count} suggestions"
                     func.queue = 'done'
             elif func.status.startswith('Error'):
                 pass  # keep error status
@@ -1427,9 +1605,50 @@ class BulkVariableRenamer(QDialog):
             self.workers.remove(sender)
 
         if not self.workers:
+            if _ai_mod.AI_CANCEL_REQUESTED:
+                self.finish_rename()
+                return
+
             self._deferred_items.extend(self._runtime_deferred)
             self._runtime_deferred = []
             
+            if not self._deferred_items:
+                self.finish_rename()
+                return
+
+            # Check for suggestions that could benefit the next round
+            has_sug = any(f.var_suggestions for f in self.model.funcs)
+            auto_apply = getattr(self.pn_config, 'var_auto_apply', False)
+            
+            if has_sug and not auto_apply and not self._session_always_apply:
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Apply Current Suggestions?")
+                msg_box.setIcon(QMessageBox.Question)
+                msg_box.setText(f"A round of analysis is complete ({len(self._deferred_items)} functions remain blocked).\n\n"
+                                "Applying current suggestions now will provide semantic context for the "
+                                "next round of blocked functions, leading to better results.")
+                
+                # Custom buttons
+                btn_yes = msg_box.addButton("Yes: Apply + Continue", QMessageBox.AcceptRole)
+                btn_always = msg_box.addButton("Always Apply + Continue", QMessageBox.AcceptRole)
+                btn_no = msg_box.addButton("No: Continue Only", QMessageBox.RejectRole)
+                btn_stop = msg_box.addButton("Stop", QMessageBox.DestructiveRole)
+                
+                msg_box.exec_()
+                res = msg_box.clickedButton()
+
+                if res == btn_yes:
+                    self.apply_suggestions()
+                elif res == btn_always:
+                    self._session_always_apply = True
+                    self.apply_suggestions()
+                elif res == btn_stop:
+                    self.finish_rename()
+                    return
+            elif has_sug and self._session_always_apply:
+                # Bypass prompt and apply automatically
+                self.apply_suggestions()
+
             if self._deferred_items:
                 self.retry_deferred()
             else:
@@ -1482,19 +1701,21 @@ class BulkVariableRenamer(QDialog):
                 continue
             if f not in checked_funcs:
                 continue
-            applied, failed = apply_var_renames(f.ea, f.var_suggestions, log_fn=self.add_log)
+            
+            # Fix: Unpack 3 values
+            applied, failed, results = apply_var_renames(f.ea, f.var_suggestions, log_fn=self.add_log)
             total_applied += applied
             total_failed += failed
+            
             if applied > 0 or failed == 0:
                 f.status = f"Applied: {applied} renamed"
                 if failed > 0:
                     f.status += f", {failed} failed"
-                if applied > 0:
-                    save_to_idb(f.ea, _IDB_TAG, "variables_renamed")
             else:
                 f.status = f"Apply failed ({failed} variables)"
-            f.applied_renames = dict(f.var_suggestions)  # keep for detail view
-            f.var_suggestions = {}  # clear after apply
+            
+            f.applied_renames = results
+            f.var_suggestions = {} 
             indices.append(i)
 
         self.model.refresh_rows(indices)
@@ -1609,10 +1830,11 @@ class BulkVariableRenamer(QDialog):
                 for old, new in func.var_suggestions.items()
             )
         elif getattr(func, 'applied_renames', None):
-            suggestions_text = "\n".join(
-                f"{old} \u2192 {new}  (already applied)"
-                for old, new in func.applied_renames.items()
-            )
+            lines = []
+            for old, res in func.applied_renames.items():
+                status_mark = " (applied)" if res.get("success") else f" (FAILED: {res.get('error','')})"
+                lines.append(f"{old} \u2192 {res.get('final_name', old)} {status_mark}")
+            suggestions_text = "\n".join(lines)
         else:
             suggestions_text = "(No suggestions)"
 
@@ -1628,12 +1850,15 @@ class BulkVariableRenamer(QDialog):
             apply_this_btn.setObjectName("success")
 
             def _apply_this():
-                applied, failed = apply_var_renames(func.ea, func.var_suggestions)
-                func.status = f"Applied: {applied} renamed"
-                if failed > 0:
-                    func.status += f", {failed} failed"
-                if applied > 0:
-                    save_to_idb(func.ea, _IDB_TAG, "variables_renamed")
+                applied, failed, results = apply_var_renames(func.ea, func.var_suggestions)
+                if applied > 0 or failed == 0:
+                    func.status = f"Applied: {applied} renamed"
+                    if failed > 0:
+                        func.status += f", {failed} failed"
+                else:
+                    func.status = f"Apply failed ({failed} variables)"
+                
+                func.applied_renames = results
                 func.var_suggestions = {}
                 self.model.refresh_rows([self.model.funcs.index(func)])
                 self.update_button_states()
