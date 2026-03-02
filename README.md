@@ -76,4 +76,37 @@ IDA view:
 - Tested only on msvenom generated shellcode
 <img width="1528" height="915" alt="image" src="https://github.com/user-attachments/assets/e4230ec5-5dc9-4070-bbf3-4f283d1fb6ae" />
 
+# Deep Analyzer 
+## PHASE 1: DISCOVERY & PREPARATION
+### STAGE 1 - Environment Setup
+- Purpose: Bootstraps the analysis environment.
+- Details: Initializes the workspace directories, detects the target binary path from IDA, and validates that all dependencies and AI configurations are ready.
 
+### STAGE 2 - Recursive Call Graph Discovery
+- Purpose: Maps the entire "territory" of the binary.
+- Details: Starts from your chosen entry point and recursively traverses all calls to build a complete FuncNode graph. This identifies exactly which functions are reachable and how they depend on each other.
+
+### STAGE 3 - Initial Function & Variable Renaming
+- Purpose: Eliminates generic IDA names (e.g., sub_401000).
+- Details: Uses a "Bottom-Up" approach (starting with leaf functions) to provide initial descriptive names and meaningful variable names (e.g., v1 $\rightarrow$ socket_fd). This sets the stage for the deeper analysis.
+
+## PHASE 2: DEEP MALICIOUS CODE ANALYSIS
+
+### STAGE 4 - Initial Code Analysis Assessment + Get Readable C code
+- Purpose: The primary "Read" phase.
+- Details: Processes functions individually to generate high-quality, readable C code. The AI performs a baseline assessment for every function, identifying technical indicators like encryption, networking, or file I/O.
+
+### STAGE 5 - Contextual Code Analysis Refinement
+- Purpose: The "Understanding" phase (Top-Down).
+- -Details: Re-analyzes functions by providing the AI with "Caller Context." This tells the AI why a function is being called. It is used to upgrade or downgrade risk tags (e.g., a "benign" function that sends a buffer might be upgraded to "malicious" if the context shows it's sending a stolen password).
+
+### STAGE 6 - Code Analysis Report Synthesis
+- Purpose: The "Reporting" phase.
+- Details: Aggregates all individual function analyses into a cohesive summary. It generates the high-level sections:
+- Behavioral Indicators: Timeline of what the binary does.
+- Key Capabilities: High-level summaries (e.g., "Exfiltration via SMTP").
+- Risk Assessment: Final verdict on the binary's intent.
+
+### STAGE 7 - Logic Flow Mapping (Execution Map)
+- Purpose: The "Final Visualization" phase.
+- Details: Synthesizes the final execution paths and generates the Mermaid/ASCII flow maps that appear at the end of the report, showing the logical progression of the malicious behavior from start to finish.
