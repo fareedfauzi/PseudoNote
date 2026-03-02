@@ -1,4 +1,4 @@
-<img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/baa2ce02-620a-4533-89da-6adce98c31da" />PseudoNote is a plugin that uses an LLM to assist with malware reversing. It can also be used as a note-taking tool, as it supports Markdown for documenting findings for specific functions during the analysis process. All generated information, including notes and AI outputs, is saved directly in the binary's IDB file.
+PseudoNote is a plugin that uses an LLM to assist with malware reversing. It can also be used as a note-taking tool, as it supports Markdown for documenting findings for specific functions during the analysis process. All generated information, including notes and AI outputs, is saved directly in the binary's IDB file.
 
 The deep analyzer featurer are still work in progress btw.
 
@@ -25,6 +25,9 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 
 ### 4. Usage
 **Right-Click**: See options in Pseudocode/Disassembly.
+
+<img width="1291" height="790" alt="image" src="https://github.com/user-attachments/assets/9f9cb279-738f-4a32-be8f-994130a5abcc" />
+
 
 # Features
 1. Convert HexRay's Pseudocode or Assembly into high-level languages such as C. Python, Rust, and others.
@@ -77,11 +80,15 @@ Refer deep_analyzer_example_report.html
 
 <img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/53c7f7e1-05ce-4f1b-a0d1-f34ae3a6aff4" />
 
+<img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/baa2ce02-620a-4533-89da-6adce98c31da" />
+
 <img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/6ecdd4dc-cf27-4aa3-8e52-fc9acf666197" />
 
 <img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/05fdf709-c57c-4f6f-8e98-35e112c3ce52" />
 
 <img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/201ce1e8-6a63-40ce-af1d-7d9ee974b376" />
+
+
 
 ### Call highlighter (IDA view and Pseudocode)
 <img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
