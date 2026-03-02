@@ -1,4 +1,4 @@
-PseudoNote is a plugin that uses an LLM to assist with malware reversing. It can also be used as a note-taking tool, as it supports Markdown for documenting findings for specific functions during the analysis process. All generated information, including notes and AI outputs, is saved directly in the binary's IDB file.
+<img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/baa2ce02-620a-4533-89da-6adce98c31da" />PseudoNote is a plugin that uses an LLM to assist with malware reversing. It can also be used as a note-taking tool, as it supports Markdown for documenting findings for specific functions during the analysis process. All generated information, including notes and AI outputs, is saved directly in the binary's IDB file.
 
 The deep analyzer featurer are still work in progress btw.
 
@@ -73,12 +73,23 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 ### Deep Analyzer Report
 Refer deep_analyzer_example_report.html
 
+<img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/54673011-97cf-4c83-bc84-ee4738056af7" />
+
+<img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/53c7f7e1-05ce-4f1b-a0d1-f34ae3a6aff4" />
+
+<img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/6ecdd4dc-cf27-4aa3-8e52-fc9acf666197" />
+
+<img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/05fdf709-c57c-4f6f-8e98-35e112c3ce52" />
+
+<img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/201ce1e8-6a63-40ce-af1d-7d9ee974b376" />
+
 ### Call highlighter (IDA view and Pseudocode)
 <img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
 
 ### Basic shellcode static analysis
 - Tested only on msvenom generated shellcode
 <img width="1528" height="915" alt="image" src="https://github.com/user-attachments/assets/e4230ec5-5dc9-4070-bbf3-4f283d1fb6ae" />
+
 
 # Deep Analyzer Approach
 ## PHASE 1: DISCOVERY & PREPARATION
