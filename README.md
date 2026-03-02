@@ -1,6 +1,6 @@
 PseudoNote is a plugin that uses an LLM to assist with malware reversing. It can also be used as a note-taking tool, as it supports Markdown for documenting findings for specific functions during the analysis process. All generated information, including notes and AI outputs, is saved directly in the binary's IDB file.
 
-The deep analyzer featurer are still work in progress btw.
+The latest commit contains the deep analyzer feature.
 
 # PseudoNote Installation and Setup
 
@@ -28,8 +28,18 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 
 <img width="1291" height="790" alt="image" src="https://github.com/user-attachments/assets/9f9cb279-738f-4a32-be8f-994130a5abcc" />
 
+<img width="807" height="429" alt="image" src="https://github.com/user-attachments/assets/f95b3311-f491-4a69-b345-bb05c37a7ce6" />
+
 
 # Features
+Several the core analysis modes including
+1. Bulk Analyzer `/analyzer.py` - A fast, lightweight scanner for batch-tagging functions with AI.
+2. Deep Analyzer `/deep_analyzer.py` - A full recursive, bottom-up forensic analysis pipeline starting from a chosen entry point.
+3. Bulk Function renamer `/renamer.py` - Rename multiple functions at once
+4. Bulk Variable renamer `/var_renamer.py` - Rename variables in multiple functions at once
+5. Pseudonote pane - For generating readable high level codes and note taking utility.
+
+But after all these are the features:
 1. Convert HexRay's Pseudocode or Assembly into high-level languages such as C. Python, Rust, and others.
 3. Automatically rename functions and variables with meaningful names.
 4. Provide function explaination, details analysis.
