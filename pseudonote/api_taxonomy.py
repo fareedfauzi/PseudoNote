@@ -13,8 +13,18 @@ API_IGNORE_CALLS: Set[str] = set()
 COMBO_RULES: List[Dict[str, Any]] = []
 CATEGORY_TO_SEVERITY: Dict[str, str] = {}
 
-RISK_ORDER = {"pending": -1, "benign": 0, "suspicious": 1, "malicious": 2}
+RISK_ORDER = {"pending": -1, "benign": 0, "suspicious": 1, "malicious": 2} # "pending" is UI state only
+VALID_RISK_LEVELS = {"malicious", "suspicious", "benign", "pending"}
 SEVERITY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+
+def normalize_risk_tag(risk_tag: Optional[str]) -> str:
+    """Standardizes risk tags and defaults unknown values to 'benign'."""
+    if not risk_tag or not isinstance(risk_tag, str):
+        return "pending"
+    tag = risk_tag.lower().strip()
+    if tag in VALID_RISK_LEVELS:
+        return tag
+    return "benign" # Default for unknown analysis results
 
 def load_api_taxonomy() -> Tuple[Dict[str, Dict[str, str]], Set[str], Set[str], List[Dict[str, Any]], Dict[str, str]]:
     """
@@ -68,8 +78,29 @@ def load_api_taxonomy() -> Tuple[Dict[str, Dict[str, str]], Set[str], Set[str], 
         cwd = os.getcwd()
         print(f"[PseudoNote] ERROR in load_api_taxonomy: Could not load taxonomy from {path}")
         print(f"[PseudoNote] Working directory: {cwd}. Exception: {e}")
+        import traceback
+        traceback.print_exc()
         TAXONOMY_LOADED = False
         return {}, set(), set(), [], {}
+
+def is_taxonomy_healthy() -> Tuple[bool, str]:
+    """
+    Checks if the taxonomy was loaded successfully and contains data.
+    Returns: (is_healthy, error_message)
+    """
+    if not TAXONOMY_LOADED:
+        return False, "Taxonomy file failed to load or parse."
+    if not API_MAP:
+        return False, "Taxonomy loaded but API_MAP is empty."
+    if not COMBO_RULES:
+        return False, "Taxonomy loaded but COMBINATION_RULES are empty."
+    return True, ""
+
+def reload_taxonomy():
+    """Force a reload of the taxonomy from disk."""
+    global API_MAP, API_IGNORE, API_IGNORE_CALLS, COMBO_RULES, CATEGORY_TO_SEVERITY
+    API_MAP, API_IGNORE, API_IGNORE_CALLS, COMBO_RULES, CATEGORY_TO_SEVERITY = load_api_taxonomy()
+    return is_taxonomy_healthy()
 
 # Initialize taxonomy on load
 API_MAP, API_IGNORE, API_IGNORE_CALLS, COMBO_RULES, CATEGORY_TO_SEVERITY = load_api_taxonomy()
@@ -105,7 +136,7 @@ def get_api_tags_for_function(ea: int, callees: Union[List[int], Dict[int, Any]]
     
     Args:
         ea: Effective address of the function.
-        callees: A list of callee EAs (analyzer.py usage), or a dict graph mapping {ea: FuncNode} (summarizer.py usage).
+        callees: A list of callee EAs (analyzer.py usage), or a dict graph mapping {ea: FuncNode} (deep_analyzer.py usage).
         names_map: Optional dict of ea -> name to bypass IDA API queries.
         
     Returns:
@@ -140,6 +171,14 @@ def get_api_tags_for_function(ea: int, callees: Union[List[int], Dict[int, Any]]
         # We lookup lowercased, but store the original case 'name' in hits 
         # so logs/outputs use the actual observed casing.
         name_lower = name.lower()
+        
+        # Strip common IDA thunk/import decorations before lookup
+        for pfx in ("__imp_", "j_", "cs:", "ds:", "."):
+            if name_lower.startswith(pfx):
+                name_lower = name_lower[len(pfx):]
+        if "@" in name_lower:
+            name_lower = name_lower.split("@")[0]
+            
         if name_lower in API_IGNORE or name_lower in API_IGNORE_CALLS:
             continue
             
@@ -192,7 +231,7 @@ def derive_risk_from_api_tags(
     
     Args:
         ea: Effective address of the central function
-        callees: A list of callee EAs (analyzer.py) or a dict {ea: FuncNode} from the caller graph (summarizer.py)
+        callees: A list of callee EAs (analyzer.py) or a dict {ea: FuncNode} from the caller graph (deep_analyzer.py)
         names_map: Optional precomputed EA -> name mapping
         detailed: If True, returns a tuple of (risk_level, confidence, reason). 
                   If False, strictly returns a string risk_level (for backwards compatibility).

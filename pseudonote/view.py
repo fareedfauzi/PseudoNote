@@ -320,7 +320,7 @@ if QtWidgets:
             self.init_ui()
 
         def init_ui(self):
-            # Application-wide styling for this dialog to match Deep Summarizer aesthetic
+            # Application-wide styling for this dialog to match Deep Analyzer aesthetic
             self.setStyleSheet("""
                 QTabWidget::tab-bar {
                     alignment: left;
@@ -371,10 +371,10 @@ if QtWidgets:
             if not self.hide_extra_tabs or self.mode == 'var_renamer':
                 self.tabs.addTab(self.var_renamer_tab, "Bulk Variable Renamer")
 
-            self.summarizer_tab = QtWidgets.QWidget()
-            self.init_summarizer_tab()
-            if not self.hide_extra_tabs or self.mode == 'summarizer':
-                self.tabs.addTab(self.summarizer_tab, "Deep Summarizer")
+            self.analyzer_tab = QtWidgets.QWidget()
+            self.init_analyzer_tab()
+            if not self.hide_extra_tabs or self.mode == 'deep_analyzer':
+                self.tabs.addTab(self.analyzer_tab, "Deep Analyzer")
 
             self.renaming_tab = QtWidgets.QWidget()
             self.init_rename_tab()
@@ -668,33 +668,8 @@ if QtWidgets:
             layout.addStretch()
             self.appearance_tab.setLayout(layout)
 
-        def init_summarizer_tab(self):
+        def init_analyzer_tab(self):
             layout = QtWidgets.QVBoxLayout()
-
-
-
-            # Components
-            comp_grp = QtWidgets.QGroupBox("Analysis Components")
-            comp_layout = QtWidgets.QGridLayout()
-
-            self.deep_bottom_up_rename_cb = QtWidgets.QCheckBox("Automated bottom-up function renaming")
-            self.deep_bottom_up_rename_cb.setChecked(getattr(self.config, 'deep_do_bottom_up_rename', True))
-            comp_layout.addWidget(self.deep_bottom_up_rename_cb, 0, 0)
-            
-            self.deep_var_rename_cb = QtWidgets.QCheckBox("Rename variables")
-            self.deep_var_rename_cb.setChecked(getattr(self.config, 'deep_do_var_rename', True))
-            comp_layout.addWidget(self.deep_var_rename_cb, 0, 1)
-            
-            self.deep_func_comment_cb = QtWidgets.QCheckBox("Add function's purpose as comments")
-            self.deep_func_comment_cb.setChecked(getattr(self.config, 'deep_do_func_comment', True))
-            comp_layout.addWidget(self.deep_func_comment_cb, 1, 0)
-            
-            self.deep_analysis_rename_cb = QtWidgets.QCheckBox("Final Rename based on whole-code semantic")
-            self.deep_analysis_rename_cb.setChecked(getattr(self.config, 'deep_do_analysis_rename', True))
-            comp_layout.addWidget(self.deep_analysis_rename_cb, 1, 1)
-
-            comp_grp.setLayout(comp_layout)
-            layout.addWidget(comp_grp)
 
             # Performance
             perf_grp = QtWidgets.QGroupBox("Performance & Rates")
@@ -756,7 +731,7 @@ if QtWidgets:
             layout.addWidget(name_grp)
 
             layout.addStretch()
-            self.summarizer_tab.setLayout(layout)
+            self.analyzer_tab.setLayout(layout)
 
         def on_provider_changed(self, text):
             self.save_fields_to_temp(self.current_provider)
@@ -940,18 +915,19 @@ if QtWidgets:
             if hasattr(self, 'rename_use_0x_cb'):
                 c.rename_use_0x = self.rename_use_0x_cb.isChecked()
 
-            # Deep Summarizer settings
+            # Deep Analyzer settings
             if hasattr(self, 'deep_batch_spin'):
                 c.deep_batch_size = self.deep_batch_spin.value()
                 c.deep_parallel_workers = self.deep_workers_spin.value()
                 c.deep_cooldown = self.deep_cooldown_spin.value()
                 c.deep_max_lines = self.deep_lines_spin.value()
 
-                c.deep_do_var_rename = self.deep_var_rename_cb.isChecked()
-                c.deep_do_func_comment = self.deep_func_comment_cb.isChecked()
-                c.deep_do_analysis_rename = self.deep_analysis_rename_cb.isChecked()
+                # These pipeline stages are always enabled; variable rename is controlled
+                # by the toggle in the main Deep Analyzer dialog toolbar.
+                c.deep_do_bottom_up_rename = True
+                c.deep_do_func_comment = True
+                c.deep_do_analysis_rename = True
                 c.deep_do_refinement = True
-                c.deep_do_bottom_up_rename = self.deep_bottom_up_rename_cb.isChecked()
                 c.deep_use_prefix = self.deep_use_prefix_cb.isChecked()
                 c.deep_prefix = self.deep_prefix_edit.text().strip() or "da_"
                 c.deep_append_address = self.deep_append_addr_cb.isChecked()
@@ -2596,7 +2572,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:deep_summarizer", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:deep_analyzer", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_var_rename", "PseudoNote/")

@@ -33,23 +33,33 @@ def get_netnode(create=False):
     return _NETNODE_CACHE
 
 
+import threading
+_IDB_LOCK = threading.Lock()
+
 def save_to_idb(func_ea, content, tag=0):
     if content is None: return
-    node = get_netnode(create=True)
-    if not node: return
-    try:
-        node.setblob(content.encode('utf-8'), func_ea, tag)
-    except: pass
+    with _IDB_LOCK:
+        def _do_save():
+            node = get_netnode(create=True)
+            if node:
+                try:
+                    node.setblob(content.encode('utf-8'), func_ea, tag)
+                except: pass
+        idaapi.execute_sync(_do_save, idaapi.MFF_WRITE)
 
 
 def load_from_idb(func_ea, tag=0):
-    node = get_netnode(create=False)
-    if not node: return None
-    try:
-        data = node.getblob(func_ea, tag)
-        if data: return data.decode('utf-8')
-    except: pass
-    return None
+    res = [None]
+    with _IDB_LOCK:
+        def _do_load():
+            node = get_netnode(create=False)
+            if not node: return
+            try:
+                data = node.getblob(func_ea, tag)
+                if data: res[0] = data.decode('utf-8')
+            except: pass
+        idaapi.execute_sync(_do_load, idaapi.MFF_READ)
+    return res[0]
 
 
 def delete_from_idb(func_ea, tag=0):

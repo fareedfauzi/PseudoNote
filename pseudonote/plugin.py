@@ -33,7 +33,7 @@ from pseudonote.handlers import (
     BulkVarRenameHandler,
     BulkAnalyzeHandler,
 )
-from pseudonote.summarizer import DeepSummarizerHandler
+from pseudonote.deep_analyzer import DeepAnalyzerHandler
 
 # These will be imported lazily to avoid circular imports
 _view_module = None
@@ -269,17 +269,17 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(bulk_analyze_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bulk Function Analyzer", "pseudonote:bulk_analyze", idaapi.SETMENU_APP)
 
-        # Deep Summarizer Action
-        deep_summarizer_desc = idaapi.action_desc_t(
-            "pseudonote:deep_summarizer",
-            "Deep Summarizer",
-            DeepSummarizerHandler(),
+        # Deep Analyzer Action
+        deep_analyzer_desc = idaapi.action_desc_t(
+            "pseudonote:deep_analyzer",
+            "Deep Analyzer",
+            DeepAnalyzerHandler(),
             "Ctrl+Shift+S",
             "Automated bottom-up recursive function analysis and summarization",
             122
         )
-        idaapi.register_action(deep_summarizer_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Deep Summarizer", "pseudonote:deep_summarizer", idaapi.SETMENU_APP)
+        idaapi.register_action(deep_analyzer_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Deep Analyzer", "pseudonote:deep_analyzer", idaapi.SETMENU_APP)
 
         # Bulk Variable Renamer Action
         bulk_var_rename_desc = idaapi.action_desc_t(
@@ -331,7 +331,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Deep Summarizer", "pseudonote:deep_summarizer")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Deep Analyzer", "pseudonote:deep_analyzer")
 
         # Unregister all actions
         for action_id in [
@@ -345,7 +345,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:bulk_var_rename",
             "pseudonote:highlight_on", "pseudonote:highlight_off",
             "pseudonote:disasm_highlight_on", "pseudonote:disasm_highlight_off",
-            "pseudonote:ask_chat", "pseudonote:deep_summarizer",
+            "pseudonote:ask_chat", "pseudonote:deep_analyzer",
         ]:
             idaapi.unregister_action(action_id)
 

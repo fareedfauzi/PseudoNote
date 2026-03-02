@@ -19,6 +19,7 @@ import urllib.request, urllib.error
 # GUI Imports
 from pseudonote.qt_compat import QtWidgets, QtGui, QtCore, Signal
 from pseudonote.config import CONFIG, LOGGER
+from pseudonote.idb_storage import save_to_idb, load_from_idb, delete_from_idb
 from pseudonote.qt_compat import (
     QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox, 
     QSpinBox, QProgressBar, QTableWidget, QTableWidgetItem,
@@ -34,6 +35,17 @@ import ida_kernwin
 import pseudonote.view as _view
 import pseudonote.ai_client as _ai_mod
 Qt = QtCore.Qt
+
+# Bug #5: Constant definitions for technical debt reduction
+MAX_XREF_COUNT = 150
+MAX_CODE_CHARS = 10000 
+MAX_ASM_LINES = 50
+MAX_STRINGS_PER_FUNC = 8
+MAX_STRING_LEN = 120
+MIN_STRING_LEN = 3
+MAX_CALLS_PER_FUNC = 10
+MAX_API_RETRIES = 5
+INITIAL_COOLDOWN_SECONDS = 120
 
 def count_sub_calls(code, own_name=None):
     if not code: return 0
@@ -292,8 +304,18 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 """
 
 SKIP_SEGS = {'.plt','.plt.got','.plt.sec','extern','.extern','.got','.got.plt','.init','.fini','.dynsym','.dynstr','.interp','.rela.dyn','.rela.plt','.hash','.gnu.hash','.note','.note.gnu.build-id','.note.ABI-tag'}
-SYS_PREFIX = ('__cxa_','__gxx_','__gnu_','__libc_','__ctype_','_GLOBAL_','_init','_fini','_start','atexit','malloc','free','memcpy','memset','strlen','printf','scanf','fprintf','sprintf','operator','std::','boost::','__stack_chk','__security','_security','__report','__except','__imp_','__x86.','__do_global')
-SYS_MODULES = ('kernel32.','ntdll.','user32.','advapi32.','msvcrt.','ucrtbase.','ws2_32.','libc.so','libm.so','libpthread','foundation.','corefoundation.','uikit.')
+SYS_PREFIX = (
+    '__cxa_', '__gxx_', '__gnu_', '__libc_', '__ctype_', '_GLOBAL_', '_init', '_fini', '_start', 
+    'atexit', 'malloc', 'free', 'memcpy', 'memset', 'strlen', 'printf', 'scanf', 'fprintf', 'sprintf', 
+    'snprintf', 'vsnprintf', 'pformat', 'strto', 'dtoa', 'ftoa', 'itoa', 'ltoa', 'atoi', 'atol', 'atof',
+    'operator', 'std::', 'boost::', '__stack_chk', '__security', '_security', 
+    '__report', '__except', '__imp_', '__x86.', '__do_global', '__mingw', '_mingw', 'mainCRTStartup', 
+    'WinMainCRTStartup', '_tmain', '__tmain', '___tmain', '__scrt', '__acrt', '_amsg_exit', '_initterm', 
+    '_onexit', '_lock', '_unlock', '__p__', '__set_', '__get_', '_cexit', '_exit', '_exit', '_encoded_null', 
+    '_get_invalid_parameter_handler', '_initterm_e', '_crt_at_quick_exit', '_query_new_handler',
+    '_purecall', '_fpreset', '_invalid_parameter', '_errno', '_statusfp', '_controlfp'
+)
+SYS_MODULES = ('kernel32.', 'ntdll.', 'user32.', 'advapi32.', 'msvcrt.', 'ucrtbase.', 'ws2_32.', 'libc.so', 'libm.so', 'libpthread', 'foundation.', 'corefoundation.', 'uikit.', 'mscoree.', 'shell32.', 'ole32.', 'oleaut32.', 'gdi32.', 'comctl32.', 'comdlg32.', 'crypt32.', 'wininet.', 'urlmon.', 'wsock32.', 'shlwapi.')
 
 DEFAULT_PROMPT = """Expert reverse engineer. Name this function in snake_case.
 
@@ -420,22 +442,37 @@ Output one per line:
 2. name [score]"""
 
 def is_valid_seg(ea):
-    seg = idaapi.getseg(ea)
-    if not seg: return False
-    name = idaapi.get_segm_name(seg)
-    if not name: return True # If it's a function but the segment has no name, allow it
+    """
+    Thread-safe segment validation. Returns True for user code, False for stubs/imports.
+    """
+    res = {"valid": False}
+    def _get_seg():
+        seg = idaapi.getseg(ea)
+        if not seg: return
+        name = idaapi.get_segm_name(seg)
+        if not name: 
+            res["valid"] = True
+            return
+        nl = name.lower()
+        # Only skip segments that are clearly NOT user code (Imports/Stubs)
+        if any(x in nl for x in ('.plt', 'extern', '.got', '.note', '.init', '.fini', '.interp', '.hash', '.idata', '.plt.got')):
+            return
+        res["valid"] = True
     
-    # Only skip segments that are clearly NOT user code (Imports/Stubs)
-    nl = name.lower()
-    if any(x in nl for x in ('.plt', 'extern', '.got', '.note', '.init', '.fini', '.interp', '.hash')):
-        return False
-
-    return True
+    # Use execute_sync for thread safety (Bug #11 fixed)
+    import idaapi
+    idaapi.execute_sync(_get_seg, idaapi.MFF_READ)
+    return res["valid"]
 
 def is_sys_func(name):
+    if not name: return False
     nl = name.lower()
+    # Remove leading underscores for prefix matching to catch _atexit, __atexit, etc.
+    stripped_name = nl.lstrip('_')
     for p in SYS_PREFIX:
-        if name.startswith(p) or nl.startswith(p.lower()): return True
+        pl = p.lower().lstrip('_')
+        if nl.startswith(p.lower()) or stripped_name.startswith(pl):
+            return True
     for m in SYS_MODULES:
         if m in nl: return True
     return False
@@ -448,7 +485,7 @@ def get_xref_count(ea):
     c = 0
     for _ in idautils.CodeRefsTo(ea, True):
         c += 1
-        if c > 150: break
+        if c > MAX_XREF_COUNT: break
     return c
 
 def get_code_fast(ea, max_len=5000, asm_max=25):
@@ -466,7 +503,8 @@ def get_code_fast(ea, max_len=5000, asm_max=25):
             return
         lines = []
         cur = f.start_ea
-        while cur < f.end_ea and len(lines) < asm_max:
+        limit = min(asm_max, MAX_ASM_LINES)
+        while cur < f.end_ea and len(lines) < limit:
             lines.append(idc.GetDisasm(cur))
             cur = idc.next_head(cur, f.end_ea)
         result[0] = '\n'.join(lines)[:max_len]
@@ -484,11 +522,11 @@ def get_strings_fast(ea):
                     if s:
                         try:
                             s = s.decode() if isinstance(s, bytes) else s
-                            if 2 < len(s) < 60: r.append(s[:50])
+                            if MIN_STRING_LEN < len(s) < MAX_STRING_LEN: r.append(s[:50])
                         except: pass
-                if len(r) >= 4: break
+                if len(r) >= MAX_STRINGS_PER_FUNC: break
         except: pass
-        result[0] = list(set(r))[:4]
+        result[0] = list(set(r))[:MAX_STRINGS_PER_FUNC]
     idaapi.execute_sync(_get_strings, idaapi.MFF_READ)
     return result[0]
 
@@ -501,13 +539,13 @@ def get_calls_fast(ea):
                 for xref in idautils.CodeRefsFrom(item, False):
                     n = idc.get_func_name(xref)
                     if n and not n.startswith('sub_'): r.append(n)
-                if len(r) >= 5: break
+                if len(r) >= MAX_CALLS_PER_FUNC: break
         except: pass
-        result[0] = list(set(r))[:5]
+        result[0] = list(set(r))[:MAX_CALLS_PER_FUNC]
     idaapi.execute_sync(_get_calls, idaapi.MFF_READ)
     return result[0]
 
-def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None):
+def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None, on_cooldown=None, max_tokens=None, **kwargs):
     # cfg is expected to be a dict with needed keys from PseudoNote Config
     url = cfg.get('api_url', '')
     req_url = url
@@ -526,11 +564,11 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None):
         data['stream'] = True
 
     if is_ollama_native:
-        data['options'] = {'temperature': 0.1, 'num_predict': 500}
+        data['options'] = {'temperature': 0.1, 'num_predict': max_tokens if max_tokens else 500}
     elif is_anthropic:
         hdrs['x-api-key'] = key
         hdrs['anthropic-version'] = '2023-06-01'
-        data = {'model': model, 'max_tokens': 500, 'messages': [{'role': 'user', 'content': sys_prompt + '\n\n' + prompt}], 'temperature': 0.1}
+        data = {'model': model, 'max_tokens': max_tokens if max_tokens else 500, 'messages': [{'role': 'user', 'content': sys_prompt + '\n\n' + prompt}], 'temperature': 0.1}
         if on_chunk: data['stream'] = True
     else:
         if key: hdrs['Authorization'] = f'Bearer {key}'
@@ -539,10 +577,11 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None):
         
         is_reasoning = any(x in model.lower() for x in ['o1', 'o3', 'gpt-5'])
         if is_reasoning:
-            data['max_completion_tokens'] = 4096
+            data['max_completion_tokens'] = max_tokens if max_tokens else 4096
         else:
-            data['max_tokens'] = 500
+            data['max_tokens'] = max_tokens if max_tokens else 500
             data['temperature'] = 0.1
+
 
     for attempt in range(2):
         try:
@@ -557,25 +596,63 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None):
                             break
                         if not line: continue
                         line = line.decode('utf-8').strip()
+                        
+                        # Handle OpenAI / Anthropic 'data: ' prefix
                         if line.startswith('data: '):
                             payload = line[6:]
                             if payload == '[DONE]': break
-                            try:
-                                j = json.loads(payload)
-                                # OpenAI / Anthropic-compat / Ollama-OAI format
-                                choices = j.get('choices', [])
-                                if choices:
-                                    chunk = choices[0].get('delta', {}).get('content', '')
-                                    if chunk:
-                                        full_content += chunk
-                                        on_chunk(chunk)
-                                # Anthropic native format
-                                elif j.get('type') == 'content_block_delta':
-                                    chunk = j.get('delta', {}).get('text', '')
-                                    if chunk:
-                                        full_content += chunk
-                                        on_chunk(chunk)
-                            except: continue
+                        else:
+                            # Might be raw JSON (Ollama native)
+                            payload = line
+                            
+                        try:
+                            j = json.loads(payload)
+                            
+                            # 1. OpenAI / Anthropic-compat / Ollama-OAI format
+                            choices = j.get('choices', [])
+                            if choices:
+                                chunk = choices[0].get('delta', {}).get('content', '')
+                                if chunk:
+                                    full_content += chunk
+                                    on_chunk(chunk)
+                                continue
+                                
+                            # 2. Anthropic native format
+                            if j.get('type') == 'content_block_delta':
+                                chunk = j.get('delta', {}).get('text', '')
+                                if chunk:
+                                    full_content += chunk
+                                    on_chunk(chunk)
+                                continue
+                                
+                            # 3. Ollama native format (/api/chat)
+                            msg = j.get('message', {})
+                            if msg and 'content' in msg:
+                                chunk = msg.get('content', '')
+                                if chunk:
+                                    full_content += chunk
+                                    on_chunk(chunk)
+                                if j.get('done'): break
+                                continue
+                                
+                            # 4. Ollama native format (/api/generate)
+                            resp = j.get('response')
+                            if resp is not None:
+                                if resp:
+                                    full_content += resp
+                                    on_chunk(resp)
+                                if j.get('done'): break
+                                continue
+                                
+                            # 5. Generic 'content' or 'text' fallback
+                            chunk = j.get('content') or j.get('text')
+                            if chunk:
+                                full_content += chunk
+                                on_chunk(chunk)
+                            
+                            if j.get('done'): break
+                            
+                        except: continue
                     return full_content.strip()
                 else:
                     if _ai_mod.AI_CANCEL_REQUESTED: return ""
@@ -601,21 +678,19 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None):
 
         except Exception as e:
             # Generic retry on any error (429, timeout, network, etc)
-
-            max_attempts = 5  # total attempts including initial try
+            max_attempts = MAX_API_RETRIES
 
             if attempt < max_attempts - 1:
                 err_msg = str(e)
-
                 try:
                     import requests
                     if isinstance(e, requests.exceptions.RequestException) and e.response is not None:
                         err_msg += f" (Status: {e.response.status_code}) | {e.response.text[:150]}"
-                except:
+                except Exception:
                     pass
 
-                # Increase by +2 minutes each retry
-                sleep_seconds = 120 * (attempt + 1)  # 120, 240, 360, 480
+                # Increase cooldown each retry
+                sleep_seconds = INITIAL_COOLDOWN_SECONDS * (attempt + 1)
 
                 msg = (
                     f"API Request Failed (Attempt {attempt + 1}/{max_attempts}). "
@@ -627,7 +702,14 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None):
                 else:
                     print(f"[PseudoNote] {msg}")
 
-                time.sleep(sleep_seconds)
+                # Tick through the sleep so the cooldown bar shows progress
+                total_ticks = sleep_seconds * 10  # 0.1s per tick
+                for tick in range(total_ticks):
+                    if on_cooldown:
+                        on_cooldown(tick + 1, total_ticks)
+                    time.sleep(0.1)
+                if on_cooldown:
+                    on_cooldown(0, 100)  # reset bar after wait
                 continue
 
             # Final failure -> terminate
@@ -1156,7 +1238,8 @@ class BulkRenamer(QDialog):
         self.workers = []
         self.existing_names = set()
         self.setup_ui()
-        QTimer.singleShot(100, self.check_workflow_tip)
+        QTimer.singleShot(100, self.load_table_state)
+        QTimer.singleShot(200, self.check_workflow_tip)
         self.loader = None
         self.worker = None
 
@@ -1769,6 +1852,7 @@ class BulkRenamer(QDialog):
         self.load_timer = QTimer(self)
         self.load_timer.timeout.connect(self.load_batch)
         self.load_timer.start(1)
+        self.save_table_state()
 
     def finish_load(self):
         if hasattr(self, 'load_timer'):
@@ -1778,6 +1862,7 @@ class BulkRenamer(QDialog):
         self.model.set_data(self.temp_funcs)
         self.update_count()
         self.update_stats_label()
+        self.save_table_state()
         self.add_log(f'Loaded {len(self.temp_funcs)} functions', 'ok')
         self.update_status('')
         
@@ -1881,6 +1966,16 @@ class BulkRenamer(QDialog):
                 
                 self.temp_funcs.append(f)
                 self.seen_eas.add(ea)
+                
+                # Load persistent AI suggestion if available (tag 84)
+                stored = load_from_idb(ea, tag=84)
+                if stored and '|' in stored:
+                    parts = stored.split('|', 1)
+                    if len(parts) == 2:
+                        f.suggested = parts[0]
+                        f.score = parts[1]
+                        f.status = 'Cached'
+                        f.queue = 'done'
             except StopIteration:
                 self.finish_load()
                 return
@@ -1888,18 +1983,44 @@ class BulkRenamer(QDialog):
         if self.scanned % 10000 < 2000:
             self.update_status(f'Scanning... {self.scanned:,} checked | Found {len(self.temp_funcs):,}')
 
-    def load_eas(self, eas):
-        """Manually load a list of EAs (e.g. from Analyzer)"""
-        self.model.clear()
+    def load_eas(self, eas, append=False):
+        """Manually load a list of EAs (e.g. from Analyzer or persistent state)"""
+        if not append:
+            self.model.clear()
+            self.temp_funcs = []
+            if hasattr(self, 'seen_eas'):
+                self.seen_eas = set()
+            
         funcs = []
         for ea in eas:
+            if hasattr(self, 'seen_eas') and ea in self.seen_eas: 
+                continue
             name = idc.get_func_name(ea)
             if name:
-                funcs.append(FuncData(ea, name))
-        self.model.set_data(funcs)
+                fd = FuncData(ea, name)
+                # Load cached suggestion if available (tag 84)
+                stored = load_from_idb(ea, tag=84)
+                if stored and '|' in stored:
+                    parts = stored.split('|', 1)
+                    if len(parts) == 2:
+                        fd.suggested = parts[0]
+                        fd.score = int(parts[1]) if parts[1].isdigit() else 0
+                        fd.status = 'Cached'
+                        fd.queue = 'done'
+                funcs.append(fd)
+                if hasattr(self, 'seen_eas'):
+                    self.seen_eas.add(ea)
+                
+        if append:
+            self.model.append_data(funcs)
+        else:
+            self.model.set_data(funcs)
+            
         self.update_count()
-        self.add_log(f'Loaded {len(funcs)} functions from manual request', 'ok')
+        self.update_stats_label()
+        self.add_log(f'Loaded {len(funcs)} functions', 'ok')
         self.update_status('')
+        self.save_table_state()
 
 
 
@@ -2121,6 +2242,9 @@ class BulkRenamer(QDialog):
                 func.status = 'OK'
                 func.queue = 'done' # Mark as done since processed by AI
                 self.existing_names.add(name)
+                
+                # Save suggestion to IDB for persistence (tag 84)
+                save_to_idb(func.ea, f"{name}|{score}", tag=84)
 
                 # Live Auto-Apply
                 if self.auto_apply_cb.isChecked():
@@ -2229,6 +2353,7 @@ class BulkRenamer(QDialog):
         self.analyze_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.apply_btn.setEnabled(suggestions > 0)
+        self.save_table_state()
         
         self.workers = []
         self._last_done = 0
@@ -2312,6 +2437,7 @@ class BulkRenamer(QDialog):
         self.update_count()
         self.add_log(f'Applied {applied:,} renames', 'ok')
         self.update_status(f'Applied {applied:,} renames')
+        self.save_table_state()
 
     def undo_renames(self):
         items = self.model.get_checked()
@@ -2376,6 +2502,7 @@ class BulkRenamer(QDialog):
         self.update_count()
         self.add_log(f'Reverted {reverted:,} functions', 'ok')
         self.update_status(f'Reverted {reverted:,} functions')
+        self.save_table_state()
 
     def forward_to_analyzer(self):
         items = self.model.get_checked()
@@ -2426,3 +2553,43 @@ class BulkRenamer(QDialog):
             dlg = BulkVariableRenamer(self.parent())
             dlg.show()
             dlg.load_eas(eas, append=True)
+# ---------------------------------------------------------------------------
+# BulkRenamer: Persistent Table State
+# ---------------------------------------------------------------------------
+    def save_table_state(self):
+        """Save the list of currently visible EAs and their suggestions to the IDB."""
+        try:
+            eas = [str(f.ea) for f in self.model.funcs]
+            save_to_idb(idaapi.BADADDR, ",".join(eas), tag=93)
+        except Exception as e:
+            self.add_log(f"Error saving table state: {e}", 'warn')
+
+    def load_table_state(self):
+        """Restore the table state from the IDB."""
+        try:
+            stored = load_from_idb(idaapi.BADADDR, tag=93)
+            if not stored: return
+            
+            eas = []
+            for s in stored.split(','):
+                if not s: continue
+                try: eas.append(int(s, 10))
+                except: pass
+            
+            if eas:
+                # We use load_eas which handles append=False by default (if we call with self.model.clear() first)
+                self.load_eas(eas)
+                self.add_log(f"Restored {len(eas)} functions from previous session.", 'info')
+        except Exception as e:
+            self.add_log(f"Error loading table state: {e}", 'warn')
+
+    def unload_table(self):
+        """Clear all functions from the table and wipe persistent state."""
+        self.model.clear()
+        self.temp_funcs = []
+        self.seen_eas = set()
+        self.update_count()
+        self.update_stats_label()
+        self.add_log("Table unloaded.", 'info')
+        self.save_table_state()
+

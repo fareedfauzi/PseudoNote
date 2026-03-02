@@ -20,7 +20,7 @@ from pseudonote.renamer import (
     get_calls_fast, ai_request
 )
 import pseudonote.ai_client as _ai_mod
-from pseudonote.idb_storage import save_to_idb, load_from_idb
+from pseudonote.idb_storage import save_to_idb, load_from_idb, delete_from_idb
 
 Qt = QtCore.Qt
 
@@ -161,20 +161,25 @@ def apply_var_renames(ea, suggestions, log_fn=None):
 
         # 2. Execute Local Renames
         for s_old, cur_name, cl in local_plan:
+            if log_fn: log_fn(f"  [{hex(ea)}] Attempting local rename: '{cur_name}' (AI called it '{s_old}') -> '{cl}'", 'info')
+            
             ok = False
             # If name is already cl, it's a "success"
             if cur_name == cl:
                 ok = True
                 final_name = cl
+                if log_fn: log_fn(f"  [{hex(ea)}] Variable '{cur_name}' is already named '{cl}'. Skipping.", 'info')
             else:
                 ok = bool(ida_hexrays.rename_lvar(fe, cur_name, cl))
                 final_name = cl
                 if not ok:
+                    if log_fn: log_fn(f"  [{hex(ea)}] rename_lvar('{cur_name}', '{cl}') returned False. Trying collisions...", 'warn')
                     for i in range(1, 15):
                         cand = f"{cl}_{i}"
                         if bool(ida_hexrays.rename_lvar(fe, cur_name, cand)):
                             final_name = cand
                             ok = True
+                            if log_fn: log_fn(f"  [{hex(ea)}] Collision fix: renamed '{cur_name}' -> '{final_name}'", 'info')
                             break
             
             if ok:
@@ -182,17 +187,21 @@ def apply_var_renames(ea, suggestions, log_fn=None):
                 st.details[s_old]["success"] = True
                 st.details[s_old]["final_name"] = final_name
                 applied_names_map[s_old] = final_name
-                if log_fn: log_fn(f"  [{hex(ea)}] OK: '{s_old}' -> '{final_name}'", 'info')
+                if log_fn: log_fn(f"  [{hex(ea)}] SUCCESS: '{cur_name}' -> '{final_name}'", 'info')
             else:
                 st.failed += 1
                 st.details[s_old]["error"] = "Rename rejected by Hex-Rays"
+                if log_fn: log_fn(f"  [{hex(ea)}] FAILED: Hex-Rays rejected renaming '{cur_name}' to '{cl}'", 'err')
 
         # 3. Execute Global Renames
         for s_old, cur_name, cl in global_plan:
             gea = idc.get_name_ea_simple(cur_name)
+            if log_fn: log_fn(f"  [{hex(ea)}] Attempting global rename: '{cur_name}' (at 0x{gea:X}) -> '{cl}'", 'info')
+            
             g_n = cl
             # Handle collisions
             if idc.get_name_ea_simple(g_n) != idaapi.BADADDR and idc.get_name_ea_simple(g_n) != gea:
+                if log_fn: log_fn(f"  [{hex(ea)}] Global name collision for '{g_n}'. Trying collisions...", 'warn')
                 for i in range(1, 15):
                     cand = f"{cl}_{i}"
                     if idc.get_name_ea_simple(cand) == idaapi.BADADDR:
@@ -200,15 +209,17 @@ def apply_var_renames(ea, suggestions, log_fn=None):
                         break
             
             flags = idc.SN_AUTO | getattr(idc, 'SN_NOWARN', 0x800)
-            if idc.set_name(gea, g_n, flags):
+            res = idc.set_name(gea, g_n, flags)
+            if res:
                 st.applied += 1
                 st.details[s_old]["success"] = True
                 st.details[s_old]["final_name"] = g_n
                 applied_names_map[s_old] = g_n
-                if log_fn: log_fn(f"  [{hex(ea)}] OK Global: '{s_old}' -> '{g_n}'", 'info')
+                if log_fn: log_fn(f"  [{hex(ea)}] SUCCESS Global: '{cur_name}' -> '{g_n}'", 'info')
             else:
                 st.failed += 1
                 st.details[s_old]["error"] = "Rejected global rename"
+                if log_fn: log_fn(f"  [{hex(ea)}] FAILED: idc.set_name(0x{gea:X}, '{g_n}') returned False", 'err')
 
         # 4. Update Comments
         if applied_names_map:
@@ -778,7 +789,9 @@ class BulkVariableRenamer(QDialog):
         self._scan_idx = 0     # index into temp_funcs for pseudocode scan pass
 
         self.setup_ui()
-        QTimer.singleShot(100, self.check_workflow_tip)
+        QTimer.singleShot(100, self.load_table_state)
+        QTimer.singleShot(200, self.check_workflow_tip)
+        self.update_button_states()
 
     def check_workflow_tip(self):
         msg = (
@@ -1110,6 +1123,17 @@ class BulkVariableRenamer(QDialog):
         else:
             fd.queue = 'clear'
             fd.status = 'Pending'
+            
+        # Load transient suggestions if available (tag 95)
+        stored_suggestions = load_from_idb(ea, tag=95)
+        if stored_suggestions:
+            try:
+                fd.var_suggestions = json.loads(stored_suggestions)
+                if fd.var_suggestions:
+                    fd.status = f"Done: {len(fd.var_suggestions)} suggestions"
+                    fd.queue = 'done'
+            except:
+                pass
         return fd
 
     def _finish_smart_load(self, funcs, kind):
@@ -1119,6 +1143,7 @@ class BulkVariableRenamer(QDialog):
             self.update_stats_label()
             self.update_button_states()
             self.add_log(f"Loaded {len(funcs)} {kind} function(s).", 'ok')
+            self.save_table_state()
         else:
             self.add_log(f"No {kind} functions found.", 'info')
 
@@ -1330,6 +1355,17 @@ class BulkVariableRenamer(QDialog):
                 fd.status = 'Already Renamed'
                 fd.checked = False
             
+            # Load transient suggestions if available (tag 95)
+            stored_suggestions = load_from_idb(ea, tag=95)
+            if stored_suggestions:
+                try:
+                    fd.var_suggestions = json.loads(stored_suggestions)
+                    if fd.var_suggestions:
+                        fd.status = f"Done: {len(fd.var_suggestions)} suggestions"
+                        fd.queue = 'done'
+                except:
+                    pass
+            
             raw_funcs.append(fd)
             seen_eas.add(ea)
 
@@ -1387,6 +1423,7 @@ class BulkVariableRenamer(QDialog):
         self.load_sub_btn.setEnabled(True)
         self.load_all_btn.setEnabled(True)
         self.update_button_states()
+        self.save_table_state()
 
     # -----------------------------------------------------------------------
     # Start rename
@@ -1409,6 +1446,7 @@ class BulkVariableRenamer(QDialog):
         self._last_cfg = self.build_cfg(self.pn_config)
 
         self._start_worker(items, is_retry=False)
+        self.save_table_state()
 
     def _start_worker(self, items, is_retry=False):
         for w in self.workers:
@@ -1494,6 +1532,8 @@ class BulkVariableRenamer(QDialog):
             'info' if promoted else 'warn'
         )
         self.model.sort(self.model.sort_col, self.model.sort_ord)
+        self.update_button_states()
+        self.save_table_state()
 
         if promoted:
             # Multi-round: keep promoting functions as their callees get renamed
@@ -1538,6 +1578,12 @@ class BulkVariableRenamer(QDialog):
                 continue
 
             func.var_suggestions = suggestions
+            
+            # Save suggestions to IDB for persistence (tag 95)
+            if suggestions:
+                save_to_idb(func.ea, json.dumps(suggestions), tag=95)
+            else:
+                delete_from_idb(func.ea, tag=95)
             if suggestions:
                 if auto_apply:
                     # Fix: Unpack 3 values
@@ -1566,6 +1612,7 @@ class BulkVariableRenamer(QDialog):
 
         self.model.sort(sort_col, sort_ord)
         self.update_stats_label()
+        self.save_table_state()
 
         # Enable Apply button only if there are pending (non-auto-applied) suggestions
         has_suggestions = any(f.var_suggestions for f in self.model.funcs)
@@ -1667,6 +1714,7 @@ class BulkVariableRenamer(QDialog):
         self.update_stats_label()
         if has_suggestions:
             self.apply_btn.setEnabled(True)
+        self.save_table_state()
 
     def stop_all(self):
         _ai_mod.AI_CANCEL_REQUESTED = True
@@ -1715,7 +1763,8 @@ class BulkVariableRenamer(QDialog):
                 f.status = f"Apply failed ({failed} variables)"
             
             f.applied_renames = results
-            f.var_suggestions = {} 
+            f.var_suggestions = {}
+            delete_from_idb(f.ea, tag=95)
             indices.append(i)
 
         self.model.refresh_rows(indices)
@@ -1726,6 +1775,7 @@ class BulkVariableRenamer(QDialog):
             'ok' if total_applied > 0 else 'warn'
         )
         self.update_button_states()
+        self.save_table_state()
 
     # -----------------------------------------------------------------------
     # Unload
@@ -1734,6 +1784,8 @@ class BulkVariableRenamer(QDialog):
         self.model.clear()
         self.temp_funcs = []
         self.update_stats_label()
+        self.update_button_states()
+        self.save_table_state()
         self.add_log("Table unloaded.", 'info')
         self.update_button_states()
 
@@ -1772,6 +1824,7 @@ class BulkVariableRenamer(QDialog):
                 f"Re-scanned {func.name}: sub_count={func.sub_count}, queue={func.queue}",
                 'info'
             )
+            self.save_table_state()
 
         rescan_action.triggered.connect(_rescan)
 
@@ -1866,6 +1919,7 @@ class BulkVariableRenamer(QDialog):
                     f"Applied {applied} rename(s) for {func.name}, {failed} failed.",
                     'ok'
                 )
+                self.save_table_state()
                 dlg.accept()
 
             apply_this_btn.clicked.connect(_apply_this)
@@ -1907,11 +1961,30 @@ class BulkVariableRenamer(QDialog):
                         suggestions_str,
                         f.status
                     ])
-            self.add_log(
-                f"Exported {len(self.model.filtered)} rows to {os.path.basename(path)}",
-                'ok'
-            )
-            QMessageBox.information(self, "Success", f"Data exported to:\n{path}")
+            self.add_log(f"Exported to {path}", 'info')
+        except Exception as ex:
+            self.add_log(f"Export failed: {ex}", 'err')
+
+    def save_table_state(self):
+        """Save current visible functions list for persistence."""
+        try:
+            eas = [str(f.ea) for f in self.model.funcs]
+            save_to_idb(idaapi.BADADDR, ",".join(eas), tag=94)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to export CSV: {str(e)}")
-            self.add_log(f"Export error: {str(e)}", 'err')
+            self.add_log(f"Error saving table state: {e}", 'warn')
+
+    def load_table_state(self):
+        """Restore table content from previous session."""
+        try:
+            stored = load_from_idb(idaapi.BADADDR, tag=94)
+            if not stored: return
+            eas = []
+            for s in stored.split(','):
+                if not s: continue
+                try: eas.append(int(s, 10))
+                except: pass
+            if eas:
+                self.load_eas(eas, append=False)
+                self.add_log(f"Restored {len(eas)} functions from previous session.", 'info')
+        except Exception as e:
+            self.add_log(f"Error loading table state: {e}", 'warn')

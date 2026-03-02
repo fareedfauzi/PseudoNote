@@ -50,7 +50,7 @@ class FuncData:
         self.queue = 'clear'
 
 class VirtualFuncModel(QAbstractTableModel):
-    HEADERS = ['', 'Address', 'Function Name', 'Tag', 'Confidence', 'Indicators', 'Queue', 'sub_* Count', 'Reason', 'Status']
+    HEADERS = ['', 'Address', 'Function Name', 'Tag', 'AI Confidence', 'Indicators', 'Queue', 'sub_* Count', 'Reason', 'Status']
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1591,7 +1591,7 @@ Do not pad with generic statements."""
         try:
             with open(path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(['Address', 'Name', 'Tag', 'Confidence', 'Indicators', 'Queue', 'sub_* Count', 'Reason', 'Status'])
+                writer.writerow(['Address', 'Name', 'Tag', 'AI Confidence', 'Indicators', 'Queue', 'sub_* Count', 'Reason', 'Status'])
                 for func in self.model.funcs:
                     writer.writerow([
                         hex(func.ea),

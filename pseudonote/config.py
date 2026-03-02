@@ -84,11 +84,23 @@ class Config:
         self.analyze_parallel_workers = 5
         self.analyze_cooldown = 22
 
-        # Deep Summarizer (Specific)
-        self.deep_batch_size = 10
+        # Deep Analyzer (Specific)
+        self.deep_batch_size = 5
         self.deep_parallel_workers = 1
         self.deep_cooldown = 0
         self.deep_max_lines = 200
+        
+        # New: Graph and analysis limits (Bug #4)
+        self.max_graph_nodes = 500
+        self.max_graph_depth = 15
+        self.max_callees_per_node = 64
+        self.max_queue_size = 5000
+        
+        # New: Thresholds for risk assessment (Bug #7)
+        self.high_confidence_threshold = 75
+        self.min_coverage_for_report = 80
+        self.malicious_confidence_cutoff = 75
+        self.max_graph_ascii_lines = 2500
 
         self.deep_do_var_rename = True
         self.deep_do_func_comment = True
@@ -109,6 +121,10 @@ class Config:
         self.rename_append_address = False
         self.rename_use_0x = False
         self.deep_use_0x = False
+        self.deep_use_prefix = True
+        self.deep_prefix = "da_"
+        self.deep_append_address = True
+        
         self.analyzer_use_prefix = True
         self.analyzer_prefix = "an_"
         self.analyzer_append_address = True
@@ -264,11 +280,23 @@ class Config:
             self.analyze_batch_size = parser.getint("Analysis", "ANALYZE_BATCH_SIZE", fallback=10)
             self.analyze_cooldown = parser.getint("Analysis", "ANALYZE_COOLDOWN", fallback=22)
 
-            # Deep Summarizer
+            # Deep Analyzer
             self.deep_batch_size = parser.getint("Analysis", "DEEP_BATCH_SIZE", fallback=10)
             self.deep_parallel_workers = parser.getint("Analysis", "DEEP_WORKERS", fallback=1)
             self.deep_cooldown = parser.getint("Analysis", "DEEP_COOLDOWN", fallback=0)
             self.deep_max_lines = parser.getint("Analysis", "DEEP_MAX_LINES", fallback=200)
+
+            # Limits
+            self.max_graph_nodes = parser.getint("Analysis", "MAX_GRAPH_NODES", fallback=500)
+            self.max_graph_depth = parser.getint("Analysis", "MAX_GRAPH_DEPTH", fallback=15)
+            self.max_callees_per_node = parser.getint("Analysis", "MAX_CALLEES", fallback=64)
+            self.max_queue_size = parser.getint("Analysis", "MAX_QUEUE", fallback=5000)
+
+            # Thresholds
+            self.high_confidence_threshold = parser.getint("Analysis", "HIGH_CONF_THRESH", fallback=75)
+            self.min_coverage_for_report = parser.getint("Analysis", "MIN_COV_REPORT", fallback=80)
+            self.malicious_confidence_cutoff = parser.getint("Analysis", "MAL_CONF_CUTOFF", fallback=75)
+            self.max_graph_ascii_lines = parser.getint("Analysis", "MAX_GRAPH_ASCII", fallback=2500)
 
             self.deep_do_var_rename = parser.getboolean("Analysis", "DEEP_VAR_RENAME", fallback=True)
             self.deep_do_func_comment = parser.getboolean("Analysis", "DEEP_FUNC_COMMENT", fallback=True)
@@ -379,11 +407,21 @@ class Config:
         parser.set("Analysis", "ANALYZE_WORKERS", str(self.analyze_parallel_workers))
         parser.set("Analysis", "ANALYZE_COOLDOWN", str(self.analyze_cooldown))
 
-        # Deep Summarizer
+        # Deep Analyzer
         parser.set("Analysis", "DEEP_BATCH_SIZE", str(self.deep_batch_size))
         parser.set("Analysis", "DEEP_WORKERS", str(self.deep_parallel_workers))
         parser.set("Analysis", "DEEP_COOLDOWN", str(self.deep_cooldown))
         parser.set("Analysis", "DEEP_MAX_LINES", str(self.deep_max_lines))
+
+        parser.set("Analysis", "MAX_GRAPH_NODES", str(self.max_graph_nodes))
+        parser.set("Analysis", "MAX_GRAPH_DEPTH", str(self.max_graph_depth))
+        parser.set("Analysis", "MAX_CALLEES", str(self.max_callees_per_node))
+        parser.set("Analysis", "MAX_QUEUE", str(self.max_queue_size))
+        
+        parser.set("Analysis", "HIGH_CONF_THRESH", str(self.high_confidence_threshold))
+        parser.set("Analysis", "MIN_COV_REPORT", str(self.min_coverage_for_report))
+        parser.set("Analysis", "MAL_CONF_CUTOFF", str(self.malicious_confidence_cutoff))
+        parser.set("Analysis", "MAX_GRAPH_ASCII", str(self.max_graph_ascii_lines))
 
         parser.set("Analysis", "DEEP_VAR_RENAME", str(self.deep_do_var_rename))
         parser.set("Analysis", "DEEP_FUNC_COMMENT", str(self.deep_do_func_comment))
