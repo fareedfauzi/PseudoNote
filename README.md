@@ -1,5 +1,7 @@
 PseudoNote is a plugin that uses an LLM to assist with malware reversing. It can also be used as a note-taking tool, as it supports Markdown for documenting findings for specific functions during the analysis process. All generated information, including notes and AI outputs, is saved directly in the binary's IDB file.
 
+The deep analyzer featurer are still work in progress btw.
+
 # PseudoNote Installation and Setup
 
 ### 1. Copy Files
