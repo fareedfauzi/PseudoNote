@@ -47,7 +47,7 @@ But after all these are the features:
 6. Bulk function analyzer.
 7. Fire and forget Deep Analyzer where it rename functions/variables and summarize everything. User need to choose the entry function to be analyze. WIP
 8. Ask the AI-chat about the current opened function.
-9. Automatically generate C function prototypes and type definitions.
+9. Automatically generate C function prototypee, type definitions, and struct (Mostly the result are not accurate).
 10. Analyst Notes - Integrated Markdown editor with live preview with markdown toolbar.
 11. Generate high-level, text-based execution tree graph flow.
 12. Insert section comments into the pseudocode and IDA-view assembly.
