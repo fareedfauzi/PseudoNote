@@ -92,21 +92,17 @@ IDA view:
 
 ## PHASE 2: DEEP MALICIOUS CODE ANALYSIS
 
-### STAGE 4 - Initial Code Analysis Assessment + Get Readable C code
+### STAGE 4 - Initial Code Analysis Assessment + Get Readable C code (SLOW)
 - Purpose: The primary "Read" phase.
 - Details: Processes functions individually to generate high-quality, readable C code. The AI performs a baseline assessment for every function, identifying technical indicators like encryption, networking, or file I/O.
 
-### STAGE 5 - Contextual Code Analysis Refinement
+### STAGE 5 - Contextual Code Analysis Refinement (SLOW)
 - Purpose: The "Understanding" phase (Top-Down).
-- -Details: Re-analyzes functions by providing the AI with "Caller Context." This tells the AI why a function is being called. It is used to upgrade or downgrade risk tags (e.g., a "benign" function that sends a buffer might be upgraded to "malicious" if the context shows it's sending a stolen password).
+- Details: Re-analyzes functions by providing the AI with "Caller Context." This tells the AI why a function is being called. It is used to upgrade or downgrade risk tags (e.g., a "benign" function that sends a buffer might be upgraded to "malicious" if the context shows it's sending a stolen password).
 
-### STAGE 6 - Code Analysis Report Synthesis
+### STAGE 6 - Initiate Report Generation
 - Purpose: The "Reporting" phase.
-- Details: Aggregates all individual function analyses into a cohesive summary. It generates the high-level sections:
-- Behavioral Indicators: Timeline of what the binary does.
-- Key Capabilities: High-level summaries (e.g., "Exfiltration via SMTP").
-- Risk Assessment: Final verdict on the binary's intent.
+- Details: Generate Summary, mermaid charts
 
-### STAGE 7 - Logic Flow Mapping (Execution Map)
-- Purpose: The "Final Visualization" phase.
-- Details: Synthesizes the final execution paths and generates the Mermaid/ASCII flow maps that appear at the end of the report, showing the logical progression of the malicious behavior from start to finish.
+### STAGE 7 - HTML Report GEneration
+- Details report analysis in HTML format
