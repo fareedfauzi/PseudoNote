@@ -510,9 +510,23 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
     suspicious_apis = {}  # Map for table format
 
     for node in graph.values():
+        # --- API scanning pass #1: always run for call-tree attribution ---
+        hits = get_api_tags_for_function(node.ea, getattr(node, "callees", []))
+        for cat, apis in hits.items():
+            sev = get_category_severity(cat)
+            for api in apis:
+                if api not in suspicious_apis:
+                    suspicious_apis[api] = {"category": cat, "severity": sev, "funcs": []}
+                if node.name not in suspicious_apis[api]["funcs"]:
+                    suspicious_apis[api]["funcs"].append(node.name)
+
+        # Skip library / compiler-generated functions from the decomposition report
+        if node.is_library:
+            continue
+
         safe_name = re.sub(r'[^A-Za-z0-9_]', '_', node.name)[:60]
         json_path = os.path.join(output_dir, "analysis", "%s_0x%X.json" % (safe_name, node.ea))
-        
+
         fd = {
             "name": node.name,
             "ea": node.ea,
@@ -521,57 +535,33 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             "confidence": getattr(node, "confidence", 0)
         }
 
-        # Retrieve JSON if exists
+        # Load analysis JSON if it exists
         try:
-            if node.is_library:
-                fd.update({
-                    "one_liner": "Standard library / compiler-generated helper function (skipped analysis).",
-                    "summary": "This function belongs to a known system module or was identified as compiler-generated boilerplate. It has been automatically classified as benign to focus analysis on custom logic.",
-                    "bullets": ["Automatic classification: Benign", "Source type: System/Compiler"],
-                    "risk_logic": "Verified via static name/signature matching against standard developer-tooling signatures.",
-                    "confidence": 100
-                })
-            elif os.path.isfile(json_path):
+            if os.path.isfile(json_path):
                 with open(json_path, "r", encoding="utf-8") as jf:
                     d = json.load(jf)
                 fd.update({k: d.get(k, fd.get(k)) for k in [
-                    "one_liner", "summary", "bullets", "suspicious", "risk_tag", 
-                    "return_value", "contextual_purpose", "risk_logic", 
+                    "one_liner", "summary", "bullets", "suspicious", "risk_tag",
+                    "return_value", "contextual_purpose", "risk_logic",
                     "capabilities", "semantic_tags", "confidence"
                 ]})
         except: pass
 
-        # Load generated readable code and raw decompiled for scanning
+        # Load generated readable code and raw decompiled code for the UI tabs
         rd = load_readable_from_disk(node.ea, node.name, output_dir)
         raw_decomp = load_decompiled_from_disk(node.ea, node.name, output_dir)
-        
-        if not rd:
-            rd = cleanup_decompiled_code(raw_decomp) if raw_decomp else ""
-        fd["code"] = rd
+        fd["code"] = rd if rd else (cleanup_decompiled_code(raw_decomp) if raw_decomp else "")
+        fd["raw_code"] = raw_decomp if raw_decomp else ""
 
-        # 1. Direct cross-reference / IDA call-tree analysis (Authoritative)
-        hits = get_api_tags_for_function(node.ea, getattr(node, "callees", []))
-        for cat, apis in hits.items():
-            # Get severity for this category from O(1) taxonomy map
-            sev = get_category_severity(cat)
-            
-            for api in apis:
-                if api not in suspicious_apis:
-                    suspicious_apis[api] = {"category": cat, "severity": sev, "funcs": []}
-                if node.name not in suspicious_apis[api]["funcs"]:
-                    suspicious_apis[api]["funcs"].append(node.name)
-
-        # 2. Holistic lexical scanning of RAW decompiled code (Catches dynamic/indirect calls)
-        # Rationale: User requested scanning RAW decomp instead of 'readable' variants to avoid AI hallucinations.
-        scan_source = raw_decomp if raw_decomp else (rd if not node.is_library else "")
+        # --- API scanning pass #2: lexical scan of raw decompiled code ---
+        # Catches dynamic/indirect calls missed by the static call-tree.
+        scan_source = raw_decomp if raw_decomp else rd
         if scan_source:
-            # Extract common C identifiers (tokens >= 4 chars)
             tokens = set(re.findall(r'\b([A-Za-z_][A-Za-z0-9_]{3,})\b', scan_source))
             for token in tokens:
                 token_l = token.lower()
                 if token_l in _API_MAP:
                     entry = _API_MAP[token_l]
-                    # Check if already caught by pass #1 (case-insensitive check)
                     already_caught = False
                     for existing_api in suspicious_apis.keys():
                         if existing_api.lower() == token_l:
@@ -579,11 +569,10 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
                                 suspicious_apis[existing_api]["funcs"].append(node.name)
                             already_caught = True
                             break
-                    
                     if not already_caught:
                         suspicious_apis[token] = {
-                            "category": entry["category"], 
-                            "severity": entry["severity"], 
+                            "category": entry["category"],
+                            "severity": entry["severity"],
                             "funcs": [node.name]
                         }
 
@@ -721,8 +710,29 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
     if isinstance(overview_json, dict):
         tech_narrative = overview_json.get("detailed_technical_overview", "")
     
+    def _format_ai_text(raw: str) -> str:
+        """Convert AI text with literal \n and \" sequences into proper HTML paragraphs."""
+        # Decode literal backslash-n and backslash-quote from the JSON string value
+        text = raw.replace('\\n', '\n').replace('\\"', '"').replace('\\t', ' ')
+        # Split on double-newlines → paragraph blocks
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        if not paragraphs:
+            return _escape_html(raw)
+        parts = []
+        for para in paragraphs:
+            # Numbered heading like "1. Title: rest" → bold label + rest
+            m = re.match(r'^(\d+\.\s*[^:]+:)(.*)$', para, re.DOTALL)
+            if m:
+                heading = _escape_html(m.group(1).strip())
+                body = _escape_html(m.group(2).strip()).replace('\n', '<br>')
+                parts.append(f'<p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">{heading}</strong> {body}</p>')
+            else:
+                body = _escape_html(para).replace('\n', '<br>')
+                parts.append(f'<p style="margin:0 0 10px 0;">{body}</p>')
+        return ''.join(parts)
+
     if tech_narrative:
-        tech_overview_html = f'<div class="ai-block" style="border-left-color:#3b82f6; white-space: pre-wrap; padding: 25px; line-height: 1.6;">{_escape_html(tech_narrative)}</div>'
+        tech_overview_html = f'<div class="ai-block" style="border-left-color:#3b82f6; padding: 25px; line-height: 1.7;">{_format_ai_text(tech_narrative)}</div>'
     else:
         # Fallback Narrative Plucking from raw text
         ov_text = sections.get("overview") or ""
@@ -742,7 +752,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
                 if ov_text.endswith('"'): ov_text = ov_text[:-1]
 
         ov_text = ov_text or "Technical analysis data absent or AI synthesis failed."
-        tech_overview_html = f'<div class="ai-block" style="border-left-color:#3b82f6; white-space: pre-wrap; padding: 25px; line-height: 1.6;">{_escape_html(str(ov_text))}</div>'
+        tech_overview_html = f'<div class="ai-block" style="border-left-color:#3b82f6; padding: 25px; line-height: 1.7;">{_format_ai_text(str(ov_text))}</div>'
 
     # --- 3. Execution Flow Overview (NEW)
     exec_flow_json = _parse_ai_json("execution_flow")
@@ -1305,9 +1315,23 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             <div class="fn-info-row"><b>Return Value:</b> {_escape_html(f.get("return_value") or "—")}</div>
             <div class="fn-info-row"><b>Risk Logic:</b> {_escape_html(f.get("risk_logic") or "—")}</div>
             {f'<div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;">{bullets}</ul></div>' if bullets else ''}
-            <details class="code-details">
-                <summary>Readable Code (Generated / Decompiled)</summary>
-                {code_block}
+            <details class="code-section" style="margin-top:12px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Original Decompiled (Hex-Rays)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">{_escape_html(f.get("raw_code", ""))}</code></pre>
+                </div>
+            </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>Readable Code (AI Generated)</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-c">{_escape_html(f.get("code", ""))}</code></pre>
+                </div>
             </details>
         </div>'''
 
@@ -1390,6 +1414,17 @@ pre {{ background:#1e1e1e; color:#d4d4d4; padding:15px; border-radius:8px; overf
 .mermaid .node {{ cursor: pointer !important; }}
 .filter-input {{ width:100%; padding:12px 15px; font-size:14px; border:1px solid #cbd5e1; border-radius:8px; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); }}
 .ai-block.code-like {{ font-family: 'Fira Code', 'JetBrains Mono', monospace; font-size: 13px; background:#0f172a; color:#e2e8f0; border-left-color:#60a5fa; }}
+/* Collapsible Code Sections (native details/summary) */
+.code-section {{ margin-top: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }}
+.code-section-header {{ display: flex; align-items: center; gap: 8px; background: #f8fafc; padding: 7px 14px; cursor: pointer; font-weight: 700; font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; user-select: none; list-style: none; transition: background 0.15s; }}
+.code-section-header::-webkit-details-marker {{ display: none; }}
+.code-section-header::marker {{ display: none; content: ''; }}
+.code-section-header:hover {{ background: #f1f5f9; color: var(--accent); }}
+.code-section-header svg {{ transition: transform 0.25s ease; flex-shrink: 0; }}
+details.code-section[open] > .code-section-header svg {{ transform: rotate(0deg); }}
+details.code-section:not([open]) > .code-section-header svg {{ transform: rotate(-90deg); }}
+.code-section-body pre {{ margin: 0; border-radius: 0; max-height: 600px; border: none; }}
+@keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(4px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 </style>
 </head>
 <body>
@@ -1601,6 +1636,7 @@ pre {{ background:#1e1e1e; color:#d4d4d4; padding:15px; border-radius:8px; overf
             }}, 2000);
         }});
     }}
+
 </script>
 </body>
 </html>'''
