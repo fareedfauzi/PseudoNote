@@ -64,6 +64,15 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 ### Bulk function analyzer
 <img width="1402" height="982" alt="image" src="https://github.com/user-attachments/assets/65c3c249-2b68-4a12-b047-30a18b023cf7" />
 
+### Bulk variable renamer
+<img width="1302" height="932" alt="image" src="https://github.com/user-attachments/assets/af13bded-dc83-4c23-ba84-86fb83889a7f" />
+
+### Deep Analyzer
+<img width="1202" height="832" alt="image" src="https://github.com/user-attachments/assets/1abf3bae-7ce0-436e-98e9-9a35fef04c87" />
+
+### Deep Analyzer Report
+Refer deep_analyzer_example_report.html
+
 ### Call highlighter (IDA view and Pseudocode)
 <img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
 
@@ -71,7 +80,7 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 - Tested only on msvenom generated shellcode
 <img width="1528" height="915" alt="image" src="https://github.com/user-attachments/assets/e4230ec5-5dc9-4070-bbf3-4f283d1fb6ae" />
 
-# Deep Analyzer Approach (WIP)
+# Deep Analyzer Approach
 ## PHASE 1: DISCOVERY & PREPARATION
 ### STAGE 1 - Environment Setup
 - Initializes the workspace directories, detects the target binary path from IDA, and validates that all dependencies and AI configurations are ready.
