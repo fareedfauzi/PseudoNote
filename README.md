@@ -26,31 +26,24 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 ### 4. Usage
 **Right-Click**: See options in Pseudocode/Disassembly.
 
-Pseudocode view:
-
-<img width="1511" height="819" alt="image" src="https://github.com/user-attachments/assets/45523f17-8010-47c1-bd6e-8f54af576028" />
-
-IDA view:
-
-<img width="1145" height="930" alt="image" src="https://github.com/user-attachments/assets/0dc19be7-3dd5-49f0-8ed4-cadc16f87e09" />
-
-
 # Features
 1. Convert HexRay's Pseudocode or Assembly into high-level languages such as C. Python, Rust, and others.
 3. Automatically rename functions and variables with meaningful names.
 4. Provide function explaination, details analysis.
-5. Bulk functions renamer.
-6. Ask the AI-chat about the current opened function.
-7. Automatically generate C function prototypes and type definitions.
-8. Analyst Notes - Integrated Markdown editor with live preview with markdown toolbar.
-9. Generate high-level, text-based execution tree graph flow.
-10. Insert section comments into the pseudocode and IDA-view assembly.
+5. Bulk functions renamer and variable renamer.
+6. Bulk function analyzer.
+7. Fire and forget Deep Analyzer where it rename functions/variables and summarize everything. User need to choose the entry function to be analyze. WIP
+8. Ask the AI-chat about the current opened function.
+9. Automatically generate C function prototypes and type definitions.
+10. Analyst Notes - Integrated Markdown editor with live preview with markdown toolbar.
+11. Generate high-level, text-based execution tree graph flow.
+12. Insert section comments into the pseudocode and IDA-view assembly.
     - In the IDA disassembly view, there is also an option to use the currently highlighted/selected range. That selected range will be sent to the LLM (Suitable for shellcode analysis).
-12. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
-13. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio.
+13. Highlight call and jump instructions in IDA-view and function calls in Pseudocode view.
+14. Supports OpenAI, Claude, Gemini, DeepSeek, and local LLMs such as Ollama and LM Studio.
     - Currently, only OpenAI, LM Studio, and OpenAI-compatible providers have been fully tested.
     - Anthropic, Gemini, DeepSeek, and Ollama have not yet been tested.
-14. Save all generated data directly into the IDA database (.idb).
+15. Save all generated data directly into the IDA database (.idb).
 
 # GUI
 ### Pseudonote Pane
@@ -78,11 +71,10 @@ IDA view:
 - Tested only on msvenom generated shellcode
 <img width="1528" height="915" alt="image" src="https://github.com/user-attachments/assets/e4230ec5-5dc9-4070-bbf3-4f283d1fb6ae" />
 
-# Deep Analyzer 
+# Deep Analyzer Approach (WIP)
 ## PHASE 1: DISCOVERY & PREPARATION
 ### STAGE 1 - Environment Setup
-- Purpose: Bootstraps the analysis environment.
-- Details: Initializes the workspace directories, detects the target binary path from IDA, and validates that all dependencies and AI configurations are ready.
+- Initializes the workspace directories, detects the target binary path from IDA, and validates that all dependencies and AI configurations are ready.
 
 ### STAGE 2 - Recursive Call Graph Discovery
 - Purpose: Maps the entire "territory" of the binary.
@@ -90,7 +82,7 @@ IDA view:
 
 ### STAGE 3 - Initial Function & Variable Renaming
 - Purpose: Eliminates generic IDA names (e.g., sub_401000).
-- Details: Uses a "Bottom-Up" approach (starting with leaf functions) to provide initial descriptive names and meaningful variable names (e.g., v1 $\rightarrow$ socket_fd). This sets the stage for the deeper analysis.
+- Details: Uses a "Bottom-Up" approach (starting with leaf functions) to provide initial descriptive names and meaningful variable names (e.g., v1 -> socket_fd). This sets the stage for the deeper analysis.
 
 ## PHASE 2: DEEP MALICIOUS CODE ANALYSIS
 
@@ -100,11 +92,11 @@ IDA view:
 
 ### STAGE 5 - Contextual Code Analysis Refinement (SLOW)
 - Purpose: The "Understanding" phase (Top-Down).
-- Details: Re-analyzes functions by providing the AI with "Caller Context." This tells the AI why a function is being called. It is used to upgrade or downgrade risk tags (e.g., a "benign" function that sends a buffer might be upgraded to "malicious" if the context shows it's sending a stolen password).
+- Details: Re-analyzes functions by providing the AI with "Caller Context". This tells the AI why a function is being called. It is used to upgrade or downgrade risk tags (e.g., a "benign" function that sends a buffer might be upgraded to "malicious" if the context shows it's sending a stolen password).
 
 ### STAGE 6 - Initiate Report Generation
 - Purpose: The "Reporting" phase.
-- Details: Generate Summary, mermaid charts
+- Details: Generate Summary, function analysis, ioc extraction, strings analysis, mermaid charts
 
-### STAGE 7 - HTML Report GEneration
+### STAGE 7 - HTML Report Generation
 - Details report analysis in HTML format
