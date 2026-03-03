@@ -62,7 +62,7 @@ def _pn_rename_callback(address, view, response):
         print(f"[PseudoNote] Rename Variables: failed to import var_renamer: {e}")
         return
 
-    applied, failed = apply_var_renames(func.start_ea, names, log_fn=None)
+    applied, failed, _ = apply_var_renames(func.start_ea, names, log_fn=None)
     if applied > 0:
         idaapi.execute_sync(lambda: save_to_idb(func.start_ea, "variables_renamed", tag=86), idaapi.MFF_WRITE)
 

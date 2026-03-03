@@ -1195,7 +1195,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
           <summary style="padding:10px 15px; background:#f8fafc; cursor:pointer; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
             <span style="display:flex; align-items:center; gap:8px;">
               <svg style="width:16px; height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-              Raw Mermaid Source Code (Export to mermaid.live)
+              Raw Mermaid Source Code (Export to www.mermaidonline.live)
             </span>
             <button onclick="copyMermaidCode(event)" style="background:#4f46e5; color:white; border:none; padding:5px 15px; border-radius:6px; font-size:12px; cursor:pointer; font-weight:600; transition:0.2s;">Copy Code</button>
           </summary>
@@ -1653,21 +1653,22 @@ details.code-section:not([open]) > .code-section-header svg {{ transform: rotate
 
 
 # ===========================================================================
-# STUBBED LEGACY MARKDOWN & PDF EXPORTS 
-# (Kept purely for deep_analyzer.py compatibility)
+# LEGACY MARKDOWN COMPATIBILITY SHIMS
+# The report pipeline is HTML-only (report.html). These stubs exist solely
+# so deep_analyzer.py call-sites continue to work without modification.
+# summary.md is no longer written or consumed by any part of the pipeline.
 # ===========================================================================
 
 def write_markdown_header(output_dir, name, entry_ea, total_count=0, ts=""):
+    """Returns a header string used as a markdown_updated_signal payload."""
     return f"# Malware Analysis Report: {name} (0x{entry_ea:X})\n**Date:** {ts}\n**Total Functions:** {total_count}\n\n"
 
 def append_function_to_markdown(*args, **kwargs): pass
 
-def finalize_markdown(output_dir, graph, summary_msg, entry_ea):
-    # Backward compatibility stub
-    pass
+def finalize_markdown(output_dir, graph, summary_msg, entry_ea): pass
 
 def build_function_markdown_piece(ea, node, res_data, graph, code=None):
-    """Fallback markdown builder for intermediate worker updates."""
+    """Returns a minimal markdown snippet used as a markdown_updated_signal payload."""
     risk = (res_data.get("risk_tag") or "benign").upper()
     summ = res_data.get("one_liner") or res_data.get("summary") or "No detail available."
     return f"### {node.name} (0x{ea:X}) [{risk}]\n**Summary:** {summ}\n\n"

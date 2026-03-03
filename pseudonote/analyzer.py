@@ -269,8 +269,40 @@ class AnalyzeWorker(QThread):
         self.running = True
         self.is_retry = is_retry
 
-    def stop(self):
-        self.running = False
+    def stop(self): self.running = False
+    
+    def calculate_entropy(self, ea):
+        """Estimate entropy of function's bytes."""
+        try:
+            import math, ida_bytes
+            f = ida_funcs.get_func(ea)
+            if not f: return 0.0
+            size = f.size()
+            if size == 0: return 0.0
+            
+            data = ida_bytes.get_bytes(f.start_ea, size)
+            if not data: return 0.0
+            
+            counts = [0] * 256
+            for b in data:
+                counts[b if isinstance(b, int) else ord(b)] += 1
+            
+            ent = 0.0
+            for c in counts:
+                if c > 0:
+                    p = float(c) / size
+                    ent -= p * math.log(p, 2)
+            return ent
+        except: return 0.0
+
+    def calculate_complexity(self, ea):
+        """Estimate complexity based on instruction count."""
+        try:
+            count = 0
+            for _ in idautils.FuncItems(ea):
+                count += 1
+            return count
+        except: return 0
 
     def run(self):
         done = 0
@@ -341,7 +373,15 @@ class AnalyzeWorker(QThread):
                                     names_cache[ea] = idc.get_func_name(ea)
                 idaapi.execute_sync(_get_callees, idaapi.MFF_READ)
                 
-                tax_risk, tax_conf, tax_reason = derive_risk_from_api_tags(func.ea, all_callees, names_map=names_cache, detailed=True)
+                # Calculate entropy and complexity for smoking-gun heuristics
+                ent = self.calculate_entropy(func.ea)
+                comp = self.calculate_complexity(func.ea)
+                
+                tax_risk, tax_conf, tax_reason = derive_risk_from_api_tags(
+                    func.ea, all_callees, names_map=names_cache, 
+                    detailed=True, strings=func.strings,
+                    entropy=ent, complexity=comp
+                )
             except Exception as e:
                 self.log.emit(f"Taxonomy check error for {hex(func.ea)}: {str(e)}", 'warn')
 

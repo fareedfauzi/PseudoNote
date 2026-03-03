@@ -275,11 +275,11 @@ class IDAChatForm(ida_kernwin.PluginForm):
         # Load messages from IDB
         self.history = []
         saved_history = load_from_idb(self.address, tag=CHAT_HISTORY_TAG)
-        if saved_history:
+        if saved_history and saved_history.strip():
             try:
                 self.history = json.loads(saved_history)
             except Exception as e:
-                LOGGER.error(f"Failed to load chat history: {e}")
+                LOGGER.log(f"Failed to load chat history: {e}")
         
         if not self.history:
             self.history = [self.system_prompt]
@@ -401,7 +401,7 @@ class IDAChatForm(ida_kernwin.PluginForm):
         try:
             save_to_idb(self.address, json.dumps(self.history), tag=CHAT_HISTORY_TAG)
         except Exception as e:
-            LOGGER.error(f"Failed to save chat history: {e}")
+            LOGGER.log(f"Failed to save chat history: {e}")
 
     def clear_chat(self):
         if not ida_kernwin.ask_yn(ida_kernwin.ASKBTN_NO, "Clear chat?") == idaapi.ASKBTN_YES:

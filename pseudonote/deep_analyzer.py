@@ -3302,14 +3302,6 @@ class AnalysisWorker(QThread):
             header = write_markdown_header(output_dir, entry_name, self.entry_ea, total_total, ts)
             if header:
                 self.markdown_updated_signal.emit(header)
-                # Add Stage 4 Sub-header
-                md_path = os.path.join(output_dir, "summary.md")
-                try:
-                    with open(md_path, "a", encoding="utf-8") as f:
-                        f.write("\n\n## Stage 4: Initial Code Analysis Assessment + Get Readable C code\n")
-                        f.write("Baseline understanding of functions, traversing from leaf routines to parent functions.\n")
-                except Exception as e:
-                    log_fn(f"   [!] Warning: Could not update summary.md header: {e}", "warn")
 
             # Circular Wave Discovery
             candidate_eas = [n.ea for n in candidates]

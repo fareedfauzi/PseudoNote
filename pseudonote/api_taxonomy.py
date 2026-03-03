@@ -224,7 +224,10 @@ def derive_risk_from_api_tags(
     ea: int, 
     callees: Union[List[int], Dict[int, Any]], 
     names_map: Optional[Dict[int, str]] = None,
-    detailed: bool = False
+    detailed: bool = False,
+    strings: Optional[List[str]] = None,
+    entropy: float = 0.0,
+    complexity: int = 0
 ) -> Union[str, Tuple[str, int, str]]:
     """
     Derive a risk tag using malware_api_tags taxonomy + combination rules.
@@ -235,6 +238,9 @@ def derive_risk_from_api_tags(
         names_map: Optional precomputed EA -> name mapping
         detailed: If True, returns a tuple of (risk_level, confidence, reason). 
                   If False, strictly returns a string risk_level (for backwards compatibility).
+        strings: Optional list of strings associated with the function for cross-referencing.
+        entropy: Calculated Shannon entropy of the function's bytes (or data).
+        complexity: Cyclomatic complexity or instruction count.
         
     Returns:
         Risk level string: 'malicious', 'suspicious', or 'benign' (if detailed=False).
@@ -247,23 +253,26 @@ def derive_risk_from_api_tags(
     callees_list = _extract_callees_list(ea, callees)
     
     # Bug #5 Edge case: No data for evaluation
-    if not callees_list:
-        return ("benign", 0, "insufficient_data (no callees to analyze)") if detailed else "benign"
+    if not callees_list and not strings:
+        return ("benign", 0, "insufficient_data (no callees/strings)") if detailed else "benign"
 
     hits = get_api_tags_for_function(ea, callees_list, names_map)
     
     # Confirmed parsed but no bad hits found
-    if not hits:
+    if not hits and not strings and entropy < 5.0:
         return ("benign", 80, "confirmed_benign") if detailed else "benign"
 
     max_sev = 0
     trigger_reasons = []
+    found_smoking_gun = False
 
+    # 1. API Analysis
     for cat in hits.keys():
         sev = get_category_severity(cat)
         max_sev = max(max_sev, SEVERITY_ORDER.get(sev, 0))
         trigger_reasons.append(f"API Category: {cat}")
 
+    # 2. Combination Rules
     combos = evaluate_combination_rules(hits)
     for combo in combos:
         sev = str(combo.get("severity", "LOW")).upper()
@@ -272,11 +281,51 @@ def derive_risk_from_api_tags(
         max_sev = max(max_sev, SEVERITY_ORDER.get(sev, 0))
         trigger_reasons.append(f"Rule: {combo.get('name')}")
 
+    # 3. API + String + Entropy Combo (Smoking Gun Heuristics)
+    # This escalates risk for lightweight triage without needing full AI reasoning
+    if strings:
+        # Persistence + Registry Key (e.g. Run key)
+        if ("Persistence" in hits or "Registry" in hits) and any(x in str(s).lower() for s in strings for x in ["\\run", "currentversion", "software\\microsoft", "runonce"]):
+            max_sev = max(max_sev, SEVERITY_ORDER["HIGH"])
+            trigger_reasons.append("Smoking Gun: Persistence API + Registry Run Key")
+            found_smoking_gun = True
+        
+        # C2/Network + IP/URL
+        if ("C2" in hits or "Network" in hits) and any(re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b|https?://', str(s)) for s in strings):
+            max_sev = max(max_sev, SEVERITY_ORDER["HIGH"])
+            trigger_reasons.append("Smoking Gun: Network API + IP/URL Indicator")
+            found_smoking_gun = True
+            
+        # Stealer/Auth + sensitive strings
+        if ("Credential" in hits or "Stealer" in hits) and any(x in str(s).lower() for s in strings for x in ["password", "login", "cookie", "token", "auth"]):
+            max_sev = max(max_sev, SEVERITY_ORDER["HIGH"])
+            trigger_reasons.append("Smoking Gun: Stealer API + Sensitive Keyword")
+            found_smoking_gun = True
+
+    if entropy > 6.5 and ("Crypto" in hits or "Compression" in hits):
+        max_sev = max(max_sev, SEVERITY_ORDER["HIGH"])
+        trigger_reasons.append(f"Smoking Gun: Crypto API + High Entropy ({entropy:.2f})")
+        found_smoking_gun = True
+    elif entropy > 7.2:
+        max_sev = max(max_sev, SEVERITY_ORDER["MEDIUM"])
+        trigger_reasons.append(f"High Entropy Data Detected ({entropy:.2f})")
+
+    if complexity > 100:
+        # Large complex functions are suspicious in packed/obfuscated code
+        max_sev = max(max_sev, SEVERITY_ORDER["MEDIUM"])
+        trigger_reasons.append(f"High Code Complexity ({complexity})")
+
     reason_str = "; ".join(trigger_reasons)
 
     if max_sev >= 2:
-        return ("malicious", 90, reason_str) if detailed else "malicious"
+        conf = 95 if found_smoking_gun else 90
+        return ("malicious", conf, reason_str) if detailed else "malicious"
     if max_sev == 1:
-        return ("suspicious", 70, reason_str) if detailed else "suspicious"
+        return ("suspicious", 65, reason_str) if detailed else "suspicious"
     
-    return ("benign", 80, reason_str) if detailed else "benign"
+    # If we have some low-severity hits but nothing reached MEDIUM
+    if trigger_reasons:
+        return ("benign", 60, reason_str) if detailed else "benign"
+    
+    return ("benign", 85, "no_indicators") if detailed else "benign"
+

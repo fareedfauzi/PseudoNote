@@ -42,7 +42,7 @@ MAX_CODE_CHARS = 10000
 MAX_ASM_LINES = 50
 MAX_STRINGS_PER_FUNC = 8
 MAX_STRING_LEN = 120
-MIN_STRING_LEN = 3
+MIN_STRING_LEN = 5
 MAX_CALLS_PER_FUNC = 10
 MAX_API_RETRIES = 5
 INITIAL_COOLDOWN_SECONDS = 120
@@ -514,15 +514,23 @@ def get_code_fast(ea, max_len=5000, asm_max=25):
 def get_strings_fast(ea):
     result = [[]]
     def _get_strings():
+        import ida_nalt
         r = []
         try:
             for item in idautils.FuncItems(ea):
                 for xref in idautils.DataRefsFrom(item):
-                    s = idc.get_strlit_contents(xref)
+                    # Try standard C strings first
+                    s = idc.get_strlit_contents(xref, -1, ida_nalt.STRTYPE_C)
+                    if not s:
+                        # Fallback to Unicode (UTF-16)
+                        s = idc.get_strlit_contents(xref, -1, ida_nalt.STRTYPE_UNICODE)
+                    
                     if s:
                         try:
-                            s = s.decode() if isinstance(s, bytes) else s
-                            if MIN_STRING_LEN < len(s) < MAX_STRING_LEN: r.append(s[:50])
+                            s = s.decode('utf-16' if b'\x00' in s[1:2] else 'utf-8', 'ignore') if isinstance(s, bytes) else s
+                            s = s.strip()
+                            if MIN_STRING_LEN <= len(s) < MAX_STRING_LEN: 
+                                r.append(s[:50])
                         except: pass
                 if len(r) >= MAX_STRINGS_PER_FUNC: break
         except: pass
@@ -583,7 +591,7 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None, on_cooldown=
             data['temperature'] = 0.1
 
 
-    for attempt in range(2):
+    for attempt in range(MAX_API_RETRIES):
         try:
             if HAS_REQUESTS and SESSION:
                 if on_chunk:
@@ -853,7 +861,6 @@ class VirtualFuncModel(QAbstractTableModel):
         elif col == 7: # Status
             self.filtered.sort(key=lambda i: self.funcs[i].status.lower(), reverse=reverse)
             
-        self.layoutChanged.emit()
         self.endResetModel()
 
     def rowCount(self, p=QModelIndex()): return len(self.filtered)
@@ -1235,7 +1242,6 @@ class BulkRenamer(QDialog):
         self.func_iter = None
         self.temp_funcs = []
         self.scanned = 0
-        self.workers = []
         self.existing_names = set()
         self.setup_ui()
         QTimer.singleShot(100, self.load_table_state)
@@ -1928,7 +1934,6 @@ class BulkRenamer(QDialog):
                 # Matching Logic
                 is_match = False
                 if self.load_mode == 'metadata':
-                    from pseudonote.idb_storage import load_from_idb
                     marker = load_from_idb(ea, tag=83)
                     # Only match if marked AND currently doesn't start with sub_
                     is_match = (marker == "renamed_by_pseudonote" and not name.startswith("sub_"))
@@ -2004,7 +2009,7 @@ class BulkRenamer(QDialog):
                     parts = stored.split('|', 1)
                     if len(parts) == 2:
                         fd.suggested = parts[0]
-                        fd.score = int(parts[1]) if parts[1].isdigit() else 0
+                        fd.score = parts[1]  # Keep as str (e.g. "85%") to match load_batch / sort / display expectations
                         fd.status = 'Cached'
                         fd.queue = 'done'
                 funcs.append(fd)
@@ -2095,25 +2100,7 @@ class BulkRenamer(QDialog):
         batch_size = getattr(self.pn_config, 'batch_size', 10)
         num_workers = getattr(self.pn_config, 'parallel_workers', 1)
         sys_prompt = self.get_system_prompt(batch_size > 1)
-        for w in self.workers:
-            w.stop()
-        self.workers = []
 
-        self.existing_names = self.get_existing()
-        
-        # UI State: Analysing
-        self.analyze_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
-        self.sel_good_btn.setEnabled(False)
-        self.apply_btn.setEnabled(False) # Also grey out apply while analysing
-        
-        self.progress.setVisible(True)
-        self.progress.setRange(0, len(items))
-        self.progress.setValue(0)
-
-        batch_size = getattr(self.pn_config, 'batch_size', 10)
-        num_workers = getattr(self.pn_config, 'parallel_workers', 1)
-        sys_prompt = self.get_system_prompt(batch_size > 1)
 
         chunk_size = max(1, len(items) // num_workers)
         chunks = [items[i:i+chunk_size] for i in range(0, len(items), chunk_size)]
@@ -2248,7 +2235,6 @@ class BulkRenamer(QDialog):
 
                 # Live Auto-Apply
                 if self.auto_apply_cb.isChecked():
-                    from pseudonote.idb_storage import save_to_idb, load_from_idb
                     # Store original name if not already stored (tag 82)
                     orig = load_from_idb(func.ea, tag=82)
                     if not orig:
