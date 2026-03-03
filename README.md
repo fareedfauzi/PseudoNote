@@ -140,10 +140,3 @@ Refer deep_analyzer_example_report.html
 # Bulk function analyzer approach
 <img width="7745" height="21970" alt="mermaid-diagram-2026-03-02T23-53-59" src="https://github.com/user-attachments/assets/bfbf9d01-36a1-4e79-ae35-42789a4a9a92" />
 
-# Bulk function renamer approach
-<img width="7114" height="16843" alt="mermaid-diagram-2026-03-03T00-01-25" src="https://github.com/user-attachments/assets/90e86a4b-3b98-4c58-94d6-3ebccaa153bc" />
-
-# Bulk variable rename approach
-<img width="7853" height="18779" alt="mermaid-diagram-2026-03-03T00-02-30" src="https://github.com/user-attachments/assets/45938b37-7526-46c3-a66e-54d730d795ab" />
-
-
