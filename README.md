@@ -36,7 +36,18 @@ Several the core analysis modes including
 4. Bulk Variable renamer `/var_renamer.py` - Rename variables in multiple functions at once
 5. Pseudonote pane - For generating readable high level codes and note taking utility.
 
-But after all these are the features:
+What's the different between Bulk Analyzer and Deep Analyzer?
+| Aspect              | Bulk Function Analyzer                                     | Deep Analyzer                                   |
+|---------------------|----------------------------------------------------|--------------------------------------------------------------|
+| **Purpose**         | Standard per-function AI tagging & classification  | Full binary deep-dive with call graph + staged AI analysis   |
+| **Scope**           | Flat list of functions (batch AI requests)         | Recursive call graph built from an entry point               |
+| **Analysis Depth**  | Single-pass, one batch per function set            | Multi-stage pipeline (Stages 1–6+) bottom-up traversal       |
+| **AI Usage**        | Tag/classify functions in batches                  | Per-function deep prompts, C2/backdoor detection, reports    |
+| **Output**          | Updates tag/confidence in the UI table             | Full HTML forensic report, decompiled artifacts saved to disk |
+| **Call Graph**      | No. works on a flat function list                 | Yes. Maps the entire callee tree       |
+
+
+But after all these are the features included:
 1. Convert HexRay's Pseudocode or Assembly into high-level languages such as C. Python, Rust, and others.
 3. Automatically rename functions and variables with meaningful names.
 4. Provide function explaination, details analysis.
@@ -78,7 +89,7 @@ But after all these are the features:
 <img width="1302" height="932" alt="image" src="https://github.com/user-attachments/assets/af13bded-dc83-4c23-ba84-86fb83889a7f" />
 
 ### Deep Analyzer
-<img width="1202" height="832" alt="image" src="https://github.com/user-attachments/assets/1abf3bae-7ce0-436e-98e9-9a35fef04c87" />
+<img width="1920" height="1009" alt="image" src="https://github.com/user-attachments/assets/aeed6ab4-151f-49d1-a737-402eec369350" />
 
 ### Deep Analyzer Report
 Refer deep_analyzer_example_report.html
