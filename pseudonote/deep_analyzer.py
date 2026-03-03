@@ -2241,114 +2241,150 @@ def detect_sibling_patterns(node, graph):
 
 def determine_risk_with_context(node, result, context, graph):
     """Determine final risk using both local analysis and contextual information.
-    
-    Strict logic to avoid 'Malware Hallucination':
-    - Explicit ignore-list for CRT/compiler boilerplate.
-    - No upgrade to 'malicious' without at least one local technical indicator.
+
+    STRICT MODE — guards against malware hallucination:
+    - Local indicator must be HIGH quality (not just any API hit).
+    - At least 2 independent upgrade conditions must fire simultaneously.
+    - Minimum confidence thresholds enforced before assigning malicious/suspicious.
+    - Small functions (< 8 pseudocode lines) cannot be upgraded to malicious.
+    - Downgrade protection extended to depth > 2.
     """
     risk = result.get("risk_tag", "benign")
     suspicious = result.get("suspicious", [])
-    
-    # 0. EXCEPTION: PROTECT COMPILER/RUNTIME STUBS
-    # These are often flagged because they are caller-parents or depth-1
+    confidence = result.get("confidence", 0)
+
+    # ── 0. CRT / COMPILER STUB HARD BYPASS ────────────────────────────────────
     crt_stubs = [
         '__chkstk', '_fpreset', 'mainCRTStartup', '_start', '__main', 'TlsGetValue',
         '__mingw', '_init_', '_fini_', 'bad_alloc', 'bad_cast', 'exception',
         '_acmdln', '_p__acmdln', 'get_osfhandle', '_isatty', '_setmode', '_cinit',
         '_set_invalid_parameter_handler', '_invalid_parameter', '_pei386_runtime_relocator',
-        '_encode_pointer', '_decode_pointer', 'IsProcessorFeaturePresent'
+        '_encode_pointer', '_decode_pointer', 'IsProcessorFeaturePresent',
+        # Extended stubs
+        'atexit', '__security_init_cookie', '__security_check_cookie',
+        '__CxxFrameHandler', '_purecall', '__acrt_', 'wcrtomb', 'mbrtowc',
+        'memset', 'memcpy', 'memmove', 'memcmp', 'strlen', 'strcpy', 'strcmp',
     ]
     if any(stub in node.name for stub in crt_stubs):
-        # Forced downgrade for known safe stubs unless they are hijacked (rare)
         result["risk_tag"] = "benign"
         result["suspicious"] = []
         return result
 
-    # Get malicious analysis markers and patterns
+    # ── 1. FUNCTION SIZE FLOOR ─────────────────────────────────────────────────
+    # Tiny functions cannot carry enough evidence to be classified malicious.
+    func_lines = getattr(node, 'line_count', 0) or 0
+    if func_lines < 8 and risk != "malicious":
+        # Tiny functions: cap at suspicious at most
+        if risk == "malicious":
+            risk = "suspicious"
+
+    # ── 2. MARKER / PATTERN COMPUTATION ───────────────────────────────────────
     malicious_markers = get_malicious_context_semantic(node, graph)
-    sibling_patterns = detect_sibling_patterns(node, graph)
-    
-    # Store in result for summary generation
+    sibling_patterns  = detect_sibling_patterns(node, graph)
+
     result["context_markers"] = malicious_markers
-    result["pattern_matches"] = sibling_patterns
-    
-    # ═══════════════════════════════════════════════════════════════
-    # UPGRADE CONDITIONS (benign/suspicious → malicious)
-    # ═══════════════════════════════════════════════════════════════
-    
-    upgrade_to_malicious = False
-    upgrade_reasons = []
-    
-    # REQUIREMENT: For any upgrade to 'malicious', we require at least ONE
-    # local technical indicator (suspicious string, API hit, or high entropy),
-    # or a very specific behavior pattern.
+    result["pattern_matches"]  = sibling_patterns
+
+    # ── 3. STRICT LOCAL INDICATOR DEFINITION ──────────────────────────────────
+    # No longer satisfied by any API hit — requires HIGH severity or multiple items.
+    api_hits = get_api_tags_for_function(node.ea, node.callees if hasattr(node, 'callees') else [])
+    has_high_severity_api = any(
+        _CATEGORY_TO_SEVERITY.get(cat, "LOW") == "HIGH"
+        for cat in api_hits
+    ) if api_hits else False
+
     has_local_indicator = (
-        len(suspicious) > 0 or 
-        (node.entropy and node.entropy > 6.5) or
-        get_api_tags_for_function(node.ea, node.callees if hasattr(node, 'callees') else [])
+        len(suspicious) >= 2 or                             # 2+ suspicious items (not just 1)
+        (node.entropy and node.entropy > 7.0) or            # raised from 6.5
+        has_high_severity_api                               # only HIGH-severity API
     )
 
-    # Condition 1: Direct child of entry + sensitive operation
-    if node.depth == 1 and has_local_indicator:
-        if malicious_markers:
-            upgrade_to_malicious = True
-            upgrade_reasons.append(f"Entry-level function with sensitive operation: {malicious_markers[0]}")
-    
-    # Condition 2: Part of known attack pattern (High confidence)
-    if sibling_patterns:
-        # Sibling patterns are strong indicators
-        upgrade_to_malicious = True
+    # ── 4. UPGRADE CONDITIONS (each fires independently, counted) ─────────────
+    conditions_fired = 0
+    upgrade_reasons  = []
+
+    # Condition 1: Direct child of entry + sensitive operation + local indicator
+    if node.depth == 1 and has_local_indicator and malicious_markers:
+        conditions_fired += 1
+        upgrade_reasons.append(f"Entry-level function with sensitive operation: {malicious_markers[0]}")
+
+    # Condition 2: Part of known attack pattern AND local indicator required
+    if sibling_patterns and has_local_indicator:          # ← now requires local indicator too
+        conditions_fired += 1
         for pattern in sibling_patterns:
             upgrade_reasons.append(f"Part of attack pattern: {pattern}")
-    
-    # Condition 3: Supports malicious caller (TRANSITIVITY - USE WITH CAUTION)
-    # Only upgrade if it actually has SOME local suspicion
+
+    # Condition 3: Supports a malicious direct caller (1-hop only, with local indicator)
     if has_local_indicator:
         for caller_ea in node.callers:
             if caller_ea not in graph:
                 continue
-            
-            caller = graph[caller_ea]
             caller_raw = load_from_idb(caller_ea, tag=85)
             if caller_raw:
                 try:
                     caller_data = json.loads(caller_raw)
                     if caller_data.get("risk_tag") == "malicious":
-                        upgrade_to_malicious = True
-                        upgrade_reasons.append(f"Supports malicious function: {caller.name}")
-                        break
+                        conditions_fired += 1
+                        upgrade_reasons.append(f"Supports malicious function: {graph[caller_ea].name}")
+                        break                             # 1-hop cap: stop at first match
                 except:
                     pass
-    
-    # Condition 4: Multiple malicious analysis markers
-    if len(malicious_markers) >= 2:
-        upgrade_to_malicious = True
-        upgrade_reasons.append(f"Multiple malicious analysis indicators detected")
-    
-    # Apply upgrade
-    if upgrade_to_malicious and risk != "malicious":
-        # Final sanity check: if the name sounds benign (e.g. print, log, string) 
-        # and it's a utility, maintain at most 'suspicious' unless indicators are HIGH
-        benign_terms = ['print', 'report', 'log', 'string', 'format', 'dump_data']
-        if any(term in node.name.lower() for term in benign_terms) and len(malicious_markers) < 2:
-            risk = "suspicious"
-            suspicious.append("Context suggests potential use in malicious flow, but code remains utility-like.")
-        else:
-            risk = "malicious"
-            suspicious.extend(upgrade_reasons)
-            suspicious.append(f"Risk upgraded from suspicious to malicious based on contextual evidence")
-    
-    # ═══════════════════════════════════════════════════════════
-    # DOWNGRADE CONDITIONS (suspicious → benign)
-    # ═══════════════════════════════════════════════════════════
-    
+
+    # Condition 4: Many contextual markers (raised from 2 to 3, AND requires local indicator)
+    if len(malicious_markers) >= 3 and has_local_indicator:   # ← was >= 2, no local req.
+        conditions_fired += 1
+        upgrade_reasons.append("Multiple malicious analysis indicators detected")
+
+    # ── 5. MINIMUM CONDITIONS GATE ────────────────────────────────────────────
+    # Require at least 2 independent conditions to upgrade to malicious.
+    upgrade_to_malicious = conditions_fired >= 2
+
+    # ── 6. CONFIDENCE GATE ────────────────────────────────────────────────────
+    # Even if conditions fire, enforce a minimum confidence from Stage 4/5 AI.
+    _MAL_CONF_MIN  = 65   # below this → cap at suspicious even if all conditions met
+    _SUSP_CONF_MIN = 45   # below this → stay benign, don't upgrade at all
+
+    if upgrade_to_malicious and confidence < _SUSP_CONF_MIN:
+        upgrade_to_malicious = False           # not enough confidence for anything
+        upgrade_reasons.clear()
+    elif upgrade_to_malicious and confidence < _MAL_CONF_MIN:
+        upgrade_to_malicious = False           # downgrade intent to suspicious only
+        # Allow fall-through to suspicious assignment below
+
+    # ── 7. APPLY UPGRADE ──────────────────────────────────────────────────────
+    if (upgrade_to_malicious or conditions_fired >= 1) and risk != "malicious":
+        # Extended benign_terms list to catch more utility-like function names
+        benign_terms = [
+            'print', 'report', 'log', 'string', 'format', 'dump_data',
+            'display', 'render', 'show', 'output', 'write', 'trace',
+            'debug', 'verbose', 'util', 'helper', 'hash', 'checksum',
+            'crc', 'encode', 'decode', 'parse', 'convert', 'serialize',
+        ]
+        is_utility_name = any(term in node.name.lower() for term in benign_terms)
+
+        if upgrade_to_malicious:
+            if is_utility_name and len(malicious_markers) < 3:
+                # Utility-named function: cap at suspicious unless overwhelming evidence
+                risk = "suspicious"
+                suspicious.append("Utility-named function capped at suspicious despite malicious context.")
+            else:
+                risk = "malicious"
+                suspicious.extend(upgrade_reasons)
+                suspicious.append("Risk upgraded to malicious: 2+ independent conditions met.")
+        elif conditions_fired >= 1 and confidence >= _SUSP_CONF_MIN:
+            # Only 1 condition fired (not enough for malicious) → suspicious at most
+            if risk == "benign":
+                risk = "suspicious"
+                suspicious.extend(upgrade_reasons)
+                suspicious.append("Single condition met — held at suspicious (requires 2+ for malicious).")
+
+    # ── 8. DOWNGRADE CONDITIONS (suspicious → benign) ─────────────────────────
     downgrade_to_benign = False
-    downgrade_reasons = []
-    
-    # Condition 1: Deep utility function in benign context
-    if node.depth > 3: # Lowered threshold for utility protection
+    downgrade_reasons   = []
+
+    # Condition 1: Utility function at depth > 2 (was > 3) in a fully benign context
+    if node.depth > 2:
         if not malicious_markers and not sibling_patterns and risk == "suspicious":
-            # Check if all callers are benign
             all_callers_benign = True
             for caller_ea in node.callers:
                 if caller_ea in graph:
@@ -2361,27 +2397,34 @@ def determine_risk_with_context(node, result, context, graph):
                                 break
                         except:
                             all_callers_benign = False
-            
             if all_callers_benign:
                 downgrade_to_benign = True
-                downgrade_reasons.append("Utility function with benign context")
-    
-    # Condition 2: Generic C++ runtime code
-    generic_patterns = ['exception', 'iostream', 'std::', 'bad_cast', 'bad_alloc', 'vector', 'string']
+                downgrade_reasons.append("Utility function with fully benign call context")
+
+    # Condition 2: Standard C++ runtime / STL names
+    generic_patterns = [
+        'exception', 'iostream', 'std::', 'bad_cast', 'bad_alloc',
+        'vector', 'string', 'allocator', 'iterator', 'operator',
+    ]
     if any(p in node.name.lower() for p in generic_patterns):
         if not malicious_markers and not sibling_patterns:
             downgrade_to_benign = True
-            downgrade_reasons.append("Standard library/runtime function")
-    
+            downgrade_reasons.append("Standard library / runtime function")
+
+    # Condition 3: Low confidence and no hard evidence → don't hold suspicious
+    if risk == "suspicious" and confidence < _SUSP_CONF_MIN and not malicious_markers:
+        downgrade_to_benign = True
+        downgrade_reasons.append(f"Confidence {confidence}% below threshold with no context markers")
+
     # Apply downgrade
     if downgrade_to_benign and risk == "suspicious":
         suspicious.extend(downgrade_reasons)
         risk = "benign"
-    
-    # Update result
-    result["risk_tag"] = risk
+
+    # ── 9. COMMIT ─────────────────────────────────────────────────────────────
+    result["risk_tag"]  = risk
     result["suspicious"] = suspicious
-    
+
     return result
 
 
@@ -2514,7 +2557,7 @@ Respond with JSON containing:
   "var_renames": {{"v1": "descriptive_name"}}, // only if usage is crystal clear
   
   "suggested_names": ["technical_name_1", "technical_name_2", "technical_name_3"], // TOP 3 descriptive names
-  
+    
   "return_value": "Technical description of return value",
   
   "risk_tag": "benign", // MUST be exactly one of: benign, suspicious, malicious. MATCH the Heuristic Risk Level if the code confirms it.
@@ -2527,7 +2570,7 @@ Respond with JSON containing:
   
   "contextual_purpose": "Explain what this function appears to be doing at a high level",
   
-  "risk_logic": "Explain why you assigned this risk level. If you see APIs like ImpersonateLoggedOnUser or OpenProcess(PROCESS_ALL_ACCESS), explain the forensic significance.",
+  "risk_logic": "Explain why you assigned this risk level. If you see APIs like ImpersonateLoggedOnUser or OpenProcess(PROCESS_ALL_ACCESS), explain the analysis significance.",
   
   "clean_code": "Author a READABLE C version of this function that a human malware analyst can easily understand. Requirements:\n    - Write real, idiomatic C — DO NOT return decompiler output. No compiler-specific keywords.\n    - Give ALL variables and parameters descriptive names based on their observed usage.\n    - CRITICAL: Remove ALL typecasts: e.g., NO (int), NO (DWORD), NO (unsigned __int64), NO (void *).\n    - Remove ALL calling conventions: NO __fastcall, NO __cdecl, etc.\n    - Resolve virtual calls: Rewrite (* (* obj + offset))(obj, ...) as obj->vtable[index](obj, ...) where index = offset/8 (64-bit) or offset/4 (32-bit).\n    - Rewrite pointer arithmetic into logical struct member access (obj->field_X).\n    - Add a //comment on each significant line explaining the malware action.\n    - Output raw C code only. Include the function signature."
 }}
@@ -2688,6 +2731,7 @@ Respond with JSON:
   "var_renames": {{"v1": "local_name", "a1": "param_name"}},
   
   "suggested_names": ["contextual_name_1", "contextual_name_2", "contextual_name_3"], // TOP 3 names
+    
   "risk_tag": "benign", // MUST be exactly one of: benign, suspicious, malicious
   
   "suspicious": [
@@ -2699,9 +2743,7 @@ Respond with JSON:
   
   "contextual_purpose": "High-level explanation of why this function exists",
   
-  "risk_logic": "Explain why the risk level was UPGRADED, DOWNGRADED, or KEPT from the preliminary assessment",
-  
-  "clean_code": "Author a READABLE C version of this function that a human malware analyst can easily understand. Use the FULL CONTEXT (call chain, purpose) for naming. Requirements:\n    - Write real, idiomatic C — DO NOT return decompiler output.\n    - Apply ALL descriptive variable renames you determined above.\n    - CRITICAL: Remove ALL typecasts: e.g., NO (int), NO (DWORD), NO (void *).\n    - Remove ALL calling conventions: NO __fastcall, NO __stdcall, etc.\n    - Resolve virtual calls: Rewrite (* (* obj + offset))(obj, ...) as obj->vtable[index](obj, ...) where index = offset/8 (64-bit) or offset/4 (32-bit).\n    - Add a //comment on each significant line explaining the action in this malware context.\n    - Output raw C code only. Include the function signature."
+  "risk_logic": "Explain why the risk level was UPGRADED, DOWNGRADED, or KEPT from the preliminary assessment"
 }}
 
 REMEMBER: Base your risk assessment on the FULL PICTURE, not just isolated operations.
@@ -2882,6 +2924,8 @@ def analyze_single_function(ea, node, graph, output_dir, ai_cfg, analyzed_eas, l
 
     if not isinstance(result.get("bullets"), list): result["bullets"] = []
     if not isinstance(result.get("suspicious"), list): result["suspicious"] = []
+    if not isinstance(result.get("arguments"), list): result["arguments"] = []
+    if not isinstance(result.get("variables"), list): result["variables"] = []
     if not isinstance(result.get("var_renames"), dict): result["var_renames"] = {}
     if not isinstance(result.get("suggested_func_name"), str): result["suggested_func_name"] = ""
 
@@ -3903,7 +3947,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["behavioral"] = generate_behavioral_indicators(digest, ai_cfg, log_fn)
+                    sections["behavioral"] = generate_behavioral_indicators(digest, ai_cfg, log_fn, all_strings=all_strings)
                     log_fn("Section complete: Indicator of Compromise", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: behavioral - {e}", "err")
@@ -5014,7 +5058,6 @@ class DeepAnalyzerDialog(QDialog):
     def on_analysis_finished(self, output_dir):
         """Final clean up of UI after analysis finishes."""
         self.output_dir = output_dir
-        self.append_log("Analysis complete! summary_final.md written.", "ok")
         worker = self.analysis_worker
         if worker:
             self.append_log(f"Variables renamed in IDA: {worker.total_vars_renamed}", "ok")
@@ -5415,7 +5458,7 @@ class DeepAnalyzerDialog(QDialog):
             self._schedule_graph_refresh()
 
     def populate_tree(self, graph):
-        """Fill the tree widget with functions from the call graph."""
+        """Fill the tree widget with functions from the call graph (library functions excluded)."""
         self.tree.clear()
         self._all_tree_items = {}
         self.tree.setSortingEnabled(False)  # Disable sorting during bulk insert for performance
@@ -5423,7 +5466,12 @@ class DeepAnalyzerDialog(QDialog):
         # Filter only integer EAs (FuncNode objects) and skip metadata dict
         nodes_to_sort = [(ea, n) for ea, n in graph.items() if isinstance(ea, int)]
         
+        lib_count = 0
         for ea, node in sorted(nodes_to_sort, key=lambda x: x[1].depth):
+            # Skip library / thunk / imported functions — they are not analyzed in any stage
+            if node.is_library:
+                lib_count += 1
+                continue
             item = SortableTreeItem([
                 "Pending", # Risk
                 node.name,
@@ -5431,15 +5479,14 @@ class DeepAnalyzerDialog(QDialog):
                 str(node.depth),
                 "pending",
                 "0%",
-                "Library" if node.is_library else ("Leaf" if node.is_leaf else "non-leaf")
+                "Leaf" if node.is_leaf else "non-leaf"
             ])
             item.setForeground(0, QtGui.QBrush(QtGui.QColor("#8E8E93"))) # Pending color
-            if node.is_library:
-                for col in range(self.tree.columnCount()):
-                    item.setForeground(col, QtGui.QBrush(QtGui.QColor("#666666")))
             self.tree.addTopLevelItem(item)
             self._all_tree_items[ea] = item
         self.tree.setSortingEnabled(True)  # Re-enable after population
+        if lib_count:
+            self.append_log(f"  [{lib_count} library/thunk functions excluded from table — not analyzed]", "info")
 
     def on_filter_changed(self, text):
         """Filter tree items by name or address."""

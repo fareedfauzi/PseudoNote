@@ -170,17 +170,17 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(rename_vars_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Rename Variables", "pseudonote:rename_variables", idaapi.SETMENU_APP)
 
-        # Suggest Function Signature Action
+        # Suggest Function Prototype Action
         sugg_sig_desc = idaapi.action_desc_t(
             "pseudonote:suggest_function_signature",
-            "Function Signature",
+            "Function Prototype",
             SuggestFunctionSignatureHandler(),
             "Ctrl+Alt+S",
-            "Ask AI to infer and apply a function signature",
+            "Ask AI to infer and apply a function prototype",
             138
         )
         idaapi.register_action(sugg_sig_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Function Signature", "pseudonote:suggest_function_signature", idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Function Prototype", "pseudonote:suggest_function_signature", idaapi.SETMENU_APP)
 
         comment_handler_desc = idaapi.action_desc_t(
             "pseudonote:add_comments",
@@ -323,7 +323,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Rename Variables", "pseudonote:rename_variables")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Rename Function (Code)", "pseudonote:rename_function")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Rename Function (Malware)", "pseudonote:rename_function_malware")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Function Signature", "pseudonote:suggest_function_signature")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Function Prototype", "pseudonote:suggest_function_prototype")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Comments (Pseudocode)", "pseudonote:add_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Section Comments (IDA-View)", "pseudonote:add_asm_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments (IDA-View)", "pseudonote:delete_asm_comments")
@@ -337,7 +337,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         for action_id in [
             "pseudonote:action", "pseudonote:list",
             "pseudonote:rename_variables", "pseudonote:rename_function",
-            "pseudonote:rename_function_malware", "pseudonote:suggest_function_signature",
+            "pseudonote:rename_function_malware", "pseudonote:suggest_function_prototype",
             "pseudonote:add_comments", "pseudonote:delete_comments",
             "pseudonote:add_asm_comments", "pseudonote:delete_asm_comments",
             "pseudonote:shellcode_analyst",

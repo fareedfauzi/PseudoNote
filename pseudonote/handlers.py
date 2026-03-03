@@ -247,10 +247,10 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
 
 
 # ---------------------------------------------------------------------------
-# Suggest Function Signature Handler
+# Suggest Function Prototype Handler
 # ---------------------------------------------------------------------------
 class SuggestFunctionSignatureHandler(idaapi.action_handler_t):
-    """Ask AI to suggest a function signature and apply it."""
+    """Ask AI to suggest a function prototype and apply it."""
     def __init__(self):
         idaapi.action_handler_t.__init__(self)
 
@@ -264,13 +264,13 @@ class SuggestFunctionSignatureHandler(idaapi.action_handler_t):
         vdui = ida_hexrays.get_widget_vdui(ctx.widget)
         if not cfunc or not vdui: return 0
             
-        _view_mod.show_ai_progress("Suggesting Signature")
+        _view_mod.show_ai_progress("Suggesting Prototype")
         prompt = (
             "Analyze the following C function code:\n"
             f"{str(cfunc)}\n\n"
-            "Suggest a valid C function prototype (signature) for this function.\n"
+            "Suggest a valid C function prototype for this function.\n"
             "Infer the return type, calling convention, function name, and argument types/names based on usage.\n"
-            "Return ONLY the C signature string (e.g. `int __fastcall MyFunc(char *a1, int a2)`).\n"
+            "Return ONLY the C prototype string (e.g. `int __fastcall MyFunc(char *a1, int a2)`).\n"
             "Do not include semicolon or body."
         )
         
@@ -416,13 +416,20 @@ def _pn_comment_callback(cfunc, pseudocode_lines, view, response):
         if not comment_text:
             continue
 
-        # Prepend a newline for better visual spacing (as requested by user)
-        comment_text = "\n" + comment_text
+        # Add PseudoNote prefix for consistency
+        full_comment = f"[PseudoNote] {comment_text}"
+        
+        # Prepend a newline for better visual spacing in pseudocode
+        pseudocode_comment = "\n" + full_comment
 
         target = idaapi.treeloc_t()
         target.ea = int(comment_address)
         target.itp = comment_placement
-        cfunc.set_user_cmt(target, comment_text)
+        cfunc.set_user_cmt(target, pseudocode_comment)
+        
+        # Sync to assembly view (repeatable comment so it's visible in both)
+        idc.set_cmt(target.ea, full_comment, 1)
+        
         applied_count += 1
 
     if applied_count > 0:
@@ -430,7 +437,9 @@ def _pn_comment_callback(cfunc, pseudocode_lines, view, response):
         cfunc.del_orphan_cmts()
         if view:
             view.refresh_view(True)
-        print(f"[PseudoNote] Applied {applied_count} comments.")
+        # Also refresh disassembly if it's there
+        idaapi.request_refresh(idaapi.IWID_DISASM)
+        print(f"[PseudoNote] Applied {applied_count} comments (Synced to ASM).")
     else:
         print("[PseudoNote] No comments were applied.")
 
@@ -667,16 +676,53 @@ class AsmCommentHandler(idaapi.action_handler_t):
 
                 items = _json.loads(text)
                 applied = 0
+                
+                # Try to get pseudocode context for syncing
+                cfunc = None
+                itp_map = {}
+                try:
+                    func = idaapi.get_func(start_ea)
+                    if func:
+                        # Only decompile if it's a relatively small/normal function to avoid lag
+                        cfunc = ida_hexrays.decompile(func.start_ea)
+                        if cfunc:
+                            # Build map of address -> (lineIndex, itp, has_user_comment)
+                            for _, _, addr, itp, has_user_cmt in get_commentable_lines(cfunc):
+                                if addr not in itp_map:
+                                    itp_map[addr] = itp
+                except:
+                    pass
+
                 for item in items:
                     idx = item.get("section", 0) - 1
                     cmt = item.get("comment", "").strip()
                     if not cmt or idx < 0 or idx >= len(sections):
                         continue
+                        
                     sec_ea = sections[idx][0]
-                    idc.set_cmt(sec_ea, cmt, 0)
+                    full_cmt = f"[PseudoNote] {cmt}"
+                    
+                    # 1. Set repeatable comment in IDA (Disassembly)
+                    # Repeatable (1) ensures it shows up in Pseudocode too
+                    idc.set_cmt(sec_ea, full_cmt, 1)
+                    
+                    # 2. If we have pseudocode, also set a block comment for better visuals
+                    if cfunc and sec_ea in itp_map:
+                        target = idaapi.treeloc_t()
+                        target.ea = sec_ea
+                        target.itp = itp_map[sec_ea]
+                        # Use newline prefix for block-style in C
+                        cfunc.set_user_cmt(target, "\n" + full_cmt)
+                        
                     applied += 1
 
-                print(f"[PseudoNote] Applied {applied} section comment(s) to {context_name}.")
+                if cfunc:
+                    cfunc.save_user_cmts()
+                    cfunc.del_orphan_cmts()
+                    # Trigger hex-rays refresh
+                    idaapi.request_refresh(idaapi.IWID_PSEUDOCODE)
+
+                print(f"[PseudoNote] Applied {applied} section comment(s) to {context_name} (Synced to C).")
                 idaapi.request_refresh(idaapi.IWID_DISASM)
             except Exception as e:
                 print(f"[PseudoNote] ASM comment parse error: {e}\nRaw: {response[:300]}")

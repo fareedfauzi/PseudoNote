@@ -243,7 +243,48 @@ def extract_ida_strings(graph=None, log_fn=None):
         file_re = re.compile(r'[A-Za-z]:\\[\\\w\.\-\s]{5,}')
         reg_re = re.compile(r'(?:HKEY_|HKLM|HKCU|HKCR|HKU|Software\\(?:Microsoft|Wow6432Node|Classes|Policies))[\\\w\.\-\s]{5,}', re.I)
         cmd_re = re.compile(r'\b(?:cmd\.exe|powershell(?:\.exe)?|powershell_ise|bash|sh|cscript|wscript|mshta|regsvr32|rundll32|net\.exe|net1\.exe|schtasks|sc\.exe|bitsadmin)\b.*', re.I)
-        ip_re = re.compile(r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b')
+        # Strict IPv4 — exactly 4 octets (0-255), not followed by another dot+digit (OID guard),
+        # not preceded by a digit-dot (to avoid matching tail of longer dotted sequence),
+        # and not a version string prefix like "v1." or "2.0.".
+        # EXCLUDES: loopback (127.x), link-local (169.254.x), multicast (224-239.x),
+        #           broadcast (255.x), unspecified (0.0.0.0), and private RFC1918 ranges
+        #           ONLY when the full string is ONLY an IP (to avoid false negatives in URLs).
+        _octet = r'(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'
+        ip_re = re.compile(
+            r'(?<!\d\.)(?<!\d)'               # not preceded by digit or "digit."
+            r'\b'
+            r'(' + _octet + r'\.)' + r'{3}'   # exactly 3 "octet." groups
+            r'(' + _octet + r')'              # final octet — no trailing dot
+            r'\b'
+            r'(?!\.\d)'                       # not followed by ".digit" (OID / version guard)
+        )
+
+        def is_valid_public_ip(ip_str):
+            """Validate that an IP is a real, non-trivial internet address worth flagging."""
+            try:
+                parts = [int(p) for p in ip_str.split('.')]
+                if len(parts) != 4: return False
+                a, b = parts[0], parts[1]
+                # Reject loopback
+                if a == 127: return False
+                # Reject unspecified
+                if ip_str == '0.0.0.0': return False
+                # Reject link-local
+                if a == 169 and b == 254: return False
+                # Reject multicast
+                if 224 <= a <= 239: return False
+                # Reject broadcast / reserved
+                if a == 255: return False
+                # Reject private RFC1918 — these are usually noise in static analysis
+                if a == 10: return False
+                if a == 172 and 16 <= b <= 31: return False
+                if a == 192 and b == 168: return False
+                # Reject trivial "all zeros" per octet (e.g. version-like 1.0.0.0)
+                if parts[1] == 0 and parts[2] == 0 and parts[3] == 0: return False
+                return True
+            except Exception:
+                return False
+
         mutex_re = re.compile(r'(?:\{[A-F0-9-]{32,}\})|(?:\b[A-Za-z0-9_]{8,}\bMutex)', re.I)
         exe_re = re.compile(r'\b[\w\-\.]+\.(?:exe|dll|sys|bat|vbs|ps1|com|scr|pif|vbe)\b', re.I)
         # Runtime/Library strings (to avoid miscategorization as obfuscation)
@@ -303,7 +344,7 @@ def extract_ida_strings(graph=None, log_fn=None):
             if url_re.search(val_strip): cat = "URL"
             elif file_re.search(val_strip): cat = "File Path"
             elif reg_re.search(val_strip): cat = "Registry Key"
-            elif ip_re.search(val_strip): cat = "IP Address"
+            elif (m := ip_re.search(val_strip)) and is_valid_public_ip(m.group()): cat = "IP Address"
             elif mutex_re.search(val_strip): cat = "Mutex"
             elif cmd_re.search(val_strip): cat = "Command"
             elif library_re.search(val_strip): cat = "Library/Runtime String"
@@ -435,28 +476,48 @@ def extract_deterministic_iocs(strings):
     """Fallback/Supplement for AI: extract high-confidence IOCs from strings."""
     iocs = []
     seen = set()
+    
+    # Pre-compile some secondary regex checks for robustness
+    ipv4_pattern = re.compile(r'^(\d{1,3}\.){3}\d{1,3}$')
+    
     for s_info in strings:
-        val = s_info["value"]
+        val = str(s_info.get("value", "")).strip()
         cat = s_info.get("category", "String")
-        if val in seen: continue
+        if not val or val in seen: continue
         
         ioc_type = None
+        
+        # 1. Trust the scanner's categorization if available
         if cat == "IP Address": ioc_type = "IP"
         elif cat == "URL": ioc_type = "Network Domain"
-        elif cat == "Registry Key" and any(x in val.lower() for x in ["\\run", "currentversion", "software\\microsoft"]): 
+        elif cat == "Registry Key" and any(x in val.lower() for x in ["\\run", "currentversion", "software\\microsoft", "hklm", "hkcu"]): 
             ioc_type = "Registry Key"
         elif cat == "Mutex": ioc_type = "Mutex"
-        elif cat == "Command" and any(x in val.lower() for x in ["cmd.exe", "powershell", "-enc", "-w hidden"]):
+        elif cat == "Command" and any(x in val.lower() for x in ["cmd.exe", "powershell", "-enc", "-w hidden", "sc.exe", "net.exe"]):
             ioc_type = "Command Execution"
+        elif cat == "Filename" and val.lower().endswith((".exe", ".dll", ".pif", ".scr", ".sys")):
+            ioc_type = "Filename"
+        elif cat == "Encoded Data" and len(val) > 32:
+            ioc_type = "Encoded Blob"
+            
+        # 2. Secondary Regex Fallback (in case category was lost or missed)
+        if not ioc_type:
+            if ipv4_pattern.match(val):
+                ioc_type = "IP"
+            elif val.lower().startswith(("http://", "https://", "ftp://")):
+                ioc_type = "URL"
+            elif val.lower().startswith(("hklm\\", "hkcu\\", "software\\")):
+                ioc_type = "Registry Key"
             
         if ioc_type:
             iocs.append({
                 "type": ioc_type,
                 "value": val,
-                "context": f"Deterministic Detection: Identified as {cat} in binary strings.",
+                "context": f"Deterministic Detection: Identified as {cat if cat != 'String' else ioc_type} in binary strings.",
                 "associated_functions": s_info.get("funcs", [])
             })
             seen.add(val)
+            
     return iocs
     return iocs
 
@@ -540,10 +601,17 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if os.path.isfile(json_path):
                 with open(json_path, "r", encoding="utf-8") as jf:
                     d = json.load(jf)
+                # Define list-type keys that need [] as default to avoid iteration errors
+                list_keys = ["bullets", "suspicious", "arguments", "variables", "suggested_names", "capabilities", "semantic_tags"]
+                for k in list_keys:
+                    val = d.get(k)
+                    if not isinstance(val, list): val = []
+                    fd[k] = val
+                
+                # Update remaining scalar fields
                 fd.update({k: d.get(k, fd.get(k)) for k in [
-                    "one_liner", "summary", "bullets", "suspicious", "risk_tag",
-                    "return_value", "contextual_purpose", "risk_logic",
-                    "capabilities", "semantic_tags", "confidence"
+                    "one_liner", "summary", "risk_tag", "return_value", 
+                    "contextual_purpose", "risk_logic", "suggested_func_name", "confidence"
                 ]})
         except: pass
 
@@ -670,10 +738,30 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
 
         return {}
 
-    # --- 0. Prepare Forensic Data (Strings & Deterministic IOCs)
+    # --- 0. Prepare Analysis Data (Strings & Deterministic IOCs)
     s_data = extract_ida_strings(graph, _log)
     det_iocs = extract_deterministic_iocs(s_data)
     _log(f"Extracted {len(s_data)} strings and {len(det_iocs)} deterministic IOCs.")
+
+    # Highlighting Helpers
+    def _apply_forensic_highlighting(text):
+        if not text or not isinstance(text, str): return text
+        
+        # We only keep the function name redirection as requested by the user.
+        # Highlighting for APIs, IOCs, Paths, and Commands has been removed.
+
+        # Function Names (Cross-reference analyzed functions)
+        # Sort by length descending to match longest possible function name first
+        sorted_fnames = sorted([f["name"] for f in functions_data if len(f["name"]) > 4], key=len, reverse=True)
+        for fname in sorted_fnames[:100]: # Cap to avoid over-processing
+            safe_fname = re.escape(fname)
+            # Find the first ea for this name
+            target_ea = next((f["ea"] for f in functions_data if f["name"] == fname), None)
+            if target_ea:
+                 # Standard link style, no extra highlighting span
+                 text = re.sub(fr'\b{safe_fname}\b', f'<a href="#fn_{target_ea:X}" style="color:var(--accent); text-decoration:underline dotted;" title="View function details">\g<0></a>', text)
+
+        return text
 
     # --- 1. Executive Summary
     exec_json = _parse_ai_json("assessment")
@@ -682,7 +770,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         narrative = exec_json.get("assessment") or exec_json.get("detailed_narrative") or ""
     
     if narrative:
-        exec_summary_html = f'<div class="ai-block" style="border-left-color:var(--accent); white-space: pre-wrap; padding: 25px; line-height: 1.6;">{_escape_html(narrative)}</div>'
+        exec_summary_html = f'<div class="ai-block" style="border-left-color:var(--accent); white-space: pre-wrap; padding: 25px; line-height: 1.6;">{_apply_forensic_highlighting(_escape_html(narrative))}</div>'
     elif isinstance(exec_json, dict) and any(k in exec_json for k in ["verdict", "reasoning", "core_operation", "function_tree_analysis"]):
         # Fallback for old data or specific keys
         v = exec_json.get("verdict", "")
@@ -690,6 +778,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         c = exec_json.get("core_operation", "")
         f = exec_json.get("function_tree_analysis", "")
         exec_summary_html = f'<div class="ai-block" style="padding: 25px; line-height: 1.6;"><b>Verdict:</b> {v}<br/><br/><b>Reasoning:</b> {r}<br/><br/><b>Core Operation:</b> {c}<br/><br/><b>Analysis:</b> {f}</div>'
+        exec_summary_html = _apply_forensic_highlighting(exec_summary_html)
     else:
         # Final fallback from raw sections
         summ = sections.get("assessment") or "Assessment data absent or AI synthesis failed."
@@ -697,12 +786,12 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             summ = summ.get("assessment") or summ.get("detailed_narrative") or str(summ)
         # Scrub JSON leftovers if present in raw string
         if isinstance(summ, str) and ("assessment" in summ or "detailed_narrative" in summ):
-            m = re.search(r'"(?:assessment|detailed_narrative)"\s*:\s*"(.*)', summ, re.DOTALL)
+            m = re.search(r'"(?:assessment|detailed_narrative)"\s* : \s*"(.*)', summ, re.DOTALL)
             if m:
                 summ = re.sub(r'"\s*[,\}\]]\s*[^"]*$', '', m.group(1), flags=re.DOTALL).strip()
                 if summ.endswith('"'): summ = summ[:-1]
         
-        exec_summary_html = f'<div class="ai-block" style="padding: 25px; line-height: 1.6;">{_escape_html(str(summ))}</div>'
+        exec_summary_html = f'<div class="ai-block" style="padding: 25px; line-height: 1.6;">{_apply_forensic_highlighting(_escape_html(str(summ)))}</div>'
 
     # --- 2. Technical Code Analysis Overview
     overview_json = _parse_ai_json("overview")
@@ -717,17 +806,17 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         # Split on double-newlines → paragraph blocks
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         if not paragraphs:
-            return _escape_html(raw)
+            return _apply_forensic_highlighting(_escape_html(raw))
         parts = []
         for para in paragraphs:
             # Numbered heading like "1. Title: rest" → bold label + rest
             m = re.match(r'^(\d+\.\s*[^:]+:)(.*)$', para, re.DOTALL)
             if m:
                 heading = _escape_html(m.group(1).strip())
-                body = _escape_html(m.group(2).strip()).replace('\n', '<br>')
+                body = _apply_forensic_highlighting(_escape_html(m.group(2).strip())).replace('\n', '<br>')
                 parts.append(f'<p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">{heading}</strong> {body}</p>')
             else:
-                body = _escape_html(para).replace('\n', '<br>')
+                body = _apply_forensic_highlighting(_escape_html(para)).replace('\n', '<br>')
                 parts.append(f'<p style="margin:0 0 10px 0;">{body}</p>')
         return ''.join(parts)
 
@@ -761,7 +850,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         for s in exec_flow_json.get("steps", []):
             if isinstance(s, dict):
                 phase = _escape_html(s.get("phase", ""))
-                desc = _escape_html(s.get("description", ""))
+                desc = _apply_forensic_highlighting(_escape_html(s.get("description", "")))
                 steps_rows += f'<tr><td style="font-weight:bold; width:180px;">{phase}</td><td class="muted">{desc}</td></tr>'
         execution_flow_html = f'<table class="data-table"><thead><tr><th>Phase</th><th>Execution Description</th></tr></thead><tbody>{steps_rows}</tbody></table>' if steps_rows else f'<p class="muted">No execution flow steps identified.</p>'
     else:
@@ -774,14 +863,14 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         for c in caps_json.get("capabilities", []):
             if isinstance(c, dict):
                 name = _escape_html(c.get("name", ""))
-                desc = _escape_html(c.get("description", ""))
+                desc = _apply_forensic_highlighting(_escape_html(c.get("description", "")))
                 funcs = c.get("associated_functions") or c.get("functions") or []
                 if isinstance(funcs, str): funcs = [funcs]
                 f_html = ", ".join([f'<code>{_escape_html(str(f))}</code>' for f in funcs])
                 cap_rows += f'<tr><td style="font-weight:bold; color:#1e293b; width:220px;">{name}</td><td class="muted">{desc}</td><td style="width:250px;">{f_html}</td></tr>'
         capabilities_html = f'<table class="data-table"><thead><tr><th>Capability</th><th>Description</th><th>Associated Functions</th></tr></thead><tbody>{cap_rows}</tbody></table>' if cap_rows else f'<p class="muted">No general capabilities identified.</p>'
     else:
-        capabilities_html = f'<div class="ai-block">{_escape_html(sections.get("capabilities", "Capabilities pending..."))}</div>'
+        capabilities_html = f'<div class="ai-block" style="border-left-color: #cbd5e1;">{_escape_html(sections.get("capabilities", "Capabilities pending..."))}</div>'
 
     # --- 5. C2/Backdoor Analysis
     c2_json = _parse_ai_json("c2_analysis")
@@ -805,18 +894,17 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         for m in c2_mechanisms:
             if isinstance(m, dict):
                 feat = _escape_html(m.get("feature", ""))
-                evid = _escape_html(m.get("evidence", ""))
+                evid = _apply_forensic_highlighting(_escape_html(m.get("evidence", "")))
                 funcs = m.get("associated_functions") or []
                 f_html = ", ".join([f'<code>{_escape_html(str(f))}</code>' for f in funcs])
                 c2_rows += f'<tr><td style="font-weight:bold; width:180px;">{feat}</td><td>{evid}</td><td class="muted">{f_html}</td></tr>'
         
-    c2_accent = "#dc2626"
-    c2_summary_html = f'<div class="ai-block" style="border-left-color:{c2_accent}; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> {_escape_html(_summ)}</div>' if _summ else ""
+    c2_summary_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> {_apply_forensic_highlighting(_escape_html(_summ))}</div>' if _summ else ""
     
     if c2_rows:
         c2_analysis_html = c2_summary_html + f'<table class="data-table"><thead><tr><th>Mechanism</th><th>Technical Evidence</th><th>Source Functions</th></tr></thead><tbody>{c2_rows}</tbody></table>'
     elif _summ:
-        c2_analysis_html = c2_summary_html + f'<p class="muted">Summary synthesized; no granular mechanisms extracted in table format.</p>'
+        c2_analysis_html = '<p class="muted">No explicit C2/Backdoor mechanisms extracted.</p>'
     else:
         # Final fallback: display raw text but clean it up
         raw_c2 = sections.get("c2_analysis", "")
@@ -832,7 +920,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if normalized in ["{}", "{\"mechanisms\":[]}", "[]"]:
                 c2_analysis_html = '<p class="muted">No explicit C2/Backdoor communication logic detected.</p>'
             else:
-                c2_analysis_html = f'<div class="ai-block" style="border-left-color:{c2_accent}; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_c2)}</div>'
+                c2_analysis_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_apply_forensic_highlighting(_escape_html(clean_c2))}</div>'
 
     # --- 6. Persistence Mechanisms
     pers_json = _parse_ai_json("persistence")
@@ -850,18 +938,17 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         for m in pers_mechanisms:
             if isinstance(m, dict):
                 meth = _escape_html(m.get("method", ""))
-                det = _escape_html(m.get("details", ""))
+                det = _apply_forensic_highlighting(_escape_html(m.get("details", "")))
                 funcs = m.get("associated_functions") or []
                 f_html = ", ".join([f'<code>{_escape_html(str(f))}</code>' for f in funcs])
                 pers_rows += f'<tr><td style="font-weight:bold; width:180px;">{meth}</td><td>{det}</td><td class="muted">{f_html}</td></tr>'
         
-    pers_accent = "#f97316"
-    pers_summary_html = f'<div class="ai-block" style="border-left-color:{pers_accent}; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> {_escape_html(_psumm)}</div>' if _psumm else ""
+    pers_summary_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> {_apply_forensic_highlighting(_escape_html(_psumm))}</div>' if _psumm else ""
     
     if pers_rows:
         persistence_html = pers_summary_html + f'<table class="data-table"><thead><tr><th>Persistence Method</th><th>Technical Details</th><th>Source Functions</th></tr></thead><tbody>{pers_rows}</tbody></table>'
     elif _psumm:
-        persistence_html = pers_summary_html + f'<p class="muted">Summary synthesized; no granular mechanisms extracted in table format.</p>'
+        persistence_html = '<p class="muted">No specific persistence mechanisms detected.</p>'
     else:
         raw_pers = sections.get("persistence", "")
         if not raw_pers or (isinstance(raw_pers, dict) and not any(raw_pers.values())):
@@ -872,7 +959,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if normalized in ["{}", "{\"mechanisms\":[]}", "[]"]:
                 persistence_html = '<p class="muted">No explicit persistence mechanisms identified.</p>'
             else:
-                persistence_html = f'<div class="ai-block" style="border-left-color:{pers_accent}; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_pers)}</div>'
+                persistence_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_apply_forensic_highlighting(_escape_html(clean_pers))}</div>'
 
     # --- 7. Reconnaissance or Info Stealer
     recon_json = _parse_ai_json("recon_infostealer")
@@ -890,18 +977,17 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         for f in recon_findings:
             if isinstance(f, dict):
                 cat = _escape_html(f.get("category", ""))
-                desc = _escape_html(f.get("description", ""))
+                desc = _apply_forensic_highlighting(_escape_html(f.get("description", "")))
                 funcs = f.get("associated_functions") or []
                 f_html = ", ".join([f'<code>{_escape_html(str(func))}</code>' for func in funcs])
                 recon_rows += f'<tr><td style="font-weight:bold; width:180px;">{cat}</td><td>{desc}</td><td class="muted">{f_html}</td></tr>'
         
-    recon_accent = "#8b5cf6"
-    recon_summary_html = f'<div class="ai-block" style="border-left-color:{recon_accent}; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> {_escape_html(_rsumm)}</div>' if _rsumm else ""
+    recon_summary_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; margin-bottom:15px; padding:25px; line-height:1.6;"><b>Summary:</b> {_apply_forensic_highlighting(_escape_html(_rsumm))}</div>' if _rsumm else ""
     
     if recon_rows:
-        recon_infostealer_html = recon_summary_html + f'<table class="data-table"><thead><tr><th>Category</th><th>Forensic Discovery</th><th>Source Functions</th></tr></thead><tbody>{recon_rows}</tbody></table>'
+        recon_infostealer_html = recon_summary_html + f'<table class="data-table"><thead><tr><th>Category</th><th>Analysis Discovery</th><th>Source Functions</th></tr></thead><tbody>{recon_rows}</tbody></table>'
     elif _rsumm:
-        recon_infostealer_html = recon_summary_html + f'<p class="muted">Summary synthesized; no specific info-stealing artifacts extracted in table format.</p>'
+        recon_infostealer_html = '<p class="muted">No specific info-stealing artifacts identified.</p>'
     else:
         raw_recon = sections.get("recon_infostealer", "")
         if not raw_recon or (isinstance(raw_recon, dict) and not any(raw_recon.values())):
@@ -912,7 +998,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if normalized in ["{}", "{\"findings\":[]}", "[]"]:
                 recon_infostealer_html = '<p class="muted">No relevant reconnaissance routines detected.</p>'
             else:
-                recon_infostealer_html = f'<div class="ai-block" style="border-left-color:{recon_accent}; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_recon)}</div>'
+                recon_infostealer_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_apply_forensic_highlighting(_escape_html(clean_recon))}</div>'
 
     # --- 8. File / Registry / Process Interaction
     inter_json = _parse_ai_json("file_registry_interaction")
@@ -946,7 +1032,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if normalized in ["{}", "{\"interactions\":[]}", "[]"]:
                 interaction_html = '<p class="muted">No direct OS object manipulation identified.</p>'
             else:
-                interaction_html = f'<div class="ai-block" style="border-left-color:#64748b; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_inter)}</div>'
+                interaction_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_inter)}</div>'
 
     # --- 9. API Hashing / Resolving / PEB Walk
     resolv_json = _parse_ai_json("api_resolving")
@@ -962,7 +1048,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         for t in resolv_list:
             if isinstance(t, dict):
                 rname = _escape_html(t.get("name", ""))
-                rdesc = _escape_html(t.get("description", ""))
+                rdesc = _apply_forensic_highlighting(_escape_html(t.get("description", "")))
                 funcs = t.get("associated_functions") or []
                 f_html = ", ".join([f'<code>{_escape_html(str(func))}</code>' for func in funcs])
                 res_rows += f'<tr><td style="font-weight:bold; width:200px;">{rname}</td><td>{rdesc}</td><td class="muted">{f_html}</td></tr>'
@@ -978,7 +1064,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if normalized in ["{}", "{\"techniques\":[]}", "[]"]:
                 api_resolving_html = '<p class="muted">No indirect API resolving found.</p>'
             else:
-                api_resolving_html = f'<div class="ai-block" style="border-left-color:#64748b; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_res)}</div>'
+                api_resolving_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_apply_forensic_highlighting(_escape_html(clean_res))}</div>'
 
     # --- 10. Packer/Obfuscation or Anti-Analysis
     anti_json = _parse_ai_json("anti_analysis")
@@ -994,7 +1080,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         for t in anti_list:
             if isinstance(t, dict):
                 aname = _escape_html(t.get("name", ""))
-                adesc = _escape_html(t.get("description", ""))
+                adesc = _apply_forensic_highlighting(_escape_html(t.get("description", "")))
                 funcs = t.get("associated_functions") or []
                 f_html = ", ".join([f'<code>{_escape_html(str(func))}</code>' for func in funcs])
                 anti_rows += f'<tr><td style="font-weight:bold; width:200px;">{aname}</td><td>{adesc}</td><td class="muted">{f_html}</td></tr>'
@@ -1010,7 +1096,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if normalized in ["{}", "{\"techniques\":[]}", "[]"]:
                 anti_analysis_html = '<p class="muted">No anti-debugging or anti-VM logic found.</p>'
             else:
-                anti_analysis_html = f'<div class="ai-block" style="border-left-color:#64748b; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_anti)}</div>'
+                anti_analysis_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_apply_forensic_highlighting(_escape_html(clean_anti))}</div>'
 
     # --- 11. Cryptographic Artifacts
     crypto_json = _parse_ai_json("crypto_artifacts")
@@ -1026,12 +1112,12 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         for c in crypto_list:
             if isinstance(c, dict):
                 cname = _escape_html(c.get("algorithm", c.get("name", "")))
-                cdesc = _escape_html(c.get("purpose", c.get("description", "")))
+                cdesc = _apply_forensic_highlighting(_escape_html(c.get("usage", c.get("purpose", c.get("description", "")))))
                 funcs = c.get("associated_functions") or []
                 f_html = ", ".join([f'<code>{_escape_html(str(func))}</code>' for func in funcs])
                 cry_rows += f'<tr><td style="font-weight:bold; width:200px;">{cname}</td><td>{cdesc}</td><td class="muted">{f_html}</td></tr>'
         
-        crypto_artifacts_html = f'<table class="data-table"><thead><tr><th>Cryptographic Algorithm</th><th>Forensic Purpose</th><th>Source Functions</th></tr></thead><tbody>{cry_rows}</tbody></table>'
+        crypto_artifacts_html = f'<table class="data-table"><thead><tr><th>Cryptographic Algorithm</th><th>Analysis Purpose</th><th>Source Functions</th></tr></thead><tbody>{cry_rows}</tbody></table>'
     else:
         raw_cry = sections.get("crypto_artifacts", "")
         if not raw_cry or (isinstance(raw_cry, dict) and not any(raw_cry.values())):
@@ -1042,18 +1128,16 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if normalized in ["{}", "{\"artifacts\":[]}", "[]"]:
                 crypto_artifacts_html = '<p class="muted">No cryptographic constants or algorithms detected.</p>'
             else:
-                crypto_artifacts_html = f'<div class="ai-block" style="border-left-color:#64748b; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_cry)}</div>'
+                crypto_artifacts_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_apply_forensic_highlighting(_escape_html(clean_cry))}</div>'
 
     # --- 12. Suspicious Imports
     api_rows = ""
-    sev_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-    for api, info in sorted(suspicious_apis.items(), key=lambda x: sev_order.get(x[1]["severity"],"LOW")):
-        sev = info["severity"]
-        scolor = {"HIGH":"#dc2626","MEDIUM":"#f59e0b","LOW":"#16a34a"}.get(sev,"#6b7280")
-        fnames = ", ".join(info["funcs"][:10]) + ("..." if len(info["funcs"])>10 else "")
-        api_rows += f'<tr><td><code>{_escape_html(api)}</code></td><td>{_escape_html(info["category"])}</td><td><span class="sev-badge" style="background:{scolor};">{sev}</span></td><td class="muted">{_escape_html(fnames)}</td></tr>'
-    
-    suspicious_imports_html = f'<table class="data-table"><thead><tr><th>API Name</th><th>Category</th><th>Severity</th><th>Associated Functions</th></tr></thead><tbody>{api_rows}</tbody></table>' if api_rows else '<p class="muted">No explicit high-risk imports detected.</p>'
+    for api, info in sorted(suspicious_apis.items(), key=lambda x: x[0]):
+        fnames = ", ".join(info["funcs"][:10]) + ("..." if len(info["funcs"]) > 10 else "")
+        api_rows += f'<tr><td><code>{_escape_html(api)}</code></td><td>{_escape_html(info["category"])}</td><td class="muted">{_escape_html(fnames)}</td></tr>'
+
+    suspicious_imports_html = f'<table class="data-table"><thead><tr><th>API Name</th><th>Category</th><th>Associated Functions</th></tr></thead><tbody>{api_rows}</tbody></table>' if api_rows else '<p class="muted">No explicit high-risk imports detected.</p>'
+
 
     # --- 9. TTP Mapping (MITRE ATTACK)
     mitre_techs = _mitre_from_data(functions_data)
@@ -1080,14 +1164,14 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if isinstance(ioc, dict):
                 _type = _escape_html(ioc.get("type", ""))
                 _val = _escape_html(ioc.get("value", ""))
-                _ctx = _escape_html(ioc.get("context", ""))
+                _ctx = _apply_forensic_highlighting(_escape_html(ioc.get("context", "")))
                 
                 # Associated functions handle
                 funcs = ioc.get("associated_functions") or ioc.get("functions") or []
                 if isinstance(funcs, str): funcs = [funcs]
                 f_html = ", ".join([f'<code>{_escape_html(str(f))}</code>' for f in funcs])
                 
-                ioc_rows += f'<tr><td style="font-weight:600;">{_type}</td><td><code style="color:#dc2626; background:#fef2f2; padding:2px 4px; border-radius:4px;">{_val}</code></td><td class="muted">{_ctx}</td><td class="muted" style="width:250px;">{f_html}</td></tr>'
+                ioc_rows += f'<tr><td style="font-weight:600;">{_type}</td><td><code>{_val}</code></td><td class="muted">{_ctx}</td><td class="muted" style="width:250px;">{f_html}</td></tr>'
         if ioc_rows:
             ioc_html = f'<table class="data-table"><thead><tr><th>Type</th><th>Value</th><th>Context</th><th>Associated Functions</th></tr></thead><tbody>{ioc_rows}</tbody></table>'
         else:
@@ -1135,29 +1219,33 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
 
     for s in s_data:
         val = _escape_html(s["value"])
-        stype = _escape_html(s.get("type", "ASCII"))
-        scat = _escape_html(s.get("category", "String"))
-        importance = llm_importance.get(s["value"], "Low")
-        imp_color = {"High": "#dc2626", "Medium": "#f59e0b", "Low": "#64748b"}.get(importance, "#64748b")
-        
-        f_html = ", ".join([f'<code>{_escape_html(f)}</code>' for f in s["funcs"]])
+
+        funcs = s.get("funcs", [])
+        if len(funcs) > 1:
+            f_html = '<ul style="margin:0; padding-left:16px; list-style:disc;">' + \
+                     ''.join(f'<li><code>{_escape_html(f)}</code></li>' for f in funcs) + \
+                     '</ul>'
+        elif funcs:
+            f_html = f'<code>{_escape_html(funcs[0])}</code>'
+        else:
+            f_html = ''
+
         s_rows += f'''
         <tr>
-            <td><span style="color:{imp_color}; font-weight:bold;">{importance}</span></td>
-            <td>{scat} ({stype})</td>
             <td style="word-break:break-all; font-family:'Fira Code', 'Cascadia Code', monospace; font-size:12px;">{val}</td>
-            <td class="muted" style="width:250px;">{f_html}</td>
+            <td class="muted" style="width:260px;">{f_html}</td>
         </tr>'''
     
     if s_rows:
         strings_html = f'''
         <details class="fn-card" style="margin-top:0; border:1px solid #e2e8f0; box-shadow:none;">
-            <summary style="padding:15px; cursor:pointer; font-weight:600; color:#1e293b; background:#f8fafc; border-radius:8px;">
+            <summary style="padding:15px; cursor:pointer; font-weight:600; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+                <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
                 View Extracted Strings ({len(s_data)} artifacts found)
             </summary>
             <div style="padding:15px;">
                 <table class="data-table" style="box-shadow:none; border:none; margin-top:0;">
-                    <thead><tr><th style="width:80px;">Rank</th><th style="width:150px;">Category</th><th>String Value</th><th>Associated Functions</th></tr></thead>
+                    <thead><tr><th>String Value</th><th style="width:260px;">Associated Functions</th></tr></thead>
                     <tbody>{s_rows}</tbody>
                 </table>
             </div>
@@ -1264,14 +1352,14 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         <div style="margin-bottom:25px;">
             <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">AI Behavioral Synthesis:</div>
             <table class="data-table" style="border: 1px solid #f1f5f9; box-shadow:none;">
-                <thead><tr><th>Target Address</th><th>Function Identifier</th><th>Forensic Reasoning & Pattern Discovery</th></tr></thead>
+                <thead><tr><th>Target Address</th><th>Function Identifier</th><th>Analysis Reasoning & Pattern Discovery</th></tr></thead>
                 <tbody>{ai_rows}</tbody>
             </table>
         </div>''' if ai_rows else ''
         
         taxonomy_html = f'''
         <div>
-            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Verified Forensic Taxonomy:</div>
+            <div style="font-weight:bold; color:#64748b; margin-bottom:10px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Verified Analysis Taxonomy:</div>
             {local_tbl}
         </div>'''
         return ai_html + taxonomy_html
@@ -1309,11 +1397,11 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             <h4 class="fn-card-title">{_escape_html(f["name"])} @ 0x{ea:X}</h4>
             <div style="margin-bottom:12px;">{_risk_badge(risk)} <span class="muted" style="margin-left:8px;">Conf: {f["confidence"]}% | Depth: {f["depth"]}</span></div>
             {suggested_html}
-            <div class="fn-info-row"><b>Purpose:</b> {_escape_html(f.get("one_liner") or "—")}</div>
-            <div class="fn-info-row"><b>Summary:</b> {_escape_html(f.get("summary") or "—")}</div>
-            <div class="fn-info-row"><b>Contextual Purpose:</b> {_escape_html(f.get("contextual_purpose") or "—")}</div>
-            <div class="fn-info-row"><b>Return Value:</b> {_escape_html(f.get("return_value") or "—")}</div>
-            <div class="fn-info-row"><b>Risk Logic:</b> {_escape_html(f.get("risk_logic") or "—")}</div>
+            <div class="fn-info-row"><b>Purpose:</b> {_apply_forensic_highlighting(_escape_html(f.get("one_liner") or "—"))}</div>
+            <div class="fn-info-row"><b>Summary:</b> {_apply_forensic_highlighting(_escape_html(f.get("summary") or "—"))}</div>
+            <div class="fn-info-row"><b>Contextual Purpose:</b> {_apply_forensic_highlighting(_escape_html(f.get("contextual_purpose") or "—"))}</div>
+            <div class="fn-info-row"><b>Return Value:</b> {_apply_forensic_highlighting(_escape_html(f.get("return_value") or "—"))}</div>
+            <div class="fn-info-row"><b>Risk Logic:</b> {_apply_forensic_highlighting(_escape_html(f.get("risk_logic") or "—"))}</div>
             {f'<div class="fn-info-row" style="margin-top:10px;"><b>Details:</b><ul style="margin:5px 0 0 20px;">{bullets}</ul></div>' if bullets else ''}
             <details class="code-section" style="margin-top:12px;">
                 <summary class="code-section-header">
@@ -1424,6 +1512,10 @@ pre {{ background:#1e1e1e; color:#d4d4d4; padding:15px; border-radius:8px; overf
 details.code-section[open] > .code-section-header svg {{ transform: rotate(0deg); }}
 details.code-section:not([open]) > .code-section-header svg {{ transform: rotate(-90deg); }}
 .code-section-body pre {{ margin: 0; border-radius: 0; max-height: 600px; border: none; }}
+.toggle-icon {{ transition: transform 0.2s ease; display: block; fill: currentColor; }}
+details[open] .toggle-icon {{ transform: rotate(90deg); }}
+.icon-box {{ width: 16px; height: 16px; background: transparent; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }}
+
 @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(4px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 </style>
 </head>
@@ -1464,42 +1556,42 @@ details.code-section:not([open]) > .code-section-header svg {{ transform: rotate
     <h2 class="section-title">Capability or Malware Features</h2>
 
     <div style="margin-bottom:30px;">
-        <h3 style="color:{'#1e293b' if cap_rows else '#94a3b8'}; border-left:4px solid {'#1e293b' if cap_rows else '#cbd5e1'}; padding-left:10px; margin-bottom:15px;">1. General Identified Capabilities</h3>
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">1. General Identified Capabilities</h3>
         {capabilities_html}
     </div>
     
     <div style="margin-bottom:30px;">
-        <h3 style="color:{'#dc2626' if c2_rows else '#94a3b8'}; border-left:4px solid {'#dc2626' if c2_rows else '#cbd5e1'}; padding-left:10px; margin-bottom:15px;">2. C2 / Backdoor / RAT Analysis</h3>
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">2. C2, Backdoor or RAT Analysis</h3>
         {c2_analysis_html}
     </div>
 
     <div style="margin-bottom:30px;">
-        <h3 style="color:{'#f97316' if pers_rows else '#94a3b8'}; border-left:4px solid {'#f97316' if pers_rows else '#cbd5e1'}; padding-left:10px; margin-bottom:15px;">3. Persistence Mechanisms</h3>
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">3. Persistence Mechanisms</h3>
         {persistence_html}
     </div>
 
     <div style="margin-bottom:30px;">
-        <h3 style="color:{'#8b5cf6' if recon_rows else '#94a3b8'}; border-left:4px solid {'#8b5cf6' if recon_rows else '#cbd5e1'}; padding-left:10px; margin-bottom:15px;">4. Reconnaissance or Info Stealer</h3>
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">4. Reconnaissance or Info Stealer</h3>
         {recon_infostealer_html}
     </div>
 
     <div style="margin-bottom:30px;">
-        <h3 style="color:{'#1e293b' if inter_rows else '#94a3b8'}; border-left:4px solid {'#64748b' if inter_rows else '#cbd5e1'}; padding-left:10px; margin-bottom:15px;">5. File / Registry / Process Interaction</h3>
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">5. File, Registry or Process Interaction</h3>
         {interaction_html}
     </div>
 
     <div style="margin-bottom:30px;">
-        <h3 style="color:{'#1e293b' if res_rows else '#94a3b8'}; border-left:4px solid {'#64748b' if res_rows else '#cbd5e1'}; padding-left:10px; margin-bottom:15px;">6. API Hashing / Resolving / PEB Walk</h3>
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">6. API Hashing, API Resolving or PEB Walk</h3>
         {api_resolving_html}
     </div>
 
     <div style="margin-bottom:30px;">
-        <h3 style="color:{'#1e293b' if anti_rows else '#94a3b8'}; border-left:4px solid {'#64748b' if anti_rows else '#cbd5e1'}; padding-left:10px; margin-bottom:15px;">7. Packer/Obfuscation or Anti-Analysis</h3>
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">7. Packer, Obfuscation or Anti-Analysis</h3>
         {anti_analysis_html}
     </div>
 
     <div style="margin-bottom:30px;">
-        <h3 style="color:{'#1e293b' if cry_rows else '#94a3b8'}; border-left:4px solid {'#64748b' if cry_rows else '#cbd5e1'}; padding-left:10px; margin-bottom:15px;">8. Cryptographic Artifacts</h3>
+        <h3 style="color:#1e293b; border-left:4px solid #cbd5e1; padding-left:10px; margin-bottom:15px;">8. Cryptographic, Hashing, Encoding or Compression Artifacts</h3>
         {crypto_artifacts_html}
     </div>
   </div>
@@ -1532,29 +1624,80 @@ details.code-section:not([open]) > .code-section-header svg {{ transform: rotate
   <div class="section" id="sec-12">
     <h2 class="section-title">Function Analysis</h2>
     
-    <h3 style="margin:20px 0 10px; color:#1e293b;">Call chain analysis</h3>
-    {chain_html if chain_html else '<p class="muted">No execution chain mapping established.</p>'}
-    
-    <h3 style="margin:30px 0 10px; color:#1e293b;">Call Graph (Tree View)</h3>
-    {tree_view_html}
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Call Chain Analysis
+      </summary>
+      <div style="padding:16px;">
+        {chain_html if chain_html else '<p class="muted">No execution chain mapping established.</p>'}
+      </div>
+    </details>
 
-    <h3 style="margin:30px 0 10px; color:#1e293b;">Mermaid Visual Call Flow - HTML</h3>
-    {mermaid_html}
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Call Graph (Tree View)
+      </summary>
+      <div style="padding:16px;">
+        {tree_view_html}
+      </div>
+    </details>
 
-    <h3 style="margin:40px 0 10px; color:#1e293b; border-top:1px solid #e2e8f0; padding-top:20px;">Malicious functions</h3>
-    {mal_tbl}
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Mermaid Visual Call Flow
+      </summary>
+      <div style="padding:16px;">
+        {mermaid_html}
+      </div>
+    </details>
 
-    <h3 style="margin:40px 0 10px; color:#1e293b; border-top:1px solid #e2e8f0; padding-top:20px;">Suspicious functions</h3>
-    {sus_tbl}
+    <details class="fn-card" open style="margin-bottom:12px; border:1px solid #fecaca; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#dc2626; background:#fff5f5; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Malicious Functions
+      </summary>
+      <div style="padding:16px;">
+        {mal_tbl}
+      </div>
+    </details>
 
-    <h3 style="margin:40px 0 10px; color:#1e293b; border-top:1px solid #e2e8f0; padding-top:20px;">Benign functions</h3>
-    {benign_tbl}
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #fed7aa; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#c2410c; background:#fff7ed; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Suspicious Functions
+      </summary>
+      <div style="padding:16px;">
+        {sus_tbl}
+      </div>
+    </details>
 
-    <h3 style="margin:40px 0 10px; color:#1e293b; border-top:1px solid #e2e8f0; padding-top:20px;">Function Decomposition</h3>
-    <input type="text" id="fnSearch" class="filter-input" placeholder="Search function name or risk tag (e.g., malicious)..." onkeyup="filterFunctions()">
+    <details class="fn-card" style="margin-bottom:12px; border:1px solid #bbf7d0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#15803d; background:#f0fdf4; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Benign Functions
+      </summary>
+      <div style="padding:16px;">
+        {benign_tbl}
+      </div>
+    </details>
+
+    <details class="fn-card" open style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+      <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#1e293b; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
+        <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        Function Decomposition
+      </summary>
+      <div style="padding:16px;">
+
     <div id="func-grid">
+        <input type="text" id="fnSearch" class="filter-input" placeholder="Search function name or risk tag (e.g., malicious)..." onkeyup="filterFunctions()" style="margin-bottom:12px;">
         {decomp_html}
     </div>
+      </div>
+    </details>
+
   </div>
 
   <!-- Risk Assessment -->
@@ -1674,7 +1817,7 @@ def build_function_markdown_piece(ea, node, res_data, graph, code=None):
     return f"### {node.name} (0x{ea:X}) [{risk}]\n**Summary:** {summ}\n\n"
 
 def assemble_malware_source(graph, entry_ea, output_dir):
-    """Concatenate all custom function code into a single forensic library."""
+    """Concatenate all custom function code into a single Analysis library."""
     all_code = []
     for node in sorted(graph.values(), key=lambda x: x.depth):
         if node.is_library: continue
@@ -1720,11 +1863,12 @@ Respond STRICTLY with a valid JSON object matching this structure:
 def generate_technical_overview(digest, ai_cfg, log_fn):
     prompt = f"""Context: {digest}
 
-You are a senior malware reverse engineer writing a Technical Code Analysis Overview section for a professional malware analysis report. Your goal is to provide a deep-dive technical narrative that explains the inner workings of the binary with forensic precision.
+You are a senior malware reverse engineer writing a Technical Code Analysis Overview section for a professional malware analysis report. Your goal is to provide a deep-dive technical narrative that explains the inner workings of the binary with Analysis precision.
 
 STRICT RULES:
 - Do NOT write generic or high-level descriptions.
 - Produce a cohesive technical narrative. Cross-reference sections where logical (e.g., how architecture supports evasion).
+- Exclude standard compiler-generated routines (e.g., CRT handlers such as __matherr, ___report_error, runtime stubs) unless they directly participate in malicious logic.
 - Base everything ONLY on analyzed functions and confirmed behaviors.
 - Ensure the explanation naturally covers:
   - The technique being implemented.
@@ -1734,12 +1878,7 @@ STRICT RULES:
   - Its position within the execution lifecycle.
 
 OUTPUT STRUCTURE:
-1. Program Architecture: Describe the overall design (modular, dispatcher-based, etc.). Explain the entry point logic.
-2. Initialization & Execution Chain: Detail the startup sequence and key transition functions.
-3. Payload Handling & Data transformation: Forensic analysis of decryption, unpacking, or memory mapping.
-4. Control Flow & Dispatcher Logic: Implementation of command dispatchers and handler routing.
-5. System Interaction Layer: Detailed analysis of File, Registry, Network, and Process manipulation.
-6. Evasion & Obfuscation: API hashing, anti-analysis, and code shielding techniques.
+The technical code analysis focus on code analysis of the malware. Something that valuable to reverse engineer and understand the malware. Describe the overall design (modular, dispatcher-based, etc.). Explain the entry point logic and all the important functions like for example analysis of decryption, unpacking, or memory mapping or anything interesting Analysis of command dispatchers and handler routing. Analysis of File, Registry, Network, and Process manipulation. Analysis of API hashing, anti-analysis, and code shielding techniques. Only include what is relevant to the malware and if you have the findings. If you don't have any findings, then don't include it or speculate anything.
 
 WRITING STYLE:
 - Technical, Dense, and Authoritative. No filler.
@@ -1747,7 +1886,7 @@ WRITING STYLE:
 
 Respond STRICTLY with a valid JSON object:
 {{
-  "detailed_technical_overview": "Comprehensive 6-zone forensic narrative."
+  "detailed_technical_overview": "Comprehensive 6-zone Analysis narrative."
 }}"""
     sys_p = "You are a senior malware reverse engineer. Respond ONLY with valid JSON."
     return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096)
@@ -1755,23 +1894,25 @@ Respond STRICTLY with a valid JSON object:
 def generate_malware_analysis_assessment(digest, ai_cfg, log_fn):
     prompt = f"""Context: {digest}
 
-You are a senior malware reverse engineer and head of forensic reporting, writing a professional Executive Summary section for a high-stakes malware analysis report.
+You are a senior malware reverse engineer and head of Analysis reporting, writing a professional Executive Summary section for a high-stakes malware analysis report.
 
 STRICT REQUIREMENTS:
 - Base every statement ONLY on analyzed functions and confirmed observed behavior.
+- Do NOT speculate, infer intent beyond technical evidence, or attribute capabilities that are not explicitly implemented in code.
 - Do NOT repeat the same capability multiple times.
+- Exclude standard compiler-generated routines (e.g., CRT handlers such as __matherr, ___report_error, runtime stubs) unless they directly participate in malicious logic.
 - For EVERY major observation, you MUST answer the following questions within the narrative:
-  1. WHAT: What is the specific behavior or capability?
-  2. WHY: What is the technical objective or intent behind this behavior?
-  3. HOW: How is the behavior implemented (Registry keys, specific APIs, logic flows)?
-  4. WHERE: Identify specific function names (e.g., fn_function) or memory locations where the logic resides.
-  5. WHEN: Where in the execution chain (initialization, payload deployment, C2 phase) does this occur?
+  1. What is the specific behavior or capability?
+  2. What is the technical objective or intent behind this behavior?
+  3. How is the behavior implemented (Registry keys, specific APIs, logic flows)?
+  4. Identify specific function names (e.g., fn_function) or memory locations where the logic resides.
+  5. Where in the execution chain (initialization, payload deployment, C2 phase) does this occur?
 
 Respond STRICTLY with a valid JSON object matching this structure:
 {{
   "detailed_narrative": "The full 4-paragraph technical executive summary text providing deep malware analysis and code reverse engineering context."
 }}"""
-    sys_p = "You are a senior malware reverse engineer and head of forensic reporting. Respond ONLY with valid JSON."
+    sys_p = "You are a senior malware reverse engineer and head of Analysis reporting. Respond ONLY with valid JSON."
     return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096)
 
 def generate_key_capabilities(digest, ai_cfg, log_fn):
@@ -1825,70 +1966,102 @@ def generate_behavioral_indicators(digest, ai_cfg, log_fn, all_strings=None):
     chunk_size = 150
     aggregated_iocs = []
     
-    if len(all_strings) == 0:
-        chunks = [[]]
-    else:
-        chunks = [all_strings[i:i + chunk_size] for i in range(0, len(all_strings), chunk_size)]
+    # Ensure strings are handled in chunks to prevent context overflow, but always include them
+    chunks = [all_strings[i:i + chunk_size] for i in range(0, len(all_strings), chunk_size)]
+    if not chunks: chunks = [[]]
         
-    sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
+    sys_p = "You are a senior reverse engineer experts in malware analysis. Respond ONLY with valid JSON."
+    
     for idx, chunk in enumerate(chunks):
         if len(chunks) > 1:
             log_fn(f"Processing chunk {idx+1}/{len(chunks)} of strings for IOC extraction...", "info")
-            batch_ctx = "\n".join(chunk)
-            prompt = f"""Context: {digest}
-Additional Strings Batch ({idx+1}/{len(chunks)}):
+        
+        batch_ctx = "\n".join(chunk) if chunk else "No additional strings."
+        
+        prompt = f"""Context: {digest}
+
+Additional Strategic Strings for analysis:
 {batch_ctx}
 
 TASK:
-1. Examine all Strategic Strings and API Behaviors in the Context and the Additional Strings Batch.
-2. Extract REAL, EXACT literal strings as indicators (C2 domains, IP addresses, specific malware file paths, registry keys for persistence, exact mutexes).
-3. DO NOT abstract values, DO NOT use placeholders like [random_folder], and DO NOT write descriptive behavior as an indicator. The "value" must be a true literal string that was found in the context.
-4. IGNORE junk strings, compiler artifacts, or generic library paths (e.g., C:\\Windows\\System32).
-5. For each IOC, explain its forensic significance.
+1. Examine all Strategic Strings and API Behaviors in the Context and the Additional Strings.
+2. Extract REAL, EXACT literal strings as forensic indicators (IOCs).
+3. Focus on these specific types (Extract ANY that find):
+   - hash: MD5, SHA1, or SHA256 literals.
+   - IP: IPv4 or IPv6 addresses.
+   - domain: Fully qualified domain names.
+   - url: Complete URLs or target endpoints.
+   - email: Email addresses found in strings.
+   - port: Connection ports (if explicitly defined as such).
+   - registry key: Full HKLM/HKCU paths.
+   - registry value: Specific value names being modified or queried.
+   - registry name: Friendly names associated with registry objects.
+   - filename: Standalone filenames (e.g. 'malware.exe', 'temp.dat').
+   - file path: Full or partial directory paths (e.g. 'C:\\Windows\\Temp\\').
+   - folder name: Specific directory names of interest.
+   - file extension: Suspicious or targeted extensions.
+   - commands: Shell commands or command-line arguments.
+   - OS Artifacts: Mutex names, User-Agents, or specific system markers.
 
-Respond STRICTLY with a valid JSON object matching this structure:
+CRITICAL RULES:
+- DO NOT use placeholders or abstract values like [random_folder]. 
+- The "value" MUST be a true literal string that was found in the input.
+- Extract partial strings if they represent a clear IOC (e.g., a registry key fragment).
+- IGNORE obvious system libraries (kernel32.dll, ntdll.dll) unless they are involved in hijacking.
+- For each IOC, explain its Analysis significance.
+- associated_functions MUST be a list of function names from the context that reference this indicator.
+
+Respond STRICTLY with a valid JSON object:
 {{
   "iocs": [
     {{
-      "type": "File Path|Registry Key|Network Domain|IP|Mutex|User-Agent", 
-      "value": "EXACT LITERAL STRING ONLY", 
-      "context": "Forensic significance / why it's an IOC",
-      "associated_functions": ["func_name1"]
-    }}
-  ]
-}}"""
-        else:
-            prompt = f"""Context: {digest}
-Provide Indicators of Compromise (IOCs). 
-
-TASK:
-1. Examine all Strategic Strings and API Behaviors in the Context.
-2. Extract REAL, EXACT literal strings as indicators (C2 domains, IP addresses, specific malware file paths, registry keys for persistence, exact mutexes).
-3. DO NOT abstract values, DO NOT use placeholders like [random_folder], and DO NOT write descriptive behavior as an indicator. The "value" must be a true literal string that was found in the context.
-4. IGNORE junk strings, compiler artifacts, or generic library paths (e.g., C:\\Windows\\System32).
-5. For each IOC, explain its forensic significance.
-
-Respond STRICTLY with a valid JSON object matching this structure:
-{{
-  "iocs": [
-    {{
-      "type": "File Path|Registry Key|Network Domain|IP|Mutex|User-Agent", 
-      "value": "EXACT LITERAL STRING ONLY", 
-      "context": "Forensic significance / why it's an IOC",
-      "associated_functions": ["func_name1"]
+      "type": "Hash|IP|Domain|URL|Registry Key|Registry Value|Registry Name|Filename|File Path|Folder Name|File Extension|Email|Command|Port|Mutex|User-Agent", 
+      "value": "EXACT LITERAL STRING FOUND", 
+      "context": "Analysis significance / why it's a malware or forensic indicator",
+      "associated_functions": ["func_name1", "sub_401000"]
     }}
   ]
 }}"""
 
         res = _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
-        if isinstance(res, dict) and "iocs" in res and isinstance(res["iocs"], list):
-            aggregated_iocs.extend(res["iocs"])
+        
+        # Parse result: LLM returns string, we need dict
+        parsed = {}
+        if isinstance(res, str):
+            # Strip markdown code blocks if present
+            cleaned = re.sub(r'```(?:json)?|```', '', res).strip()
+            try:
+                parsed = json.loads(cleaned)
+            except:
+                # Best-effort regex extraction if JSON is broken
+                matches = re.findall(r'\{.*\}', cleaned, re.DOTALL)
+                if matches:
+                    try: parsed = json.loads(matches[0])
+                    except: pass
+        elif isinstance(res, dict):
+            parsed = res
+
+        if isinstance(parsed, dict) and "iocs" in parsed and isinstance(parsed["iocs"], list):
+            aggregated_iocs.extend(parsed["iocs"])
             
-    return {"iocs": aggregated_iocs}
+    # Final Deduplication: remove duplicates with case-insensitive check and clean up
+    final_iocs = []
+    seen_values = set()
+    for item in aggregated_iocs:
+        if not isinstance(item, dict): continue
+        val = str(item.get("value", "")).strip()
+        if not val: continue
+        val_lower = val.lower()
+        if val_lower not in seen_values:
+            # Ensure type is one of the preferred ones
+            final_iocs.append(item)
+            seen_values.add(val_lower)
+            
+    return {"iocs": final_iocs}
 
 def generate_ranked_strings(digest, ai_cfg, log_fn):
     prompt = f"""Context: {digest}
-Review the Extracted Strings in the context. Rank them by forensic importance.
+Review the Extracted Strings in the context. Rank them by Analysis importance.
 
 Rank categories: High (C2, persistence, exploit artifacts), Medium (Configuration, specific internal logic), Low (UI strings, logging).
 
@@ -1918,11 +2091,11 @@ def generate_execution_flow_overview(digest, ai_cfg, log_fn):
     prompt = f"""Context: {digest}
 
 Analyze the program's complete execution lifecycle from start to finish. 
-Trace the operational flow by synthesizing the 'Primary Execution Dispatch' (entry logic) and the 'Deep Forensic Findings' (sub-routine capabilities).
+Trace the operational flow by synthesizing the 'Primary Execution Dispatch' (entry logic) and the 'Deep Analysis Findings' (sub-routine capabilities).
 
 Your goal is to identify a logical chronological sequence of stages (e.g., Initialization -> Environment Discovery -> Persistence/Infection -> Core Malicious Logic -> Network/C2 Communication -> Cleanup/Termination).
 
-STRICT FORENSIC RULES:
+STRICT Analysis RULES:
 1. Identify at least 3 distinct logical phases unless the program is extremely trivial.
 2. Synthesize the description by explaining HOW routines relate to each other (e.g., "The initialization routine sets up X, which is later used by Y for Z").
 3. Standard compiler/CRT stubs (__chkstk, mainCRTStartup, etc.) are BENIGN boilerplate. NEVER report them as malicious stages.
@@ -1940,18 +2113,23 @@ Respond STRICTLY with a valid JSON object matching this structure:
 
 def generate_crypto_artifacts(digest, ai_cfg, log_fn):
     prompt = f"""Context: {digest}
-Identify cryptographic operations.
-Look for: XOR loops with constant keys, bitwise substitution, S-box implementations, or WinAPI calls to BCrypt/CryptProtect/CryptEncrypt.
+Identify Cryptographic, Hashing, Encoding, or Compression artifacts.
+
+Look for:
+1. Hashing: MD5, SHA-1/256/512, CRC32, custom rolling hashes (e.g., API name hashes).
+2. Encryption: XOR loops with constant keys, bitwise substitution, S-box implementations (AES/DES), or WinAPI calls (BCrypt, CryptProtectData, CryptEncrypt).
+3. Encoding: Base64/32/58, Hex-to-Bin conversion, custom alphabet substitution.
+4. Compression: Zlib, LZMA, Huffman tables, or custom RLE (Run-Length Encoding).
 
 ANTI-HALLUCINATION RULES:
-1. DO NOT list things you did NOT find. If no crypto is present, return an empty artifacts list.
-2. Do NOT interpret bitwise XOR as "Encryption" unless you see a clear key-schedule or algorithm pattern.
+1. DO NOT list things you did NOT find. If no artifacts are present, return an empty artifacts list.
+2. Do NOT interpret simple bitwise XOR as "Encryption" unless you see a clear key-schedule or persistent algorithm pattern.
 3. Standard pointer encoding (_encode_pointer, _decode_pointer) is NOT cryptography.
 
 Respond STRICTLY with a valid JSON object:
 {{
   "artifacts": [
-    {{"algorithm": "Algorithm Name", "usage": "Reasoning for classification", "associated_functions": ["func_name"]}}
+    {{"algorithm": "Algorithm/Technique Name", "usage": "Specific technical details and purpose (e.g., C2 payload encryption, API name hashing)", "associated_functions": ["func_name"]}}
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
@@ -1985,18 +2163,18 @@ def generate_c2_analysis(digest, ai_cfg, log_fn):
     prompt = f"""Context: {digest}
 
 Analyze technical evidence of Command & Control (C2), Backdoor communication, or RAT (Remote Access Trojan) capabilities.
-FORENSIC FOCUS:
+Analysis FOCUS:
 - Socket/Network APIs: WSAStartup, socket, connect, send, recv, HttpOpenRequest, WinHttpOpen.
 - Shell/Command Channels: Creating pipes for cmd.exe, reverse shells, remote command execution.
 - Command Handler: Identify command menus or handlers (e.g., switch/case or if/else chain dispatching specific commands like download, execute, terminate, etc.).
 - Active Remote Control: Look for RAT-specific features like screen capture (GDI/BitBlt), keylogging (GetAsyncKeyState/SetWindowsHookEx), or direct remote execution logic.
 - Network Artifacts: Hardcoded IPs, domains, or User-Agents.
 
-STRICT FORENSIC RULES:
+STRICT Analysis RULES:
 1. If the context shows 'opening shell connections' or 'creating pipes for command execution', this IS a Backdoor/C2 mechanism.
 2. If the malware parses incoming data to dispatch commands (e.g., '1' for shell, '2' for upload), this is a C2 command menu.
 3. If it has screenshot or keylogging logic combined with network send() calls, categorize it as active RAT capability within C2.
-4. Cite specific functions from the 'DEEP FORENSIC FINDINGS' or 'CATEGORIZED WINAPI BEHAVIORS' as evidence.
+4. Cite specific functions from the 'DEEP Analysis FINDINGS' or 'CATEGORIZED WINAPI BEHAVIORS' as evidence.
 
 Respond STRICTLY with a valid JSON object:
 {{
@@ -2175,7 +2353,7 @@ def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn
     full_digest = f"""PRIMARY EXECUTION DISPATCH (Layer 1):
 {' '.join(entry_children_blocks)}
 
-DEEP FORENSIC FINDINGS (Sub-Routines):
+DEEP Analysis FINDINGS (Sub-Routines):
 {chr(10).join(digest_lines)}
 
 CATEGORIZED WINAPI BEHAVIORS:
@@ -2196,7 +2374,7 @@ Respond STRICTLY with a valid JSON object:
 {{
   "summary": "Technical summary of how the malware ensures it survives reboots.",
   "mechanisms": [
-    {{"method": "Method Name (e.g., Registry Run Key)", "details": "Detailed forensic explanation including keys or file paths used", "associated_functions": ["func_name"]}}
+    {{"method": "Method Name (e.g., Registry Run Key)", "details": "Detailed Analysis explanation including keys or file paths used", "associated_functions": ["func_name"]}}
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
@@ -2206,12 +2384,12 @@ def generate_file_registry_interaction(digest, ai_cfg, log_fn):
     prompt = f"""Context: {digest}
 Analyze how the program interacts with the File System, Registry, and Processes.
 Focus on: Creating, deleting, accessing, or injecting into these entities.
-Cite specific forensic details: e.g., which registry keys are created, which files are deleted, or target process names for injection (OpenProcess/CreateRemoteThread).
+Cite specific Analysis details: e.g., which registry keys are created, which files are deleted, or target process names for injection (OpenProcess/CreateRemoteThread).
 
 Respond STRICTLY with a valid JSON object:
 {{
   "interactions": [
-    {{"type": "File|Registry|Process", "action": "Create|Delete|Access|Inject", "target": "EXACT Path or Name", "description": "Forensic significance of this interaction", "associated_functions": ["func_name"]}}
+    {{"type": "File|Registry|Process", "action": "Create|Delete|Access|Inject", "target": "EXACT Path or Name", "description": "Analysis significance of this interaction", "associated_functions": ["func_name"]}}
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
@@ -2236,13 +2414,13 @@ def generate_recon_infostealer_analysis(digest, ai_cfg, log_fn):
 Analyze Reconnaissance or Information Stealing capabilities (LOCAL Discovery).
 Look for: Enumerating local files (.txt, .docx, wallets), stealing browser cookies/passwords, clipboard monitoring, or gathering environment info (ComputerName, UserName, OSVersion, Disk size, CPU info).
 
-Identify what specific forensic data is being harvested from the host. Do NOT include active C2/Remote control logic here; focus on data theft/collection methods.
+Identify what specific Analysis data is being harvested from the host. Do NOT include active C2/Remote control logic here; focus on data theft/collection methods.
 
 Respond STRICTLY with a valid JSON object:
 {{
   "summary": "Detailed summary of what local information is being targeted or gathered.",
   "findings": [
-    {{"category": "Category (e.g., Browser Data, File Enumeration, System Info)", "description": "Forensic details of what is stolen or captured and how", "associated_functions": ["func_name"]}}
+    {{"category": "Category (e.g., Browser Data, File Enumeration, System Info)", "description": "Analysis details of what is stolen or captured and how", "associated_functions": ["func_name"]}}
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
