@@ -78,7 +78,7 @@ But after all these are the features:
 <img width="1302" height="932" alt="image" src="https://github.com/user-attachments/assets/af13bded-dc83-4c23-ba84-86fb83889a7f" />
 
 ### Deep Analyzer
-<img width="1202" height="832" alt="image" src="https://github.com/user-attachments/assets/1abf3bae-7ce0-436e-98e9-9a35fef04c87" />
+<img width="1920" height="1009" alt="image" src="https://github.com/user-attachments/assets/aeed6ab4-151f-49d1-a737-402eec369350" />
 
 ### Deep Analyzer Report
 Refer deep_analyzer_example_report.html
