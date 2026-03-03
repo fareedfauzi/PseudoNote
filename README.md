@@ -36,7 +36,18 @@ Several the core analysis modes including
 4. Bulk Variable renamer `/var_renamer.py` - Rename variables in multiple functions at once
 5. Pseudonote pane - For generating readable high level codes and note taking utility.
 
-But after all these are the features:
+What's the different between Bulk Analyzer and Deep Analyzer?
+| Aspect              | Bulk Function Analyzer                                     | Deep Analyzer                                   |
+|---------------------|----------------------------------------------------|--------------------------------------------------------------|
+| **Purpose**         | Standard per-function AI tagging & classification  | Full binary deep-dive with call graph + staged AI analysis   |
+| **Scope**           | Flat list of functions (batch AI requests)         | Recursive call graph built from an entry point               |
+| **Analysis Depth**  | Single-pass, one batch per function set            | Multi-stage pipeline (Stages 1–6+) bottom-up traversal       |
+| **AI Usage**        | Tag/classify functions in batches                  | Per-function deep prompts, C2/backdoor detection, reports    |
+| **Output**          | Updates tag/confidence in the UI table             | Full HTML forensic report, decompiled artifacts saved to disk |
+| **Call Graph**      | No. works on a flat function list                 | Yes. Maps the entire callee tree       |
+
+
+But after all these are the features included:
 1. Convert HexRay's Pseudocode or Assembly into high-level languages such as C. Python, Rust, and others.
 3. Automatically rename functions and variables with meaningful names.
 4. Provide function explaination, details analysis.
