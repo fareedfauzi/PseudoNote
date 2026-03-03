@@ -28,9 +28,6 @@ Once saved, a .ini file will be written to the installation folder. If it fails 
 
 <img width="1291" height="790" alt="image" src="https://github.com/user-attachments/assets/9f9cb279-738f-4a32-be8f-994130a5abcc" />
 
-<img width="807" height="429" alt="image" src="https://github.com/user-attachments/assets/f95b3311-f491-4a69-b345-bb05c37a7ce6" />
-
-
 # Features
 Several the core analysis modes including
 1. Bulk Analyzer `/analyzer.py` - A fast, lightweight scanner for batch-tagging functions with AI.
@@ -109,6 +106,8 @@ Refer deep_analyzer_example_report.html
 
 
 # Deep Analyzer Approach
+<img width="6385" height="16123" alt="mermaid-diagram-2026-03-03T00-04-12" src="https://github.com/user-attachments/assets/0efe0c5d-0524-46a0-b306-bd3eafb5b23b" />
+
 ## PHASE 1: DISCOVERY & PREPARATION
 ### STAGE 1 - Environment Setup
 - Initializes the workspace directories, detects the target binary path from IDA, and validates that all dependencies and AI configurations are ready.
@@ -137,3 +136,14 @@ Refer deep_analyzer_example_report.html
 
 ### STAGE 7 - HTML Report Generation
 - Details report analysis in HTML format
+
+# Bulk function analyzer approach
+<img width="7745" height="21970" alt="mermaid-diagram-2026-03-02T23-53-59" src="https://github.com/user-attachments/assets/bfbf9d01-36a1-4e79-ae35-42789a4a9a92" />
+
+# Bulk function renamer approach
+<img width="7114" height="16843" alt="mermaid-diagram-2026-03-03T00-01-25" src="https://github.com/user-attachments/assets/90e86a4b-3b98-4c58-94d6-3ebccaa153bc" />
+
+# Bulk variable rename approach
+<img width="7853" height="18779" alt="mermaid-diagram-2026-03-03T00-02-30" src="https://github.com/user-attachments/assets/45938b37-7526-46c3-a66e-54d730d795ab" />
+
+
