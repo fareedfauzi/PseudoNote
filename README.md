@@ -53,7 +53,7 @@ But after all these are the features included:
 4. Provide function explaination, details analysis.
 5. Bulk functions renamer and variable renamer.
 6. Bulk function analyzer.
-7. Fire and forget Deep Analyzer where it rename functions/variables and summarize everything. User need to choose the entry function to be analyze. WIP
+7. Fire and forget Deep Analyzer where it rename functions/variables and summarize everything. User need to choose the entry function to be analyze.
 8. Ask the AI-chat about the current opened function.
 9. Automatically generate C function prototypee, type definitions, and struct (Mostly the result are not accurate).
 10. Analyst Notes - Integrated Markdown editor with live preview with markdown toolbar.
