@@ -18,6 +18,7 @@ from pseudonote.config import CONFIG, LOGGER
 import pseudonote.ai_client as _ai_mod
 import pseudonote.chat as _chat
 import pseudonote.view as _view_mod
+from pseudonote.renamer import clean_name
 
 
 def _get_ai_client():
@@ -160,7 +161,9 @@ class RenameFunctionHandler(idaapi.action_handler_t):
                         new_name = f"{new_name}_{addr_str}"
 
                 old_name = idc.get_func_name(func.start_ea)
-                if new_name == old_name: return
+                new_name = clean_name(new_name, ea=func.start_ea)
+                if not new_name or new_name == old_name: return
+                
                 if idc.set_name(func.start_ea, new_name, idc.SN_AUTO):
                     from pseudonote.idb_storage import save_to_idb
                     save_to_idb(func.start_ea, "renamed_by_pseudonote", tag=83)
@@ -223,7 +226,9 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
                         new_name = f"{new_name}_{addr_str}"
 
                 old_name = idc.get_func_name(func.start_ea)
-                if new_name == old_name: return
+                new_name = clean_name(new_name, ea=func.start_ea)
+                if not new_name or new_name == old_name: return
+                
                 if idc.set_name(func.start_ea, new_name, idc.SN_AUTO):
                     from pseudonote.idb_storage import save_to_idb
                     save_to_idb(func.start_ea, "renamed_by_pseudonote", tag=83)
@@ -417,7 +422,7 @@ def _pn_comment_callback(cfunc, pseudocode_lines, view, response):
             continue
 
         # Add PseudoNote prefix for consistency
-        full_comment = f"[PseudoNote] {comment_text}"
+        full_comment = f"{comment_text}"
         
         # Prepend a newline for better visual spacing in pseudocode
         pseudocode_comment = "\n" + full_comment
@@ -700,7 +705,7 @@ class AsmCommentHandler(idaapi.action_handler_t):
                         continue
                         
                     sec_ea = sections[idx][0]
-                    full_cmt = f"[PseudoNote] {cmt}"
+                    full_cmt = f"{cmt}"
                     
                     # 1. Set repeatable comment in IDA (Disassembly)
                     # Repeatable (1) ensures it shows up in Pseudocode too

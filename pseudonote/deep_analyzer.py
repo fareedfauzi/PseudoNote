@@ -1710,7 +1710,7 @@ def apply_function_comment(ea, result, log_fn):
         # Keep existing human or previous AI comment if it's there
         return
         
-    prefix = "[PseudoNote] "
+    prefix = ""
     def _set_cmt():
         idc.set_func_cmt(ea, prefix + one_liner, 1)
     idaapi.execute_sync(_set_cmt, idaapi.MFF_WRITE)
@@ -2308,7 +2308,7 @@ def determine_risk_with_context(node, result, context, graph):
         result["suspicious"] = ["Function identified as return stub (tiny leaf with no side effects)."]
         return result
 
-    if func_lines < 8 and risk != "malicious":
+    if func_lines < 8 and risk == "malicious":
         # Tiny functions: cap at suspicious at most
         risk = "suspicious"
 
@@ -2328,7 +2328,7 @@ def determine_risk_with_context(node, result, context, graph):
     ) if api_hits else False
 
     has_local_indicator = (
-        len(suspicious) >= 3 or                             # 3+ suspicious items to mitigate AI hallucinations
+        len(suspicious) >= 5 or                             # 5+ suspicious items (increased from 3 to reduce noise)
         (node.entropy and node.entropy > 7.0) or            # Encrypted/Packed logic
         has_high_severity_api                               # only HIGH-severity API
     )
@@ -2359,9 +2359,13 @@ def determine_risk_with_context(node, result, context, graph):
                 try:
                     caller_data = json.loads(caller_raw)
                     if caller_data.get("risk_tag") == "malicious":
-                        conditions_fired += 1
-                        upgrade_reasons.append(f"Supports malicious function: {graph[caller_ea].name}")
-                        break                             # 1-hop cap: stop at first match
+                        # CRITICAL: Utility functions don't inherit risk from callers - they are passive tools.
+                        # Only upgrade if the function name itself isn't a known benign utility pattern.
+                        benign_terms = ['print', 'report', 'log', 'string', 'format', 'dump_data', 'display', 'render', 'show', 'output', 'write', 'trace', 'debug', 'verbose', 'util', 'helper', 'hash', 'checksum']
+                        if not any(term in node.name.lower() for term in benign_terms):
+                            conditions_fired += 1
+                            upgrade_reasons.append(f"Supports malicious function: {graph[caller_ea].name}")
+                            break                             # 1-hop cap: stop at first match
                 except:
                     pass
 
@@ -2464,10 +2468,10 @@ def determine_risk_with_context(node, result, context, graph):
     # Condition 4: Targetted Utility Function Suppression List (Aggressive False Positive filtering)
     # This filters out library-heavy artifacts that superficially look like custom logic.
     utility_patterns = [
-        'cleanup', 'initialize', 'validate', 'compare', 'erase', 'insert',
+        'initialize', 'validate', 'compare', 'erase', 'insert',
         'rotate', 'rebalance', 'iterator', 'buffer', 'tree_node', 'lookup', 
         'map_set', 'linked_list', 'list_node', 'relink', 'pointer', 'destructor', 
-        'constructor', 'deallocate', 'release', 'resize', 'substring', 
+        'constructor', 'release', 'resize', 'substring', 
         'exception', 'throw', 'error', 'vtable', 'bad_call', 'calc', 'offset',
         'ssl_socket', 'tcp_socket', 'plugin_object', 'return_zero', 'return_val',
         'stub', 'map_erase', 'map_delete', 'vector_erase'
@@ -2490,6 +2494,14 @@ def determine_risk_with_context(node, result, context, graph):
     if is_suppression_utility and not has_high_severity_api and not has_malicious_intent and not is_confident_ai:
         downgrade_to_benign = True
         downgrade_reasons.append("Matches utility function suppression list (no malicious API used)")
+
+    # Condition 5: HARD SAFE-WORD OVERRIDE (Explicit cleanup/dealloc)
+    # If the name explicitly says it's a cleanup or deallocation routine, it MUST be benign
+    # unless it uses a high-severity malicious API (like a remote memory wipe).
+    safe_words = ['cleanup', 'deallocate', 'dealloc', 'free_mem', 'destroy_obj']
+    if any(sw in node.name.lower() for sw in safe_words) and not has_high_severity_api:
+        downgrade_to_benign = True
+        downgrade_reasons.append(f"Hard safe-word match ('{node.name}') forced to benign.")
 
     # Apply downgrade (can force downgrade malicious routines)
     if downgrade_to_benign and risk in ("suspicious", "malicious"):
@@ -2523,6 +2535,71 @@ def analyze_with_context(ea, node, graph, output_dir, ai_cfg, analyzed_eas, cont
     
     return result
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RISK CLASSIFICATION GUIDELINES
+# ─────────────────────────────────────────────────────────────────────────────
+RISK_CLASSIFICATION_GUIDELINES = """
+Your task is to classify each function into ONE of three categories: Malicious, Suspicious, or Benign.
+Your classification MUST be based strictly on the actual capability implemented by the function itself.
+Do NOT infer malicious intent simply because the program is malware.
+
+------------------------------------------------------------
+STRICT CLASSIFICATION RULES
+------------------------------------------------------------
+
+1. MALICIOUS: Only if it DIRECTLY implements attacker capability:
+   - Command execution, Process injection, Credential theft, Persistence, Privilege escalation, C2 communication, Data exfiltration, Defense evasion, Code unpacking/reflective loading.
+   - Examples: CreateRemoteThread injection, Registry persistence, Network beaconing, Token impersonation, Payload execution.
+   - FINAL RULE: Only mark as MALICIOUS if removing that function would break the attack capability.
+
+2. SUSPICIOUS: Supports malicious logic but DOES NOT itself implement an attack:
+   - Network connection wrappers, packet processing, encryption routines (XOR/bitwise), command parsing, config handling, dispatcher logic, or collecting non-sensitive system info.
+   - These become malicious ONLY when used directly by malicious code.
+
+3. BENIGN: Generic program infrastructure. NEVER tag as suspicious.
+   - Compiler runtime (CRT), Exception handling, STL/Container operations (std::), Memory allocation helpers, String utilities, Thread sync.
+   - DO NOT mark as suspicious for manipulating memory, using pointers, allocating buffers, or string operations. These are normal compiled C++ behavior.
+
+------------------------------------------------
+ALWAYS CLASSIFY AS BENIGN IF FUNCTION ONLY DOES:
+------------------------------------------------
+• memory allocation or freeing (HeapAlloc, HeapFree, operator new)
+• structure initialization / zeroing (memset, self-assignments)
+• container operations (map, vector, list, tree, deque, find, insert, remove)
+• string copying, formatting, or validation (strcpy, sprintf, strlen, BSTR/Wide string helpers)
+• exception handling / runtime errors (Boost, CRT, throw, catch, vtable setup)
+• cleanup / destructors / resource management
+• iterator loops / pointer validation
+• time conversion (time_t, FILETIME)
+• STL rebalancing or tree node manipulation
+
+------------------------------------------------
+STL / RUNTIME SUPPRESSION RULE
+------------------------------------------------
+If a function belongs to any of the following categories, it MUST be BENIGN unless malicious APIs (CreateRemoteThread, etc.) are used inside:
+• std:: containers
+• Boost exception handling / internal logic
+• runtime_error or exception constructors
+• exception cloning / vtable setup
+• allocator or iterator logic
+• container node manipulation
+
+------------------------------------------------
+FALSE POSITIVE EXAMPLES (MUST BE BENIGN)
+------------------------------------------------
+- Exception Handling: exception_ctor, runtime_error_init, setup_boost_exception, set_vtable_pointer.
+- Structure Helpers: initialize_struct, allocate_array, copy_or_move_assignment, swap_assignments.
+- String Utils: copy_string_with_limit, format_string, find_string_match, bstr_converters.
+- Small Utilities: return_zero, handle_empty_function_call, sub_generic_logic.
+
+CONFIDENCE SCORING:
+- 95–100%: Direct attacker capability
+- 85–94%: Strong malicious infrastructure
+- 70–84%: Suspicious support code
+- 40–69%: Possibly suspicious (Use with CAUTION)
+- 0–39%: Benign / infrastructure (Should almost ALWAYS be BENIGN)
+"""
 
 def build_preliminary_analysis_prompt(node, code, strings, caller_names, callee_names, 
                                      line_count, code_snippet, digest, graph):
@@ -2586,12 +2663,7 @@ def build_preliminary_analysis_prompt(node, code, strings, caller_names, callee_
 Focus ONLY on what the code does technically. You will NOT see why this function exists
 or who calls it yet - that comes in the final analysis pass.
 
-CRITICAL: This is the Initial Assessment phase. Provide objective technical descriptions. 
-If clearly malicious patterns are observed (e.g. process injection, credential theft, token impersonation, ransomware behavior), assign the appropriate risk level without hesitation. 
-However, if the code is generic or ambiguous, remain conservative until context is provided in later stages.
-
-STRICT RULE: Do NOT flag standard compiler stubs or runtime logic as suspicious (e.g., __chkstk, _main, _fpreset, CRT initialization). These are BENIGN boilerplate.
-DO NOT hallucinate intent. If the code just prints text or formats data, it is BENIGN regardless of the binary's overall nature.
+{RISK_CLASSIFICATION_GUIDELINES}
 
 {child_assessments_block}
 {digest}
@@ -2754,28 +2826,19 @@ Code ({line_count} lines):
 {code_snippet if code_snippet else '(decompilation not available)'}
 
 ═══════════════════════════════════════════════════════════════
-TASK: CONTEXTUAL RE-EVALUATION
-═══════════════════════════════════════════════════════════════
+{RISK_CLASSIFICATION_GUIDELINES}
 
 NOW WITH THIS CONTEXT, re-evaluate the function's role and risk:
-
-CONTEXTUAL ANALYSIS RULES:
-1. Consider WHY the caller needs this function.
-2. Look for patterns when combined with sibling functions.
-3. UPGRADE risk ONLY if the code itself performs a sensitive operation that directly supports a malicious goal.
-4. DO NOT upgrade a function to 'malicious' just because its caller is malicious if the code is a generic utility (e.g., printing, formatting, string copying).
-5. If call chain contains sensitive targets (LSASS, Registry, etc.), context matters, but the code must still show relevant logic.
-6. STUBS/CRT: Never upgrade compiler-generated boilerplate.
 {note_line}
 
 EXAMPLES OF CONTEXT-BASED RISK CHANGES:
 
 Example 1 - UPGRADE from benign to malicious:
-  Preliminary: "Allocates buffer" [benign]
-  Context: Called by "dump_lsass_credentials"
-          Siblings: ["enable_debug_privilege", "open_lsass_process"]
-          Call chain: main → setup_credential_dump → allocate_buffer
-  → UPGRADE to malicious: "Allocates buffer for stolen credential storage"
+  Preliminary: "Enumerate file system" [benign]
+  Context: Called by "ransomware_payload_main"
+          Siblings: ["encrypt_files", "generate_key"]
+          Call chain: main → command_dispatch → ransomware_payload_main → file_enum
+  → UPGRADE to malicious: "Target discovery routine for file encryption attack"
 
 Example 2 - KEEP suspicious:
   Preliminary: "Calls VirtualAlloc with RWX" [suspicious]
@@ -2790,6 +2853,13 @@ Example 3 - DOWNGRADE from suspicious to benign:
           Siblings: ["std::bad_cast", "std::exception"]
           Call chain: main → console_output → iostream_format → ptr_operation
   → DOWNGRADE to benign: "Standard C++ iostream implementation"
+
+Example 4 - STAY benign (Infrastructure):
+  Preliminary: "String copy and validation" [benign]
+  Context: Called by "exfiltrate_data_to_c2"
+          Siblings: ["encrypt_payload", "send_network_data"]
+          Call chain: main → core_loop → exfiltrate_data_to_c2 → string_copy
+  → STAY benign: "Standard string utility helper (Even when used by malicious callers)"
 
 Respond with JSON:
 {{
@@ -3967,10 +4037,11 @@ class AnalysisWorker(QThread):
                     log_fn(f"Failed to save Analyst Notebook to disk: {e}", "warn")
                 
                 sections = {}
+                on_cool = lambda c, t: self.cooldown_progress_signal.emit(c, t)
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["assessment"] = generate_malware_analysis_assessment(digest, ai_cfg, log_fn)
+                    sections["assessment"] = generate_malware_analysis_assessment(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Executive summary (Malware analysis)", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: assessment - {e}", "err")
@@ -3980,7 +4051,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["overview"] = generate_technical_overview(digest, ai_cfg, log_fn)
+                    sections["overview"] = generate_technical_overview(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Technical Code analysis overview", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: overview - {e}", "err")
@@ -3990,7 +4061,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["execution_flow"] = generate_execution_flow_overview(digest, ai_cfg, log_fn)
+                    sections["execution_flow"] = generate_execution_flow_overview(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Execution Flow Overview", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: execution_flow - {e}", "err")
@@ -4000,7 +4071,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["c2_analysis"] = generate_c2_analysis(digest, ai_cfg, log_fn)
+                    sections["c2_analysis"] = generate_c2_analysis(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: C2/Backdoor Analysis", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: c2_analysis - {e}", "err")
@@ -4010,7 +4081,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["persistence"] = generate_persistence_mechanisms(digest, ai_cfg, log_fn)
+                    sections["persistence"] = generate_persistence_mechanisms(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Persistence Mechanisms", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: persistence - {e}", "err")
@@ -4020,7 +4091,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["recon_infostealer"] = generate_recon_infostealer_analysis(digest, ai_cfg, log_fn)
+                    sections["recon_infostealer"] = generate_recon_infostealer_analysis(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Reconnaissance or Info Stealer", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: recon_infostealer - {e}", "err")
@@ -4030,7 +4101,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["file_registry_interaction"] = generate_file_registry_interaction(digest, ai_cfg, log_fn)
+                    sections["file_registry_interaction"] = generate_file_registry_interaction(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: File / Registry / Process Interaction", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: file_registry_interaction - {e}", "err")
@@ -4040,7 +4111,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["api_resolving"] = generate_api_resolving_logic(digest, ai_cfg, log_fn)
+                    sections["api_resolving"] = generate_api_resolving_logic(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: API Hashing / Resolving / PEB Walk", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: api_resolving - {e}", "err")
@@ -4050,7 +4121,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["anti_analysis"] = generate_anti_analysis_logic(digest, ai_cfg, log_fn)
+                    sections["anti_analysis"] = generate_anti_analysis_logic(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Packer/Obfuscation or Anti-Analysis", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: anti_analysis - {e}", "err")
@@ -4060,7 +4131,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["crypto_artifacts"] = generate_crypto_artifacts(digest, ai_cfg, log_fn)
+                    sections["crypto_artifacts"] = generate_crypto_artifacts(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Cryptographic Artifacts", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: crypto_artifacts - {e}", "err")
@@ -4070,7 +4141,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["capabilities"] = generate_key_capabilities(digest, ai_cfg, log_fn)
+                    sections["capabilities"] = generate_key_capabilities(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: General Capability Discovery", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: capabilities - {e}", "err")
@@ -4080,7 +4151,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["behavioral"] = generate_behavioral_indicators(digest, ai_cfg, log_fn, all_strings=all_strings)
+                    sections["behavioral"] = generate_behavioral_indicators(digest, ai_cfg, log_fn, all_strings=all_strings, on_cooldown=on_cool)
                     log_fn("Section complete: Indicator of Compromise", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: behavioral - {e}", "err")
@@ -4132,7 +4203,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["malicious"] = generate_malicious_functions(digest, ai_cfg, log_fn)
+                    sections["malicious"] = generate_malicious_functions(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Malicious functions", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: malicious - {e}", "err")
@@ -4142,7 +4213,7 @@ class AnalysisWorker(QThread):
 
                 self.llm_state_signal.emit("requesting")
                 try:
-                    sections["suspicious"] = generate_suspicious_functions(digest, ai_cfg, log_fn)
+                    sections["suspicious"] = generate_suspicious_functions(digest, ai_cfg, log_fn, on_cooldown=on_cool)
                     log_fn("Section complete: Suspicious functions", "ok")
                 except Exception as e:
                     log_fn(f"Section failed: suspicious - {e}", "err")
@@ -5029,10 +5100,11 @@ class DeepAnalyzerDialog(QDialog):
 
             self.rename_worker.log_signal.connect(lambda m, l: self.on_log(m, l))
             self.rename_worker.progress_signal.connect(lambda c, t, n: self.on_progress(c, t, n))
-            self.rename_worker.func_updated_signal.connect(self.on_func_updated)
-            self.rename_worker.cooldown_progress_signal.connect(self.on_cooldown_progress)
-            self.rename_worker.llm_state_signal.connect(self.on_llm_state)
-            self.rename_worker.stage_signal.connect(self.on_stage_changed)
+            self.rename_worker.func_updated_signal.connect(lambda e, o, n, cf: self.on_func_updated(e, o, n, cf))
+            self.rename_worker.cooldown_progress_signal.connect(lambda c, t: self.on_cooldown_progress(c, t))
+            self.rename_worker.char_count_signal.connect(lambda c, t: self.on_char_count(c, t))
+            self.rename_worker.llm_state_signal.connect(lambda s: self.on_llm_state(s))
+            self.rename_worker.stage_signal.connect(lambda s: self.on_stage_changed(s))
             self.rename_worker.finished_signal.connect(lambda tr: self.on_rename_finished(tr))
 
             self.rename_worker.start()
@@ -5169,12 +5241,12 @@ class DeepAnalyzerDialog(QDialog):
         self.analysis_worker.do_refinement = True
         self.analysis_worker.log_signal.connect(lambda m, l: self.on_log(m, l))
         self.analysis_worker.progress_signal.connect(lambda c, t, n: self.on_progress(c, t, n))
-        self.analysis_worker.func_updated_signal.connect(self.on_func_updated)
-        self.analysis_worker.cooldown_progress_signal.connect(self.on_cooldown_progress)
-        self.analysis_worker.char_count_signal.connect(self.on_char_count)
-        self.analysis_worker.llm_state_signal.connect(self.on_llm_state)
-        self.analysis_worker.stage_signal.connect(self.on_stage_changed)
-        self.analysis_worker.markdown_updated_signal.connect(self._schedule_graph_refresh)
+        self.analysis_worker.func_updated_signal.connect(lambda e, o, n, cf: self.on_func_updated(e, o, n, cf))
+        self.analysis_worker.cooldown_progress_signal.connect(lambda c, t: self.on_cooldown_progress(c, t))
+        self.analysis_worker.char_count_signal.connect(lambda c, m: self.on_char_count(c, m))
+        self.analysis_worker.llm_state_signal.connect(lambda s: self.on_llm_state(s))
+        self.analysis_worker.stage_signal.connect(lambda s: self.on_stage_changed(s))
+        self.analysis_worker.markdown_updated_signal.connect(lambda od: self._schedule_graph_refresh(od))
         self.analysis_worker.finished_signal.connect(lambda od: self.on_analysis_finished(od))
         self.start_btn.setEnabled(False) # Ensure button disabled during transition
         self.analysis_worker.start()
@@ -5309,7 +5381,7 @@ class DeepAnalyzerDialog(QDialog):
             for col in range(1, self.tree.columnCount()):
                 item.setForeground(col, QtGui.QBrush(QtGui.QColor(color)))
 
-    def _schedule_graph_refresh(self):
+    def _schedule_graph_refresh(self, output_dir=None):
         """Debounce render_graph_tab calls — only re-render at most every 500ms."""
         if hasattr(self, 'graph'):
             if not hasattr(self, '_graph_refresh_timer'):
@@ -5478,6 +5550,7 @@ class DeepAnalyzerDialog(QDialog):
         else:
             self.status_label.setText("Stage progress: %d/%d" % (current, total))
 
+    @Slot(int, int)
     def on_cooldown_progress(self, current, total):
         if not self.stop_btn.isEnabled(): return
         if not hasattr(self, 'cooldown_bar'): return
@@ -5491,12 +5564,14 @@ class DeepAnalyzerDialog(QDialog):
             self.cooldown_state_label.setText(f"{remaining}s")
 
     _last_char_count = 0
+    @Slot(int, int)
     def on_char_count(self, current, max_val):
         if not self.stop_btn.isEnabled(): return
         self._last_char_count = current
         if self.llm_state_label.text().startswith("Receiving"):
             self.llm_state_label.setText(f"Receiving ({current} chars)...")
 
+    @Slot(str)
     def on_llm_state(self, state):
         """Update the LLM activity bar based on current AI state. Always visible."""
         if not self.stop_btn.isEnabled(): return

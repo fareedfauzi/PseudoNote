@@ -324,11 +324,20 @@ def extract_ida_strings(graph=None, log_fn=None):
 
         mutex_re = re.compile(r'(?:\{[A-F0-9-]{32,}\})|(?:\b[A-Za-z0-9_]{8,}\bMutex)', re.I)
         exe_re = re.compile(r'\b[\w\-\.]+\.(?:exe|dll|sys|bat|vbs|ps1|com|scr|pif|vbe)\b', re.I)
-        # Runtime/Library strings (to avoid miscategorization as obfuscation)
-        library_re = re.compile(r'\b(?:runtime error|assertion failed|invalid argument|out of memory|permission denied|no such file|not a directory|executable file format|math argument|math result|Mingw-w64 runtime|image-section|Partial loss of significance|Total loss of significance|UNDERFLOW|OVERFLOW|PLOSS|TLOSS|SIGN|Matherr|___report_error)\b', re.I)
-        # Patterns for encoded/obfuscated data (Not junk)
+        # Library/Framework/Common boilerplate strings
+        library_re = re.compile(
+            r'\b(?:runtime error|assertion failed|invalid argument|out of memory|permission denied|'
+            r'no such file|not a directory|executable file format|math argument|math result|'
+            r'Mingw-w64 runtime|image-section|Partial loss of significance|Total loss of significance|'
+            r'UNDERFLOW|OVERFLOW|PLOSS|TLOSS|SIGN|Matherr|___report_error|'
+            r'Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|'
+            r'January|February|March|April|May|June|July|August|September|October|November|December|'
+            r'MM/dd/yy|dddd, MMMM dd, yyyy|'
+            r'AreFileApisANSI|LCMapStringEx|LocaleNameToLCID|AppPolicyGetProcessTerminationMethod)\b', re.I)
+        # Patterns for encoded/obfuscated data (Not junk) - Require at least one non-alphanumeric base64 char to reduce false positives
         base64_re = re.compile(r'^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$')
         hex_re = re.compile(r'^[0-9a-fA-F]{16,}$')
+        camel_concat_re = re.compile(r'^([A-Z][a-z0-9]{2,}){3,}$') # e.g. NtDelayExecutionGetNamed
 
         def get_entropy(s):
             if not s: return 0
@@ -386,8 +395,12 @@ def extract_ida_strings(graph=None, log_fn=None):
             elif cmd_re.search(val_strip): cat = "Command"
             elif library_re.search(val_strip): cat = "Library/Runtime String"
             elif exe_re.search(val_strip): cat = "Filename"
-            elif len(val_strip) >= 16 and (base64_re.match(val_strip) or hex_re.match(val_strip)):
-                cat = "Encoded Data"
+            elif val_strip.lower().startswith(('api-ms-win-', 'ext-ms-win-')) or val_strip.lower() in ["kernel32", "user32", "advapi32", "ntdll", "shell32", "gdi32"]:
+                cat = "System Component"
+            elif len(val_strip) >= 16 and (hex_re.match(val_strip) or (base64_re.match(val_strip) and (not val_strip.isalnum() or get_entropy(val_strip) > 4.5))):
+                # Extra check: if it looks like CamelCase concatenation, it's probably not Base64
+                if not camel_concat_re.match(val_strip):
+                    cat = "Encoded Data"
             elif len(val_strip) >= 12 and get_entropy(val_strip) > 3.8 and ' ' not in val_strip:
                 cat = "Potential Encryption/Obfuscation"
 
@@ -517,7 +530,8 @@ def extract_deterministic_iocs(strings):
     # Pre-compile some secondary regex checks for robustness
     ipv4_pattern = re.compile(r'^(\d{1,3}\.){3}\d{1,3}$')
     
-    # Common system DLLs to filter out from IOCs
+    # Common system patterns to filter out from IOCs
+    system_patterns = re.compile(r'^(?:api-ms-win-|ext-ms-win-|kernel32|user32|advapi32|ntdll|shell32|gdi32|comctl32|comdlg32|msvcrt|vcruntime|mscoree|ucrtbase|AreFileApisANSI|LCMapStringEx|LocaleNameToLCID|AppPolicyGetProcessTerminationMethod)', re.I)
     system_dlls = {
         "kernel32.dll", "user32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll",
         "ws2_32.dll", "winmm.dll", "wtsapi32.dll", "iphlpapi.dll", "secur32.dll",
@@ -530,6 +544,10 @@ def extract_deterministic_iocs(strings):
         val = str(s_info.get("value", "")).strip()
         cat = s_info.get("category", "String")
         if not val or val in seen: continue
+        
+        # Suppress obvious system strings
+        if cat in ["System Component", "Library/Runtime String"] or system_patterns.match(val):
+            continue
         
         ioc_type = None
         
@@ -731,17 +749,42 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             return None
 
         # 1. Primary Attempt: Extract any JSON-like block bounded by {} or []
-        # This handles cases where AI adds leading/trailing text or markdown wrappers.
+        # We try to find the longest block that looks like JSON
         json_blocks = re.findall(r'(\{.*\}|\[.*\])', raw, re.DOTALL)
         if json_blocks:
-            # Try the largest block first
-            for block in sorted(json_blocks, key=len, reverse=True):
+            for block in sorted(json_blocks, key=lambda x: len(x), reverse=True):
                 res = _try_json(block)
                 if res: return res
 
+        # 1.2. Secondary Attempt: If valid JSON block not found with DOTALL greediness, 
+        # try a more targeted approach for Markdown code blocks
+        md_blocks = re.findall(r'```(?:json)?\s*(.*?)\s*```', raw, re.DOTALL)
+        for block in md_blocks:
+            res = _try_json(block.strip())
+            if res: return res
+
+        # 1.5. Truncation Recovery: If no closed block found, try extracting from the first { or [ to end
+        first_curly = raw.find('{')
+        first_bracket = raw.find('[')
+        start_idx = -1
+        if first_curly != -1 and (first_bracket == -1 or first_curly < first_bracket):
+            start_idx = first_curly
+        elif first_bracket != -1:
+            start_idx = first_bracket
+            
+        if start_idx != -1:
+            block = raw[start_idx:]
+            res = _try_json(block)
+            if res: return res
+
         # 2. Fallback: Detailed plucker for split or severely malformed JSON
         def _pluck_best_effort(raw_str):
-            pluck_keys = ["detailed_technical_overview", "detailed_narrative", "assessment", "summary", "verdict", "mechanisms", "findings", "steps", "capabilities", "functions"]
+            pluck_keys = [
+                "detailed_technical_overview", "detailed_narrative", "assessment", 
+                "summary", "verdict", "mechanisms", "findings", "steps", 
+                "capabilities", "functions", "techniques", "interactions", 
+                "iocs", "artifacts"
+            ]
             extracted = {}
             for pk in pluck_keys:
                 pattern = f'"{pk}"\\s*:\\s*([\\"\\[])(.*)'
@@ -779,8 +822,8 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
                             res = json.loads(list_str)
                             if res: extracted[pk] = res
                         except:
-                            # Final fallback tail search
-                            for tail in ["", "]", "}]", "}]}", "}}]}"]:
+                            # Final fallback tail search including unclosed quotes
+                            for tail in ["", "]", "}]", "}]}", "}}]}", "\"]", "\"}]", "\"}]}", "\"}}]}"]:
                                 try:
                                     res = json.loads(list_str + tail)
                                     if res: 
@@ -817,6 +860,29 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
 
         return text
 
+    def _format_ai_text(raw: str) -> str:
+        """Convert AI text with literal \n and \" sequences into proper HTML paragraphs."""
+        if not raw or not isinstance(raw, str): return ""
+        # Decode literal backslash-n and backslash-quote form the JSON string value
+        text = raw.replace('\\n', '\n').replace('\\"', '"').replace('\\t', ' ')
+        # Split on double-newlines → paragraph blocks
+        # 🛑 CRITICAL: Also strip surrounding quotes from each paragraph to fix AI formatting artifacts
+        paragraphs = [p.strip().strip('"') for p in text.split('\n\n') if p.strip()]
+        if not paragraphs:
+            return _apply_forensic_highlighting(_escape_html(raw))
+        parts = []
+        for para in paragraphs:
+            # Numbered heading like "1. Title: rest" → bold label + rest
+            m = re.match(r'^(\d+\.\s*[^:]+:)(.*)$', para, re.DOTALL)
+            if m:
+                heading = _escape_html(m.group(1).strip())
+                body = _apply_forensic_highlighting(_escape_html(m.group(2).strip())).replace('\n', '<br>')
+                parts.append(f'<p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">{heading}</strong> {body}</p>')
+            else:
+                body = _apply_forensic_highlighting(_escape_html(para)).replace('\n', '<br>')
+                parts.append(f'<p style="margin:0 0 10px 0;">{body}</p>')
+        return ''.join(parts)
+
     # --- 1. Executive Summary
     exec_json = _parse_ai_json("assessment")
     narrative = ""
@@ -824,7 +890,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         narrative = exec_json.get("assessment") or exec_json.get("detailed_narrative") or ""
     
     if narrative:
-        exec_summary_html = f'<div class="ai-block" style="border-left-color:var(--accent); white-space: pre-wrap; padding: 25px; line-height: 1.6;">{_apply_forensic_highlighting(_escape_html(narrative))}</div>'
+        exec_summary_html = f'<div class="ai-block" style="border-left-color:var(--accent); padding: 25px; line-height: 1.6;">{_format_ai_text(narrative)}</div>'
     elif isinstance(exec_json, dict) and any(k in exec_json for k in ["verdict", "reasoning", "core_operation", "function_tree_analysis"]):
         # Fallback for old data or specific keys
         v = exec_json.get("verdict", "")
@@ -845,7 +911,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
                 summ = re.sub(r'"\s*[,\}\]]\s*[^"]*$', '', m.group(1), flags=re.DOTALL).strip()
                 if summ.endswith('"'): summ = summ[:-1]
         
-        exec_summary_html = f'<div class="ai-block" style="padding: 25px; line-height: 1.6;">{_apply_forensic_highlighting(_escape_html(str(summ)))}</div>'
+        exec_summary_html = f'<div class="ai-block" style="padding: 25px; line-height: 1.6;">{_format_ai_text(str(summ))}</div>'
 
     # --- 2. Technical Code Analysis Overview
     overview_json = _parse_ai_json("overview")
@@ -853,26 +919,6 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
     if isinstance(overview_json, dict):
         tech_narrative = overview_json.get("detailed_technical_overview", "")
     
-    def _format_ai_text(raw: str) -> str:
-        """Convert AI text with literal \n and \" sequences into proper HTML paragraphs."""
-        # Decode literal backslash-n and backslash-quote from the JSON string value
-        text = raw.replace('\\n', '\n').replace('\\"', '"').replace('\\t', ' ')
-        # Split on double-newlines → paragraph blocks
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-        if not paragraphs:
-            return _apply_forensic_highlighting(_escape_html(raw))
-        parts = []
-        for para in paragraphs:
-            # Numbered heading like "1. Title: rest" → bold label + rest
-            m = re.match(r'^(\d+\.\s*[^:]+:)(.*)$', para, re.DOTALL)
-            if m:
-                heading = _escape_html(m.group(1).strip())
-                body = _apply_forensic_highlighting(_escape_html(m.group(2).strip())).replace('\n', '<br>')
-                parts.append(f'<p style="margin:0 0 10px 0;"><strong style="color:#1e293b;">{heading}</strong> {body}</p>')
-            else:
-                body = _apply_forensic_highlighting(_escape_html(para)).replace('\n', '<br>')
-                parts.append(f'<p style="margin:0 0 10px 0;">{body}</p>')
-        return ''.join(parts)
 
     if tech_narrative:
         tech_overview_html = f'<div class="ai-block" style="border-left-color:#3b82f6; padding: 25px; line-height: 1.7;">{_format_ai_text(tech_narrative)}</div>'
@@ -1095,7 +1141,7 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             if normalized in ["{}", "{\"interactions\":[]}", "[]"]:
                 interaction_html = '<p class="muted">No direct OS object manipulation identified.</p>'
             else:
-                interaction_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_escape_html(clean_inter)}</div>'
+                interaction_html = f'<div class="ai-block" style="border-left-color: #cbd5e1; white-space: pre-wrap; padding: 25px;">{_apply_forensic_highlighting(_escape_html(clean_inter))}</div>'
 
     # --- 9. API Hashing / Resolving / PEB Walk
     resolv_json = _parse_ai_json("api_resolving")
@@ -1986,7 +2032,7 @@ def _validated_ai_request(cfg, prompt, sys_prompt=None, **kwargs):
         sys_prompt = "You are a senior reverse engineer and malware analyst. Provide technical assessments of binary code. Return format as clean technical text. Do NOT use markdown codeblock wrappers for standard text output."
     return ai_request(cfg, prompt, sys_prompt, **kwargs)
 
-def generate_program_overview(digest, entry_name, entry_children_count, ai_cfg, log_fn):
+def generate_program_overview(digest, entry_name, entry_children_count, ai_cfg, log_fn, **kwargs):
     prompt = f"""Analyst Notebook: 
 {digest}
 
@@ -2002,9 +2048,9 @@ Respond STRICTLY with a valid JSON object matching this structure:
   "choreography": "Brief overview of execution flow."
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=2048, **kwargs)
 
-def generate_technical_overview(digest, ai_cfg, log_fn):
+def generate_technical_overview(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Analyst Notebook: 
 {digest}
 
@@ -2029,28 +2075,29 @@ The technical code analysis must focus on the core malicious payload capabilitie
 WRITING STYLE:
 - Technical, Dense, and Authoritative. No filler.
 - Answer WHY and HOW for every major malicious function.
+- Split to several paragraph.
 
 Respond STRICTLY with a valid JSON object:
 {{
   "detailed_technical_overview": "Comprehensive 6-zone Analysis narrative."
 }}"""
     sys_p = "You are a senior malware reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_malware_analysis_assessment(digest, ai_cfg, log_fn):
+def generate_malware_analysis_assessment(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Analyst Notebook: 
 {digest}
 
 You are a senior malware reverse engineer and head of Analysis reporting. Your analysts have prepared the "Analyst Notebook" above containing the highest-risk functions found in the binary. You must write a professional Executive Summary section for a high-stakes malware analysis report based ONLY on these notes.
 
 You must:
-- Determine the threat category (e.g. Spyware, Ransomware, Dropper, Benign) based on the "CRITICAL MALICIOUS PAYLOADS" and "STRATEGIC INDICATORS" sections in the notebook.
+- Determine the threat category (e.g. Spyware, Ransomware, Dropper, Benign) based on the "CRITICAL MALICIOUS PAYLOADS" (dont mention this word in report) and "STRATEGIC INDICATORS" (dont mention this word in report) sections in the notebook.
 - Do NOT infer lifecycle stages beyond what the notes explicitly state.
 - Do not talk about generic functions or compiler operations.
 - If no Malicious payloads exist, explicitly state the program appears to be Safe or Adware.
 
 STRICT REQUIREMENTS:
-- STRONGLY PRIORITIZE the "CRITICAL MALICIOUS PAYLOADS" section of the notebook. Do NOT constrain your summary to just the Layer 1 dispatch.
+- STRONGLY PRIORITIZE the "CRITICAL MALICIOUS PAYLOADS" (dont mention this word in report) section of the notebook. Do NOT constrain your summary to just the Layer 1 dispatch.
 - You MUST explicitly document and emphasize the highest-risk sub-routines (e.g. data collection, C2, evasion, injection).
 - Base every statement ONLY on the functions provided in the notebook.
 - Do NOT speculate, infer intent beyond technical evidence, or attribute capabilities that are not explicitly implemented in code.
@@ -2060,15 +2107,16 @@ STRICT REQUIREMENTS:
   2. What is the technical objective behind it?
   3. Identify specific malicious function names (e.g., fn_function) where the logic resides.
   4. Explain how these disjointed functions fit into the overall attack narrative.
+5. Do NOT wrap individual paragraphs in additional double quotes.
 
 Respond STRICTLY with a valid JSON object matching this structure:
 {{
   "detailed_narrative": "The full 4-paragraph technical executive summary text providing deep malware analysis and code reverse engineering context."
 }}"""
     sys_p = "You are a senior malware reverse engineer and head of Analysis reporting. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_key_capabilities(digest, ai_cfg, log_fn):
+def generate_key_capabilities(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Analyst Notebook: 
 {digest}
 
@@ -2086,9 +2134,9 @@ Respond STRICTLY with a valid JSON object matching this structure:
 CRITICAL: Do NOT list generic CRT wrappers, error handling, pointer encryption, thread-local storage, or memory allocation as capabilities. If no actual malicious or significant capabilities exist, it is perfectly acceptable to return a very small list.
 Use ONLY function names explicitly listed in the Analyst Notebook."""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_suspicious_functions(digest, ai_cfg, log_fn):
+def generate_suspicious_functions(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Analyst Notebook: 
 {digest}
 
@@ -2101,9 +2149,9 @@ Respond STRICTLY with a valid JSON object matching this structure:
 }}
 IMPORTANT: Replace 0x123456 with the actual hex address from the Analyst Notebook."""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_malicious_functions(digest, ai_cfg, log_fn):
+def generate_malicious_functions(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Analyst Notebook: 
 {digest}
 
@@ -2116,9 +2164,9 @@ Respond STRICTLY with a valid JSON object matching this structure:
 }}
 IMPORTANT: Replace 0x123456 with the actual hex address from the Analyst Notebook."""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_behavioral_indicators(digest, ai_cfg, log_fn, all_strings=None):
+def generate_behavioral_indicators(digest, ai_cfg, log_fn, all_strings=None, **kwargs):
     if not all_strings:
         all_strings = []
         
@@ -2166,7 +2214,9 @@ CRITICAL RULES:
 - DO NOT use placeholders or abstract values like [random_folder]. 
 - The "value" MUST be a true literal string that was found in the input.
 - Extract partial strings if they represent a clear IOC (e.g., a registry key fragment).
-- IGNORE obvious system libraries (kernel32.dll, ntdll.dll) unless they are involved in hijacking.
+- IGNORE obvious system libraries (kernel32.dll, ntdll.dll, api-ms-win-*) unless they are involved in hijacking.
+- DO NOT classify Windows DLLs or Windows API names as "domain" or "url". DLL names like advapi32, ntdll, or api-ms-win-* are NOT domains.
+- STANDALONE strings that represent days of the week (Sunday, Monday, etc.), months (January, etc.), or common date formats (MM/dd/yy) are NOT IOCs and should be ignored.
 - For each IOC, explain its Analysis significance.
 - associated_functions MUST be a list of function names from the context that reference this indicator.
 
@@ -2182,7 +2232,7 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
 
-        res = _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+        res = _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
         
         # Parse result: LLM returns string, we need dict
         parsed = {}
@@ -2218,7 +2268,7 @@ Respond STRICTLY with a valid JSON object:
             
     return {"iocs": final_iocs}
 
-def generate_ranked_strings(digest, ai_cfg, log_fn):
+def generate_ranked_strings(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 Review the Extracted Strings in the context. Rank them by Analysis importance.
 
@@ -2231,9 +2281,9 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=2048, **kwargs)
 
-def generate_risk_assessment(digest, ai_cfg, log_fn):
+def generate_risk_assessment(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 Provide a definitive overall Risk Assessment based on all aggregated static analysis data.
 Synthesize findings from all segments, provide an overall risk score, and conclude with security recommendations.
@@ -2244,9 +2294,9 @@ Respond STRICTLY with a valid JSON object matching this structure:
   "recommendations": ["Recommendation 1", "Recommendation 2"]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=2048, **kwargs)
 
-def generate_execution_flow_overview(digest, ai_cfg, log_fn):
+def generate_execution_flow_overview(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 
 Analyze the program's complete execution lifecycle from start to finish. 
@@ -2255,7 +2305,7 @@ Trace the operational flow by synthesizing the 'Primary Execution Dispatch' (ent
 Your goal is to identify a logical chronological sequence of stages (e.g., Initialization -> Environment Discovery -> Persistence/Infection -> Core Malicious Logic -> Network/C2 Communication -> Cleanup/Termination).
 
 STRICT Analysis RULES:
-1. Identify at least 3 distinct logical phases unless the program is extremely trivial.
+1. Break the execution into a granular set of 5 to 7 distinct logical phases representing the full chronological lifecycle. Do NOT consolidate multiple stages unless the program is extremely trivial.
 2. Synthesize the description by explaining HOW routines relate to each other (e.g., "The initialization routine sets up X, which is later used by Y for Z").
 3. Standard compiler/CRT stubs (__chkstk, mainCRTStartup, etc.) are BENIGN boilerplate. NEVER report them as malicious stages.
 4. Use the provided context to build a technical narrative of the program's lifecycle.
@@ -2268,9 +2318,9 @@ Respond STRICTLY with a valid JSON object matching this structure:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_crypto_artifacts(digest, ai_cfg, log_fn):
+def generate_crypto_artifacts(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 Identify Cryptographic, Hashing, Encoding, or Compression artifacts.
 
@@ -2292,9 +2342,9 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_anti_analysis_logic(digest, ai_cfg, log_fn):
+def generate_anti_analysis_logic(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 Identify Anti-VM, Anti-Debug, or Evasion techniques.
 Check for: Timing checks (RDTSC), process enumeration (Toolhelp32), debugger detection (IsDebuggerPresent, CheckRemoteDebuggerPresent), or specific VM-related strings/files.
@@ -2316,9 +2366,9 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_c2_analysis(digest, ai_cfg, log_fn):
+def generate_c2_analysis(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 
 Analyze technical evidence of Command & Control (C2), Backdoor communication, or RAT (Remote Access Trojan) capabilities.
@@ -2347,7 +2397,7 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
 def generate_call_flow_mermaid(graph, entry_ea, analyzed_results, log_fn=None):
     # Existing generation logic
@@ -2739,7 +2789,7 @@ def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn
     return full_digest, len(entry_children_blocks), str_digest
 
 
-def generate_persistence_mechanisms(digest, ai_cfg, log_fn):
+def generate_persistence_mechanisms(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 Analyze potential persistence mechanisms identified in the code.
 Look for: Registry run keys (Run, RunOnce), Service creation (CreateService), Task scheduling (SchTasks), Startup folder manipulation, or DLL hijacking/side-loading logic.
@@ -2752,9 +2802,9 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_file_registry_interaction(digest, ai_cfg, log_fn):
+def generate_file_registry_interaction(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 Analyze how the program interacts with the File System, Registry, and Processes.
 Focus on: Creating, deleting, accessing, or injecting into these entities.
@@ -2767,9 +2817,9 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_api_resolving_logic(digest, ai_cfg, log_fn):
+def generate_api_resolving_logic(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 Analyze if the program uses advanced API resolving techniques like API Hashing, PEB Walking, or manual export table parsing (GetProcAddress/GetModuleHandle/LdrGetProcedureAddress).
 Explain the implementation (e.g., CRC32 hashing, custom rotation, etc.).
@@ -2781,9 +2831,9 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)
 
-def generate_recon_infostealer_analysis(digest, ai_cfg, log_fn):
+def generate_recon_infostealer_analysis(digest, ai_cfg, log_fn, **kwargs):
     prompt = f"""Context: {digest}
 Analyze Reconnaissance or Information Stealing capabilities (LOCAL Discovery).
 Look for: Enumerating local files (.txt, .docx, wallets), stealing browser cookies/passwords, clipboard monitoring, or gathering environment info (ComputerName, UserName, OSVersion, Disk size, CPU info).
@@ -2798,4 +2848,4 @@ Respond STRICTLY with a valid JSON object:
   ]
 }}"""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
-    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
+    return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096, **kwargs)

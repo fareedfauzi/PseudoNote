@@ -587,7 +587,7 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None, on_cooldown=
         if is_reasoning:
             data['max_completion_tokens'] = max_tokens if max_tokens else 4096
         else:
-            data['max_tokens'] = max_tokens if max_tokens else 500
+            data['max_tokens'] = max_tokens if max_tokens else 1024
             data['temperature'] = 0.1
 
 
@@ -708,7 +708,7 @@ def ai_request(cfg, prompt, sys_prompt, logger=None, on_chunk=None, on_cooldown=
                 if logger:
                     logger(msg)
                 else:
-                    print(f"[PseudoNote] {msg}")
+                    print(f"{msg}")
 
                 # Tick through the sleep so the cooldown bar shows progress
                 total_ticks = sleep_seconds * 10  # 0.1s per tick
@@ -757,7 +757,27 @@ def clean_name(name, existing=None, ea=None):
         while name in existing:
             name = f"{orig}_{cnt}"
             cnt += 1
-            if cnt > 99: return None
+            if cnt > 99: break
+
+    # 3. Handle IDB Name Collisions
+    # Check if name is already used in the database by ANOTHER address
+    try:
+        existing_ea = idc.get_name_ea(idaapi.BADADDR, name)
+        if existing_ea != idaapi.BADADDR and existing_ea != ea:
+            orig = name
+            cnt = 1
+            while True:
+                new_name = f"{orig}_{cnt}"
+                chk_ea = idc.get_name_ea(idaapi.BADADDR, new_name)
+                # Success if name is free OR specifically belongs to this address already
+                if chk_ea == idaapi.BADADDR or chk_ea == ea:
+                    name = new_name
+                    break
+                cnt += 1
+                if cnt > 100: break
+    except:
+        pass
+
     return name
 
 class FuncData:
@@ -2407,9 +2427,19 @@ class BulkRenamer(QDialog):
                 if cur_name and not cur_name.startswith('sub_'):
                     save_to_idb(f.ea, cur_name, tag=82)
 
-            if ida_name.set_name(f.ea, f.suggested, ida_name.SN_NOWARN|ida_name.SN_FORCE):
-                applied += 1
-                f.name = f.suggested
+            # Check for IDB collisions before attempting to set the name
+            clean_name = f.suggested
+            if idc.get_name_ea_simple(clean_name) != idaapi.BADADDR:
+                # Name already exists, try to make it unique
+                suffix = 1
+                while idc.get_name_ea_simple(f"{clean_name}_{suffix}") != idaapi.BADADDR:
+                    suffix += 1
+                clean_name = f"{clean_name}_{suffix}"
+                self.add_log(f"Collision detected for '{f.suggested}', using '{clean_name}' instead.", 'warn')
+
+            if ida_name.set_name(f.ea, clean_name, ida_name.SN_NOWARN | ida_name.SN_FORCE):
+                renamed_count += 1
+                f.name = clean_name
                 f.suggested = ''
                 f.status = 'Applied'
                 f.checked = False
