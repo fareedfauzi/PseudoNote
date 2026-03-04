@@ -20,7 +20,7 @@ from pseudonote.handlers import (
     RenameVariablesHandler,
     RenameFunctionHandler,
     RenameMalwareFunctionHandler,
-    SuggestFunctionSignatureHandler,
+    SuggestFunctionPrototypeHandler,
     CommentHandler,
     DeleteCommentsHandler,
     AsmCommentHandler,
@@ -172,15 +172,15 @@ class PseudoNotePlugin(idaapi.plugin_t):
 
         # Suggest Function Prototype Action
         sugg_sig_desc = idaapi.action_desc_t(
-            "pseudonote:suggest_function_signature",
+            "pseudonote:suggest_function_prototype",
             "Function Prototype",
-            SuggestFunctionSignatureHandler(),
+            SuggestFunctionPrototypeHandler(),
             "Ctrl+Alt+S",
             "Ask AI to infer and apply a function prototype",
             138
         )
         idaapi.register_action(sugg_sig_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Function Prototype", "pseudonote:suggest_function_signature", idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Function Prototype", "pseudonote:suggest_function_prototype", idaapi.SETMENU_APP)
 
         comment_handler_desc = idaapi.action_desc_t(
             "pseudonote:add_comments",

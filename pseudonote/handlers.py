@@ -254,7 +254,7 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
 # ---------------------------------------------------------------------------
 # Suggest Function Prototype Handler
 # ---------------------------------------------------------------------------
-class SuggestFunctionSignatureHandler(idaapi.action_handler_t):
+class SuggestFunctionPrototypeHandler(idaapi.action_handler_t):
     """Ask AI to suggest a function prototype and apply it."""
     def __init__(self):
         idaapi.action_handler_t.__init__(self)

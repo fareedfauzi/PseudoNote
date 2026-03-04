@@ -2578,7 +2578,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_var_rename", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_analyze", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_signature", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_prototype", "PseudoNote/")
 
         if wtype == idaapi.BWN_PSEUDOCODE:
             # Pseudocode-specific actions

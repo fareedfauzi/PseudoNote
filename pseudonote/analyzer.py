@@ -627,6 +627,7 @@ class BulkAnalyzer(QDialog):
         self._deferred_items = []
         self._is_retry_phase = False
         self.is_loading = False
+        self._start_time = None
         self.setup_ui()
         self.worker = None
         QTimer.singleShot(100, self.load_table_state)
@@ -1307,6 +1308,7 @@ class BulkAnalyzer(QDialog):
         self._deferred_items = []
         self._runtime_deferred = []
         self._is_retry_phase = False
+        self._start_time = time.time()
         
         # Build config dict for worker
         from pseudonote.renamer import BulkRenamer
@@ -1487,6 +1489,15 @@ class BulkAnalyzer(QDialog):
         self.progress.setVisible(False)
         self.stop_btn.setEnabled(False)
         self.add_log("Analysis complete.", 'ok')
+        
+        if self._start_time:
+            duration = time.time() - self._start_time
+            hh = int(duration // 3600)
+            mm = int((duration % 3600) // 60)
+            ss = int(duration % 60)
+            ts = f"{hh:02d}:{mm:02d}:{ss:02d}"
+            self.add_log(f"Analysis finished in {ts}", "info")
+            self._start_time = None
         _ai_mod.AI_CANCEL_REQUESTED = False   # always reset after finish
         self.update_button_states()  # handles analyze/summarize/forward correctly
         self.save_table_state()

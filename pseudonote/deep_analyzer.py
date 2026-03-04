@@ -4612,7 +4612,9 @@ class DeepAnalyzerDialog(QDialog):
         self.analysis_worker = None
         self._all_tree_items = {}
         self._stop_requested = False
+        self._session_start_time = None
         
+        # UI components
         # Keep reference to prevent GC
         self._progress_ref = None
 
@@ -5075,6 +5077,7 @@ class DeepAnalyzerDialog(QDialog):
         # 1. Persist settings and clear UI
         self._save_settings()
         self._reset_session_ui()
+        self._session_start_time = time.time()
 
         # 2. Start Work
         self.append_log("Target: 0x%X" % self.entry_ea, "info")
@@ -5293,6 +5296,15 @@ class DeepAnalyzerDialog(QDialog):
             self.render_graph_tab(self.graph)
         if hasattr(self, 'output_dir') and self.output_dir:
             self.append_log("Output folder: %s" % self.output_dir, "info")
+            
+        if self._session_start_time:
+            duration = time.time() - self._session_start_time
+            hh = int(duration // 3600)
+            mm = int((duration % 3600) // 60)
+            ss = int(duration % 60)
+            ts = f"{hh:02d}:{mm:02d}:{ss:02d}"
+            self.append_log(f"Session finished in {ts}", "info")
+            self._session_start_time = None
 
     def sync_tree_from_graph(self):
         """Bulk update ALL tree rows from the current graph node states."""

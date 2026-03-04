@@ -337,7 +337,27 @@ def extract_ida_strings(graph=None, log_fn=None):
         # Patterns for encoded/obfuscated data (Not junk) - Require at least one non-alphanumeric base64 char to reduce false positives
         base64_re = re.compile(r'^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$')
         hex_re = re.compile(r'^[0-9a-fA-F]{16,}$')
-        camel_concat_re = re.compile(r'^([A-Z][a-z0-9]{2,}){3,}$') # e.g. NtDelayExecutionGetNamed
+        camel_concat_re = re.compile(r'^([A-Z][a-z0-9]{1,}){3,}$') # e.g. NtDelayExecutionGetNamed
+
+        # Comprehensive noise filter for C++ metadata, Windows boilerplate, and RTTI
+        noise_re = re.compile(
+            r'^[ `\'].*[\'\(]$|'  # MSVC backtick/quote metadata patterns (e.g. `vftable', `vcall')
+            r'^\b(?:restrict\(|delete|operator|new\[\]|delete\[\]|mscoree\.dll|CONOUT\$|CONIN\$|'
+            r'AreFileApisANSI|LCMapStringEx|LocaleNameToLCID|AppPolicyGetProcessTerminationMethod|'
+            r'FlsAlloc|FlsFree|FlsGetValue|FlsSetValue|InitializeCriticalSectionEx|CorExitProcess|'
+            r'GetCurrentProcess|MiniDumpWriteDump|LoadLibraryA|CloseHandle|GetProcAddress|LocalFree|'
+            r'GetModuleHandleW|TerminateProcess|IsProcessorFeaturePresent|QueryPerformanceCounter|'
+            r'GetCurrentProcessId|GetCurrentThreadId|GetSystemTimeAsFileTime|InitializeSListHead|'
+            r'UnhandledExceptionFilter|SetUnhandledExceptionFilter|RtlCaptureContext|'
+            r'RtlLookupFunctionEntry|RtlVirtualUnwind|__scrt_|__dcrt_|'
+            r'Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|'
+            r'January|February|March|April|May|June|July|August|September|October|November|December|'
+            r'MM/dd/yy|dddd, MMMM dd, yyyy|'
+            r'Type Descriptor|Base Class Descriptor|Base Class Array|Class Hierarchy Descriptor|Complete Object Locator'
+            r')|'                 # Keywords and RTTI phrases
+            r'^(?:api-ms-|ext-ms-|kernel32|user32|advapi32|ntdll|shell32|gdi32)', # System prefix
+            re.I
+        )
 
         def get_entropy(s):
             if not s: return 0
@@ -385,6 +405,10 @@ def extract_ida_strings(graph=None, log_fn=None):
             if not val: return
             val_strip = val.strip()
             
+            # Explicit Noise Block: Return early if string is a known system/metadata artifact
+            if noise_re.search(val_strip):
+                return
+            
             # Determine Category first to see if it's "Interesting" enough to bypass junk filter
             cat = "String"
             if url_re.search(val_strip): cat = "URL"
@@ -402,7 +426,8 @@ def extract_ida_strings(graph=None, log_fn=None):
                 if not camel_concat_re.match(val_strip):
                     cat = "Encoded Data"
             elif len(val_strip) >= 12 and get_entropy(val_strip) > 3.8 and ' ' not in val_strip:
-                cat = "Potential Encryption/Obfuscation"
+                if not camel_concat_re.match(val_strip):
+                    cat = "Potential Encryption/Obfuscation"
 
             # Filter Junk unless it's specifically categorized as something interesting
             if cat in ["String", "Library/Runtime String"] and is_junk(val): return
@@ -1608,6 +1633,30 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
 
     # --- 12. Risk Assessment
     risk_json = _parse_ai_json("risk_assessment")
+    
+    verdict_header_html = ""
+    if risk_json and isinstance(risk_json, dict) and ("risk_score" in risk_json or "malware_category" in risk_json):
+        rs = str(risk_json.get("risk_score", "0"))
+        reason = risk_json.get("risk_reason", "Analysis of core routines and API behaviors indicates significant operational risk.")
+        category = risk_json.get("malware_category", "Malware / Potentially Unwanted Tool")
+        
+        verdict_header_html = f'''
+        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:25px; margin-bottom:25px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); border-top: 5px solid {risk_color};">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div style="flex:1;">
+                    <div style="font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Verdict & Risk Assessment</div>
+                    <h2 style="margin:0; color:#1e293b; font-size:26px; font-weight:800; letter-spacing:-0.5px;">{_escape_html(category)}</h2>
+                    <div style="margin-top:12px; color:#334155; font-size:15px; line-height:1.6;">
+                        <b style="color:#475569;">Risk Factor:</b> {_escape_html(reason)}
+                    </div>
+                </div>
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:15px 25px; border-radius:12px; text-align:center; min-width:130px; margin-left:30px; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05);">
+                    <div style="font-size:32px; font-weight:900; color:{risk_color}; line-height:1;">{_escape_html(rs)}<span style="font-size:18px; color:#cbd5e1; font-weight:700;">/100</span></div>
+                    <div style="font-size:10px; font-weight:800; color:#64748b; text-transform:uppercase; margin-top:8px; letter-spacing:0.5px;">Security Risk</div>
+                </div>
+            </div>
+        </div>'''
+
     if risk_json and isinstance(risk_json, dict) and "risk_score" in risk_json:
         rs = risk_json.get("risk_score", "0")
         summ = risk_json.get("summary", "")
@@ -1715,6 +1764,8 @@ details[open] .toggle-icon {{ transform: rotate(90deg); }}
 </div>
 
 <div class="content">
+
+  {verdict_header_html}
 
   <div style="background-color: #fffbeb; color: #b45309; padding: 15px 20px; border-left: 4px solid #f59e0b; border-radius: 6px; margin-bottom: 25px; font-size: 14px; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
     <strong style="font-size: 15px;">⚠️ Analysis Warning</strong><br/>
@@ -2215,6 +2266,7 @@ CRITICAL RULES:
 - The "value" MUST be a true literal string that was found in the input.
 - Extract partial strings if they represent a clear IOC (e.g., a registry key fragment).
 - IGNORE obvious system libraries (kernel32.dll, ntdll.dll, api-ms-win-*) unless they are involved in hijacking.
+- DO NOT list standard Windows API names (e.g. GetCurrentProcess, CloseHandle, LoadLibraryA, GetProcAddress, TerminateProcess, etc.) as IOCs. These are standard system behaviors, not unique forensic indicators.
 - DO NOT classify Windows DLLs or Windows API names as "domain" or "url". DLL names like advapi32, ntdll, or api-ms-win-* are NOT domains.
 - STANDALONE strings that represent days of the week (Sunday, Monday, etc.), months (January, etc.), or common date formats (MM/dd/yy) are NOT IOCs and should be ignored.
 - For each IOC, explain its Analysis significance.
@@ -2290,6 +2342,8 @@ Synthesize findings from all segments, provide an overall risk score, and conclu
 Respond STRICTLY with a valid JSON object matching this structure:
 {{
   "risk_score": 85,
+  "risk_reason": "Concise 1-sentence reason why this score was given.",
+  "malware_category": "Spyware|Ransomware|Dropper|Infostealer|Lsass Dumper|Worm|Trojan|Backdoor|Safe|Adware|Tool",
   "summary": "1-2 paragraphs of synthesis",
   "recommendations": ["Recommendation 1", "Recommendation 2"]
 }}"""
@@ -2521,6 +2575,9 @@ def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn
 
     # 2. Extract Strategic Strings
     s_data = extract_ida_strings(graph)
+    # Filter out noise: Don't waste notebook context on system DLLs or common library boilerplate
+    s_data = [s for s in s_data if s.get('category') not in ("System Component", "Library/Runtime String")]
+    
     str_digest = []
     
     # Priority sorting: Interesting categories first so they survive the [:60] limit for AI context
@@ -2653,14 +2710,6 @@ def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn
                 if caps:
                     rich_details += f"\n    Capabilities: {', '.join(caps)}"
 
-            # Inclusion: Add the AI-generated Readable C code for the notebook synthesis
-            if output_dir:
-                readable_c = load_readable_from_disk(n.ea, n.name, output_dir)
-                if readable_c:
-                    # Provide the most critical parts for the synthesis AI (cap at 2000 chars)
-                    capped_c = readable_c[:2000] + ("\n... [TRUNCATED FOR BREVITY]" if len(readable_c) > 2000 else "")
-                    rich_details += f"\n    C Code Snippet:\n{capped_c}"
-        
         block = f"  [{n.name}] (0x{n.ea:X})\n    Summary: {summary_to_show}\n    Indicators: {ind_str}{rich_details}"
         
         if risk == "malicious":

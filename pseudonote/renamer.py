@@ -1268,6 +1268,7 @@ class BulkRenamer(QDialog):
         QTimer.singleShot(200, self.check_workflow_tip)
         self.loader = None
         self.worker = None
+        self._start_time = None
 
         # Animated status indicator
         self.busy_dots = 0
@@ -2092,6 +2093,7 @@ class BulkRenamer(QDialog):
         self._session_always_apply = False
         self._pending_still_blocked = []
         _ai_mod.AI_CANCEL_REQUESTED = False
+        self._start_time = time.time()
 
         self.add_log(
             f"Starting rename: {len(items)} functions. Live classification enabled.",
@@ -2354,6 +2356,15 @@ class BulkRenamer(QDialog):
         suggestions = sum(1 for f in self.model.funcs if f.suggested)
         self.update_status(f'Done: {suggestions:,} suggestions')
         self.add_log(f'Analysis complete: {suggestions:,} suggestions', 'ok')
+        
+        if self._start_time:
+            duration = time.time() - self._start_time
+            hh = int(duration // 3600)
+            mm = int((duration % 3600) // 60)
+            ss = int(duration % 60)
+            ts = f"{hh:02d}:{mm:02d}:{ss:02d}"
+            self.add_log(f"Analysis finished in {ts}", "info")
+            self._start_time = None
         
         # UI State: Finished analysing
         self.analyze_btn.setEnabled(True)

@@ -779,6 +779,7 @@ class BulkVariableRenamer(QDialog):
         self._deferred_items = []
         self._is_retry_phase = False
         self._session_always_apply = False
+        self._session_start_time = None
 
         # Load state for batched scanning
         self.is_loading = False
@@ -1441,6 +1442,7 @@ class BulkVariableRenamer(QDialog):
         self._runtime_deferred = []
         self._is_retry_phase = False
         self._session_always_apply = False
+        self._session_start_time = time.time()
 
         # Build cfg
         self._last_cfg = self.build_cfg(self.pn_config)
@@ -1710,6 +1712,14 @@ class BulkVariableRenamer(QDialog):
             f"Variable rename complete. {done_count} function(s) processed.",
             'ok'
         )
+        if self._session_start_time:
+            duration = time.time() - self._session_start_time
+            hh = int(duration // 3600)
+            mm = int((duration % 3600) // 60)
+            ss = int(duration % 60)
+            ts = f"{hh:02d}:{mm:02d}:{ss:02d}"
+            self.add_log(f"Analysis finished in {ts}", "info")
+            self._session_start_time = None
         self.update_button_states()
         self.update_stats_label()
         if has_suggestions:
