@@ -132,6 +132,43 @@ def load_readable_from_disk(ea, name, output_dir):
         except: pass
     return None
 
+def save_exec_flow_to_disk(ea, name, flow_text, output_dir):
+    """Save high-level execution flow for a function to exec_flow/ subfolder."""
+    path, _ = get_function_artifact_path(output_dir, "exec_flow", ea, name, "md")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if flow_text:
+            flow_str = flow_text.strip()
+            # Strip markdown block wrapper if present
+            flow_str = re.sub(r'^```[\w]*\s*', '', flow_str)
+            flow_str = re.sub(r'\s*```$', '', flow_str).strip()
+        else:
+            flow_str = "No execution flow generated."
+            
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(flow_str)
+        return path
+    except Exception as e:
+        print("[PseudoNote] Error saving execution flow file: %s" % e)
+        return None
+
+def load_exec_flow_from_disk(ea, name, output_dir):
+    """Load high-level execution flow from exec_flow/ subfolder."""
+    safe_name = sanitize_function_name(name)
+    path = os.path.join(output_dir, "exec_flow", "%s_0x%X.md" % (safe_name, ea))
+    if os.path.isfile(path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except: pass
+    hits = glob.glob(os.path.join(output_dir, "exec_flow", "*_0x%X.md" % ea))
+    if hits:
+        try:
+            with open(hits[0], 'r', encoding='utf-8') as f:
+                return f.read()
+        except: pass
+    return None
+
 def load_decompiled_from_disk(ea, name, output_dir):
     """Load decompiled C code from a previously saved file on disk."""
     safe_name = sanitize_function_name(name)
@@ -480,6 +517,16 @@ def extract_deterministic_iocs(strings):
     # Pre-compile some secondary regex checks for robustness
     ipv4_pattern = re.compile(r'^(\d{1,3}\.){3}\d{1,3}$')
     
+    # Common system DLLs to filter out from IOCs
+    system_dlls = {
+        "kernel32.dll", "user32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll",
+        "ws2_32.dll", "winmm.dll", "wtsapi32.dll", "iphlpapi.dll", "secur32.dll",
+        "cryptdll.dll", "ntdll.dll", "msvcrt.dll", "wsock32.dll", "wininet.dll",
+        "shell32.dll", "shlwapi.dll", "crypt32.dll", "rpcrt4.dll", "mpr.dll",
+        "netapi32.dll", "normaliz.dll", "version.dll", "psapi.dll", "gdi32.dll",
+        "comctl32.dll", "comdlg32.dll", "setupapi.dll", "imagehlp.dll", "dbghelp.dll"
+    }
+    
     for s_info in strings:
         val = str(s_info.get("value", "")).strip()
         cat = s_info.get("category", "String")
@@ -496,6 +543,8 @@ def extract_deterministic_iocs(strings):
         elif cat == "Command" and any(x in val.lower() for x in ["cmd.exe", "powershell", "-enc", "-w hidden", "sc.exe", "net.exe"]):
             ioc_type = "Command Execution"
         elif cat == "Filename" and val.lower().endswith((".exe", ".dll", ".pif", ".scr", ".sys")):
+            if val.lower() in system_dlls:
+                continue
             ioc_type = "Filename"
         elif cat == "Encoded Data" and len(val) > 32:
             ioc_type = "Encoded Blob"
@@ -517,8 +566,6 @@ def extract_deterministic_iocs(strings):
                 "associated_functions": s_info.get("funcs", [])
             })
             seen.add(val)
-            
-    return iocs
     return iocs
 
 def get_graph_ascii(graph, entry_ea):
@@ -620,6 +667,10 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         raw_decomp = load_decompiled_from_disk(node.ea, node.name, output_dir)
         fd["code"] = rd if rd else (cleanup_decompiled_code(raw_decomp) if raw_decomp else "")
         fd["raw_code"] = raw_decomp if raw_decomp else ""
+        
+        # Load high-level execution flow
+        ef = load_exec_flow_from_disk(node.ea, node.name, output_dir)
+        fd["exec_flow"] = ef if ef else ""
 
         # --- API scanning pass #2: lexical scan of raw decompiled code ---
         # Catches dynamic/indirect calls missed by the static call-tree.
@@ -1158,12 +1209,24 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
         if str(di.get("value", "")).lower() not in existing_vals:
             ioc_json["iocs"].append(di)
 
+    system_dlls = {
+        "kernel32.dll", "user32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll",
+        "ws2_32.dll", "winmm.dll", "wtsapi32.dll", "iphlpapi.dll", "secur32.dll",
+        "cryptdll.dll", "ntdll.dll", "msvcrt.dll", "wsock32.dll", "wininet.dll",
+        "shell32.dll", "shlwapi.dll", "crypt32.dll", "rpcrt4.dll", "mpr.dll",
+        "netapi32.dll", "normaliz.dll", "version.dll", "psapi.dll", "gdi32.dll",
+        "comctl32.dll", "comdlg32.dll", "setupapi.dll", "imagehlp.dll", "dbghelp.dll"
+    }
+
     if ioc_json and isinstance(ioc_json, dict) and "iocs" in ioc_json:
         ioc_rows = ""
         for ioc in ioc_json.get("iocs", []):
             if isinstance(ioc, dict):
                 _type = _escape_html(ioc.get("type", ""))
                 _val = _escape_html(ioc.get("value", ""))
+                
+                if str(ioc.get("value", "")).strip().lower() in system_dlls and str(ioc.get("type", "")).strip().lower() == "filename":
+                    continue
                 _ctx = _apply_forensic_highlighting(_escape_html(ioc.get("context", "")))
                 
                 # Associated functions handle
@@ -1246,8 +1309,40 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             <div style="padding:15px;">
                 <table class="data-table" style="box-shadow:none; border:none; margin-top:0;">
                     <thead><tr><th>String Value</th><th style="width:260px;">Associated Functions</th></tr></thead>
-                    <tbody>{s_rows}</tbody>
+                    <tbody id="strings-tbody">{s_rows}</tbody>
                 </table>
+                <div id="strings-pagination" style="margin-top:15px; display:flex; gap:10px; justify-content:center; align-items:center; font-size:13px; font-weight:600; color:#475569;">
+                    <button onclick="changeStringPage(-1)" style="padding:6px 14px; border-radius:6px; border:1px solid #cbd5e1; background:white; cursor:pointer; font-weight:600; color:#334155;">&lt; Prev</button>
+                    <span id="strings-page-info">Page 1</span>
+                    <button onclick="changeStringPage(1)" style="padding:6px 14px; border-radius:6px; border:1px solid #cbd5e1; background:white; cursor:pointer; font-weight:600; color:#334155;">Next &gt;</button>
+                </div>
+                <script>
+                    var currentStringPage = 1;
+                    var stringsPerPage = 20;
+                    function renderStringPage() {{
+                        var tbody = document.getElementById('strings-tbody');
+                        if(!tbody) return;
+                        var rows = tbody.getElementsByTagName('tr');
+                        var totalPages = Math.ceil(rows.length / stringsPerPage) || 1;
+                        
+                        if(currentStringPage < 1) currentStringPage = 1;
+                        if(currentStringPage > totalPages) currentStringPage = totalPages;
+                        
+                        var start = (currentStringPage - 1) * stringsPerPage;
+                        var end = start + stringsPerPage;
+                        
+                        for(var i=0; i<rows.length; i++) {{
+                            rows[i].style.display = (i >= start && i < end) ? '' : 'none';
+                        }}
+                        document.getElementById('strings-page-info').innerText = 'Page ' + currentStringPage + ' of ' + totalPages;
+                    }}
+                    function changeStringPage(dir) {{
+                        currentStringPage += dir;
+                        renderStringPage();
+                    }}
+                    // Run immediately to format on load
+                    renderStringPage();
+                </script>
             </div>
         </details>'''
     else:
@@ -1421,6 +1516,15 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
                     <pre><code class="language-c">{_escape_html(f.get("code", ""))}</code></pre>
                 </div>
             </details>
+            <details class="code-section" style="margin-top:6px;">
+                <summary class="code-section-header">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <span>High-level execution flow</span>
+                </summary>
+                <div class="code-section-body">
+                    <pre><code class="language-markdown">{_escape_html(f.get("exec_flow", ""))}</code></pre>
+                </div>
+            </details>
         </div>'''
 
     # --- 12. Risk Assessment
@@ -1532,6 +1636,11 @@ details[open] .toggle-icon {{ transform: rotate(90deg); }}
 </div>
 
 <div class="content">
+
+  <div style="background-color: #fffbeb; color: #b45309; padding: 15px 20px; border-left: 4px solid #f59e0b; border-radius: 6px; margin-bottom: 25px; font-size: 14px; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+    <strong style="font-size: 15px;">⚠️ Analysis Warning</strong><br/>
+    This report may contain hallucinated LLM-generated content, especially in the <b>Executive Summary</b> and <b>Technical Overview</b> sections. Proceed to the detailed function analysis below to assist your reverse engineering activities and independently verify these findings.
+  </div>
 
   <!-- Executive summary -->
   <div class="section" id="sec-1">
@@ -1868,14 +1977,21 @@ You are a senior malware reverse engineer writing a Technical Code Analysis Over
 STRICT RULES:
 - Do NOT write generic or high-level descriptions.
 - Produce a cohesive technical narrative. Cross-reference sections where logical (e.g., how architecture supports evasion).
+- Do not talk about compiler or linker findings.
+- Do not talk about any system DLLs, runtime error strings, Dynamic Runtime Type Information or any other standard library functions.
 - Exclude standard compiler-generated routines (e.g., CRT handlers such as __matherr, ___report_error, runtime stubs) unless they directly participate in malicious logic.
 - Base everything ONLY on analyzed functions and confirmed behaviors.
+- STRONGLY PRIORITIZE the "DEEP Analysis FINDINGS (Sub-Routines)" section of the context. 
+  - Do NOT limit your analysis to the Entry Point (Layer 1).
+  - You MUST document the most malicious or suspicious functions discovered anywhere in the call tree.
+  - If a deep subroutine performs C2 networking, encryption, or injection, it MUST be the focus of the summary regardless of its depth.
 - Ensure the explanation naturally covers:
   - The technique being implemented.
   - Its technical purpose.
   - How it is implemented (specific APIs, structures, transformations).
   - The exact function(s) or memory region(s) where it resides.
-  - Its position within the execution lifecycle.
+  - Its position within the overall execution flow.
+You are prohibited from describing findings unless explicit logic is present.
 
 OUTPUT STRUCTURE:
 The technical code analysis focus on code analysis of the malware. Something that valuable to reverse engineer and understand the malware. Describe the overall design (modular, dispatcher-based, etc.). Explain the entry point logic and all the important functions like for example analysis of decryption, unpacking, or memory mapping or anything interesting Analysis of command dispatchers and handler routing. Analysis of File, Registry, Network, and Process manipulation. Analysis of API hashing, anti-analysis, and code shielding techniques. Only include what is relevant to the malware and if you have the findings. If you don't have any findings, then don't include it or speculate anything.
@@ -1896,17 +2012,30 @@ def generate_malware_analysis_assessment(digest, ai_cfg, log_fn):
 
 You are a senior malware reverse engineer and head of Analysis reporting, writing a professional Executive Summary section for a high-stakes malware analysis report.
 
+You must:
+- Base every statement only on observed APIs, call graph, entropy, or strings.
+- Do NOT infer lifecycle stages.
+- Do not talk about compiler or linker findings.
+- Do not talk about any system DLLs, runtime error strings, Dynamic Runtime Type Information, Thread Local Storage Management or any other standard library functions.
+- Do NOT describe architecture unless call graph depth > 3 AND distinct logical modules are proven.
+- If persistence APIs are not observed, explicitly state no persistence observed.
+- If C2 APIs are not observed, explicitly state no C2 observed.
+
 STRICT REQUIREMENTS:
+- STRONGLY PRIORITIZE the "DEEP Analysis FINDINGS (Sub-Routines)" section of the context. Do NOT constrain your summary to just the "Layer 1" Entry Dispatch.
+- You MUST explicitly document and emphasize the highest-risk (Malicious/Suspicious) sub-routines found deep in the call graph (e.g. data collection, C2, evasion, injection).
 - Base every statement ONLY on analyzed functions and confirmed observed behavior.
 - Do NOT speculate, infer intent beyond technical evidence, or attribute capabilities that are not explicitly implemented in code.
 - Do NOT repeat the same capability multiple times.
 - Exclude standard compiler-generated routines (e.g., CRT handlers such as __matherr, ___report_error, runtime stubs) unless they directly participate in malicious logic.
+- Use neutral technical language.
+- Avoid qualitative adjectives.
 - For EVERY major observation, you MUST answer the following questions within the narrative:
   1. What is the specific behavior or capability?
   2. What is the technical objective or intent behind this behavior?
   3. How is the behavior implemented (Registry keys, specific APIs, logic flows)?
-  4. Identify specific function names (e.g., fn_function) or memory locations where the logic resides.
-  5. Where in the execution chain (initialization, payload deployment, C2 phase) does this occur?
+  4. Identify specific malicious function names (e.g., fn_function) where the logic resides.
+  5. Explain how these deep subroutines fit into the overall attack narrative.
 
 Respond STRICTLY with a valid JSON object matching this structure:
 {{

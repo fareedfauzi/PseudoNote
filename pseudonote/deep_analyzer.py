@@ -40,6 +40,7 @@ from pseudonote.report_generator import (
     generate_html_report, 
     save_decompiled_to_disk,
     save_readable_to_disk,
+    save_exec_flow_to_disk,
     get_function_artifact_path,
     cleanup_decompiled_code,
     load_readable_from_disk, 
@@ -2846,19 +2847,26 @@ def analyze_single_function(ea, node, graph, output_dir, ai_cfg, analyzed_eas, l
     def fix_and_parse_single(text):
         try: return json.loads(text)
         except: pass
+        # Robust blind tail repair
+        t = re.sub(r'\\+$', '', text)
+        t = re.sub(r',\s*$', '', t)
         
-        # Aggressive repair
-        t = text
-        if t.count('"') % 2 != 0: t += '"'
-        opens = t.count('{') - t.count('}')
-        if opens > 0: t += '}' * opens
-        obrak = t.count('[') - t.count(']')
-        if obrak > 0: t += ']' * obrak
-        t = re.sub(r',\s*([\]}])', r'\1', t)
+        for tail in ["", "}", "]", "}]", "}}", "}]}", "}}]}", '"}', '"]', '"}]', '"}}', '"}]}']:
+            try: return json.loads(t + tail)
+            except: pass
+            
+        # Fallback to the aggressive bracket counting
+        t_agg = text
+        if t_agg.count('"') % 2 != 0: t_agg += '"'
+        opens = t_agg.count('{') - t_agg.count('}')
+        if opens > 0: t_agg += '}' * opens
+        obrak = t_agg.count('[') - t_agg.count(']')
+        if obrak > 0: t_agg += ']' * obrak
+        t_agg = re.sub(r',\s*([\]}])', r'\1', t_agg)
         
-        try: return json.loads(t)
+        try: return json.loads(t_agg)
         except:
-            try: return json.loads(t + '"' + '}' * 10)
+            try: return json.loads(t_agg + '"' + '}' * 10)
             except: return None
 
     # Attempt 1: Direct or simple repair
@@ -2943,10 +2951,36 @@ def analyze_single_function(ea, node, graph, output_dir, ai_cfg, analyzed_eas, l
     clean_code = result.get("clean_code") 
     if clean_code and isinstance(clean_code, str) and len(clean_code.strip()) > 20:
         save_readable_to_disk(ea, node.name, clean_code.strip(), output_dir)
+        
+    # Generate high-level execution map for the function
+    if analysis_code and len(analysis_code.strip()) > 20:
+        flow_prompt = (
+            "Provide a structured, readable, high-level logical execution map for the following C function.\n"
+            "Focus strictly on semantic stages and major decision points.\n"
+            "Do NOT replicate low-level branch instructions, labels, or variable-level mechanics.\n\n"
+            "FORMAT REQUIREMENTS (STRICT):\n"
+            "1. The entire response MUST be enclosed inside a single Markdown code block using triple backticks.\n"
+            "2. Do NOT include any text, titles, explanations, or commentary outside the code block.\n"
+            "3. Do NOT include additional Markdown headers (no ## sections).\n"
+            "4. Use clear indentation and branching symbols (e.g., ├─, └─, →).\n"
+            "5. Keep the structure clean, readable, and logically staged.\n\n"
+            "The output must represent logical flow only.\n\n"
+            f"{analysis_code}"
+        )
+        flow_res = _validated_ai_request(
+            ai_cfg,
+            flow_prompt,
+            sys_prompt="You are an expert reverse engineer. Produce ONLY the markdown execution map requested.",
+            logger=lambda m: log_fn(m, 'warn'),
+            on_cooldown=cooldown_cb,
+            max_tokens=2000
+        )
+        idaapi.execute_sync(lambda: save_to_idb(ea, flow_res, tag=82), idaapi.MFF_WRITE)
+        save_exec_flow_to_disk(ea, node.name, flow_res, output_dir)
     
     # Now that it's saved to disk, we can pop it before IDB/JSON to save space if it's very large
     # but for now we keep it to ensure it reaches report synthesis.
-    # result.pop("clean_code", None) 
+    # result.pop("clean_code", None)
     
     # Restore dropped fields from preliminary phase so TTPs aren't lost from artifacts
     if mode == "contextual" and hasattr(node, "preliminary_analysis") and isinstance(node.preliminary_analysis, dict):
