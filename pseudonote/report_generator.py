@@ -523,8 +523,7 @@ def extract_deterministic_iocs(strings):
         "ws2_32.dll", "winmm.dll", "wtsapi32.dll", "iphlpapi.dll", "secur32.dll",
         "cryptdll.dll", "ntdll.dll", "msvcrt.dll", "wsock32.dll", "wininet.dll",
         "shell32.dll", "shlwapi.dll", "crypt32.dll", "rpcrt4.dll", "mpr.dll",
-        "netapi32.dll", "normaliz.dll", "version.dll", "psapi.dll", "gdi32.dll",
-        "comctl32.dll", "comdlg32.dll", "setupapi.dll", "imagehlp.dll", "dbghelp.dll"
+        "netapi32.dll", "normaliz.dll", "version.dll", "psapi.dll", "gdi32.dll", "WINHTTP.dll", "DNSAPI.dll", "urlmon.dll", "msimg32.dll", "msi.dll", "winhttp.dll", "comctl32.dll", "comdlg32.dll", "setupapi.dll", "imagehlp.dll", "dbghelp.dll"
     }
     
     for s_info in strings:
@@ -712,60 +711,18 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
             
         raw = val.strip()
 
-        def _pluck_best_effort(raw_str):
-            """Aggressively extract meaningful content from a broken JSON/Markdown string."""
-            pluck_keys = ["detailed_technical_overview", "detailed_narrative", "assessment", "summary", "verdict", "mechanisms", "findings", "steps", "capabilities"]
-            extracted = {}
-            for pk in pluck_keys:
-                # Look for "key": "value... OR "key": [ ...
-                pattern = f'"{pk}"\\s*:\\s*([\\"\\[])(.*)'
-                m = re.search(pattern, raw_str, re.DOTALL)
-                if m:
-                    starter = m.group(1)
-                    content_raw = m.group(2).strip()
-                    
-                    if starter == '"':
-                        # Handle String: Capture until next key or structural break
-                        # We try to find the next key pattern: ", "something":
-                        next_key = re.search(r'",\s*"[^"]+"\s*:', content_raw)
-                        if next_key: content_raw = content_raw[:next_key.start()]
-                        # Conservative Cleanup: Only remove trailing JSON structural noise
-                        # Match a quote followed by optional whitespace and structural markers (comma/brace/bracket),
-                        # but only if it's the LAST such sequence in the string (no more quotes after it).
-                        content_raw = re.sub(r'"\s*[,\}\]]\s*[^"]*$', '', content_raw, flags=re.DOTALL).strip()
-                        if content_raw.endswith('"'): content_raw = content_raw[:-1]
-                        extracted[pk] = content_raw.strip()
-                    else:
-                        # Handle List: Attempt to parse as many items as possible
-                        # Aggressive Repair: Handle unclosed strings inside the list
-                        # This looks for the last " and tries to close it if it's dangling
-                        if content_raw.count('"') % 2 != 0:
-                            content_raw += '"'
-                        
-                        list_str = "[" + content_raw
-                        for tail in ["]", "}]", "}]}", "}}]}"]:
-                            try:
-                                res = json.loads(list_str + tail)
-                                if res: 
-                                    extracted[pk] = res
-                                    break
-                            except: pass
-            return extracted
-        
-        # Helper to try parsing and fixing truncated JSON
         def _try_json(s):
             try:
                 res = json.loads(s)
                 if res is not None: return res
             except:
                 # Truncation repair: try adding closing characters
-                # Try simple tails first
                 for tail in ["}", "]", "}]", "}}", "}]}", "}}]}"]:
                     try:
                         res = json.loads(s + tail)
                         if res is not None: return res
                     except: pass
-                # Aggressive repair: handle unclosed strings (common in truncation)
+                # Aggressive repair: handle unclosed strings
                 for tail in ["\"}", "\"]", "\"}]", "\"}}", "\"}]}", "\"}}]}"]:
                     try:
                         res = json.loads(s + tail)
@@ -773,21 +730,67 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
                     except: pass
             return None
 
-        # 1. Direct attempt
-        res = _try_json(raw)
-        if res: return res
-        
-        # 2. Markdown cleaning attempt
-        cleaned = re.sub(r"^```(?:json)?\s*", "", raw)
-        cleaned = re.sub(r"```\s*$", "", cleaned).strip()
-        res = _try_json(cleaned)
-        if res: return res
-        
-        # 3. Aggressive Pluck
-        res = _pluck_best_effort(raw)
-        if res: return res
+        # 1. Primary Attempt: Extract any JSON-like block bounded by {} or []
+        # This handles cases where AI adds leading/trailing text or markdown wrappers.
+        json_blocks = re.findall(r'(\{.*\}|\[.*\])', raw, re.DOTALL)
+        if json_blocks:
+            # Try the largest block first
+            for block in sorted(json_blocks, key=len, reverse=True):
+                res = _try_json(block)
+                if res: return res
 
-        return {}
+        # 2. Fallback: Detailed plucker for split or severely malformed JSON
+        def _pluck_best_effort(raw_str):
+            pluck_keys = ["detailed_technical_overview", "detailed_narrative", "assessment", "summary", "verdict", "mechanisms", "findings", "steps", "capabilities", "functions"]
+            extracted = {}
+            for pk in pluck_keys:
+                pattern = f'"{pk}"\\s*:\\s*([\\"\\[])(.*)'
+                m = re.search(pattern, raw_str, re.DOTALL | re.IGNORECASE)
+                if m:
+                    starter = m.group(1)
+                    content_raw = m.group(2).strip()
+                    
+                    if starter == '"':
+                        next_key = re.search(r'",\s*"[^"]+"\s*:', content_raw)
+                        if next_key: content_raw = content_raw[:next_key.start()]
+                        content_raw = re.sub(r'"\s*[,\}\]]\s*[^"]*$', '', content_raw, flags=re.DOTALL).strip()
+                        if content_raw.endswith('"'): content_raw = content_raw[:-1]
+                        extracted[pk] = content_raw.strip()
+                    else:
+                        if content_raw.count('"') % 2 != 0:
+                            content_raw += '"'
+                        
+                        # Try parsing from the start of the list
+                        # We try to find the closing bracket
+                        bracket_depth = 1
+                        list_end = len(content_raw)
+                        for idx, char in enumerate(content_raw):
+                            if char == '[': bracket_depth += 1
+                            elif char == ']': bracket_depth -= 1
+                            if bracket_depth == 0:
+                                list_end = idx + 1
+                                break
+                        
+                        list_str = "[" + content_raw[:list_end]
+                        # Fix up if we stopped early
+                        if not list_str.endswith(']'): list_str += ']'
+                        
+                        try:
+                            res = json.loads(list_str)
+                            if res: extracted[pk] = res
+                        except:
+                            # Final fallback tail search
+                            for tail in ["", "]", "}]", "}]}", "}}]}"]:
+                                try:
+                                    res = json.loads(list_str + tail)
+                                    if res: 
+                                        extracted[pk] = res
+                                        break
+                                except: pass
+            return extracted
+
+        res = _pluck_best_effort(raw)
+        return res if res else {}
 
     # --- 0. Prepare Analysis Data (Strings & Deterministic IOCs)
     s_data = extract_ida_strings(graph, _log)
@@ -910,8 +913,16 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
     # --- 4. General Capability or Malware Features
     caps_json = _parse_ai_json("capabilities")
     cap_rows = ""
-    if caps_json and isinstance(caps_json, dict) and "capabilities" in caps_json:
-        for c in caps_json.get("capabilities", []):
+    
+    # Normalize: Handle both {"capabilities": [...]} and raw list [...]
+    actual_caps = []
+    if isinstance(caps_json, dict):
+        actual_caps = caps_json.get("capabilities", [])
+    elif isinstance(caps_json, list):
+        actual_caps = caps_json
+
+    if actual_caps:
+        for c in actual_caps:
             if isinstance(c, dict):
                 name = _escape_html(c.get("name", ""))
                 desc = _apply_forensic_highlighting(_escape_html(c.get("description", "")))
@@ -919,15 +930,16 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
                 if isinstance(funcs, str): funcs = [funcs]
                 f_html = ", ".join([f'<code>{_escape_html(str(f))}</code>' for f in funcs])
                 cap_rows += f'<tr><td style="font-weight:bold; color:#1e293b; width:220px;">{name}</td><td class="muted">{desc}</td><td style="width:250px;">{f_html}</td></tr>'
+        
         capabilities_html = f'<table class="data-table"><thead><tr><th>Capability</th><th>Description</th><th>Associated Functions</th></tr></thead><tbody>{cap_rows}</tbody></table>' if cap_rows else f'<p class="muted">No general capabilities identified.</p>'
     else:
-        capabilities_html = f'<div class="ai-block" style="border-left-color: #cbd5e1;">{_escape_html(sections.get("capabilities", "Capabilities pending..."))}</div>'
+        # Check if the raw string is just empty or boilerplate
+        raw_cap = sections.get("capabilities", "")
+        if not raw_cap or (isinstance(raw_cap, dict) and not any(raw_cap.values())):
+            capabilities_html = '<p class="muted">No general capabilities identified.</p>'
+        else:
+            capabilities_html = f'<div class="ai-block" style="border-left-color: #cbd5e1;">{_escape_html(str(raw_cap))}</div>'
 
-    # --- 5. C2/Backdoor Analysis
-    c2_json = _parse_ai_json("c2_analysis")
-    c2_rows = ""
-    _summ = ""
-    
     # --- 5. C2/Backdoor Analysis
     c2_json = _parse_ai_json("c2_analysis")
     c2_rows = ""
@@ -1350,11 +1362,32 @@ def generate_html_report(graph, entry_ea, output_dir, sections, log_fn=None):
 
     # --- 8. Function Analysis
     # 8.1 Call Chain Analysis
-    call_chain_nodes = [f for f in functions_data if f.get("depth", 99) <= 2][:10]
+    # Expanded visibility: Depth up to 5, and force-include all malicious/suspicious functions
+    # Priority: High-risk nodes first, then by depth to maintain tree-like flow
+    candidates = [f for f in functions_data if (f.get("depth", 99) <= 5 or f.get("risk_tag") in ("malicious", "suspicious"))]
+    # Sort primarily by depth to keep the tree look, but we'll cap the total
+    candidates.sort(key=lambda x: x.get("depth", 99))
+    
+    # Take more nodes to show the full attack path (up to 60)
+    call_chain_nodes = candidates[:60]
     chain_html = ""
     for f in call_chain_nodes:
         cl = {"malicious":"#dc2626","suspicious":"#f59e0b","benign":"#16a34a"}.get(f.get("risk_tag"),"#94a3b8")
-        chain_html += f'<div class="chain-box" style="border-left-color:{cl};"><b>{f["name"]}</b> <span class="muted">(Depth {f["depth"]})</span><br/><small>{_escape_html(f.get("one_liner") or "Entry execution path")}</small></div>'
+        depth = f.get("depth", 0)
+        # Apply visual tree indentation
+        indent = depth * 25
+        tree_prefix = ""
+        if depth > 0:
+            tree_prefix = '<span style="color:#cbd5e1; margin-right:5px; font-family:monospace;">└─</span>'
+            
+        chain_html += f'''
+        <div class="chain-box" style="border-left-color:{cl}; margin-left:{indent}px; position:relative;">
+            {tree_prefix}<b>{_escape_html(f["name"])}</b> 
+            <span class="muted" style="font-size:11px; margin-left:5px;">(Depth {depth})</span>
+            <div style="margin-top:4px; padding-left:{15 if depth > 0 else 0}px;">
+                <small style="color:#475569; line-height:1.4;">{_escape_html(f.get("one_liner") or "Entry execution path")}</small>
+            </div>
+        </div>'''
     
     # 8.2 Call Graph (Tree View)
     tree_ascii = get_graph_ascii(graph, entry_ea)
@@ -1773,7 +1806,7 @@ details[open] .toggle-icon {{ transform: rotate(90deg); }}
       </div>
     </details>
 
-    <details class="fn-card" style="margin-bottom:12px; border:1px solid #fed7aa; box-shadow:none;">
+    <details class="fn-card" open style="margin-bottom:12px; border:1px solid #fed7aa; box-shadow:none;">
       <summary style="padding:14px 18px; cursor:pointer; font-weight:700; font-size:15px; color:#c2410c; background:#fff7ed; border-radius:8px; display:flex; align-items:center; gap:10px;">
         <div class="icon-box"><svg class="toggle-icon" style="width:10px; height:10px;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
         Suspicious Functions
@@ -1954,12 +1987,14 @@ def _validated_ai_request(cfg, prompt, sys_prompt=None, **kwargs):
     return ai_request(cfg, prompt, sys_prompt, **kwargs)
 
 def generate_program_overview(digest, entry_name, entry_children_count, ai_cfg, log_fn):
-    prompt = f"""Target: {entry_name}
-Sub-calls: {entry_children_count}
-Context: {digest}
+    prompt = f"""Analyst Notebook: 
+{digest}
 
-Analyze execution flow and provide a high-level technical code analysis overview of what the program is doing.
-Focus on operational logic, data flow, structure, and stage-by-stage choreography.
+Target Entry: {entry_name}
+Sub-calls: {entry_children_count}
+
+Analyze the Analyst Notebook and provide a high-level technical code analysis overview of what the program is doing.
+Focus on operational logic, data flow, structure, and stage-by-stage choreography explicitly found in the notes.
 Respond STRICTLY with a valid JSON object matching this structure:
 {{
   "operational_logic": "Brief high-level overview of the program's logic.",
@@ -1970,35 +2005,30 @@ Respond STRICTLY with a valid JSON object matching this structure:
     return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
 
 def generate_technical_overview(digest, ai_cfg, log_fn):
-    prompt = f"""Context: {digest}
+    prompt = f"""Analyst Notebook: 
+{digest}
 
-You are a senior malware reverse engineer writing a Technical Code Analysis Overview section for a professional malware analysis report. Your goal is to provide a deep-dive technical narrative that explains the inner workings of the binary with Analysis precision.
+You are a senior malware reverse engineer writing a Technical Code Analysis Overview section for a professional malware analysis report. Your goal is to provide a deep-dive technical narrative that explains the inner workings of the binary by relying STRICTLY on the curated notes provided in the "Analyst Notebook" above.
 
 STRICT RULES:
-- Do NOT write generic or high-level descriptions.
-- Produce a cohesive technical narrative. Cross-reference sections where logical (e.g., how architecture supports evasion).
+- The Analyst Notebook is categorically split into Executable Dispatch, Malicious Payloads, and Suspicious Infrastructure. You MUST build your narrative around the "CRITICAL MALICIOUS PAYLOADS" section.
+- Produce a cohesive technical narrative linking the malicious payload functions together (e.g. how data collected in one function is encrypted or exfiltrated in another).
 - Do not talk about compiler or linker findings.
-- Do not talk about any system DLLs, runtime error strings, Dynamic Runtime Type Information or any other standard library functions.
-- Exclude standard compiler-generated routines (e.g., CRT handlers such as __matherr, ___report_error, runtime stubs) unless they directly participate in malicious logic.
-- Base everything ONLY on analyzed functions and confirmed behaviors.
-- STRONGLY PRIORITIZE the "DEEP Analysis FINDINGS (Sub-Routines)" section of the context. 
-  - Do NOT limit your analysis to the Entry Point (Layer 1).
-  - You MUST document the most malicious or suspicious functions discovered anywhere in the call tree.
-  - If a deep subroutine performs C2 networking, encryption, or injection, it MUST be the focus of the summary regardless of its depth.
-- Ensure the explanation naturally covers:
-  - The technique being implemented.
-  - Its technical purpose.
-  - How it is implemented (specific APIs, structures, transformations).
-  - The exact function(s) or memory region(s) where it resides.
-  - Its position within the overall execution flow.
-You are prohibited from describing findings unless explicit logic is present.
+- Do not talk about any system DLLs or runtime error strings.
+- Base everything ONLY on the functions explicitly listed in the Analyst Notebook.
+- Explain:
+  - The malicious techniques being implemented.
+  - Their technical purpose within the attack.
+  - How they are implemented (specific APIs, structures).
+  - The exact function names (e.g., fn_function).
+You are prohibited from describing findings unless explicit logic is present in the Analyst Notes.
 
 OUTPUT STRUCTURE:
-The technical code analysis focus on code analysis of the malware. Something that valuable to reverse engineer and understand the malware. Describe the overall design (modular, dispatcher-based, etc.). Explain the entry point logic and all the important functions like for example analysis of decryption, unpacking, or memory mapping or anything interesting Analysis of command dispatchers and handler routing. Analysis of File, Registry, Network, and Process manipulation. Analysis of API hashing, anti-analysis, and code shielding techniques. Only include what is relevant to the malware and if you have the findings. If you don't have any findings, then don't include it or speculate anything.
+The technical code analysis must focus on the core malicious payload capabilities. Describe the overall design. Explain the entry point logic briefly, but spend the majority of the text analyzing the command dispatchers, file/network manipulation, cryptography, or active stealth techniques listed in the Notebook. 
 
 WRITING STYLE:
 - Technical, Dense, and Authoritative. No filler.
-- Answer WHY and HOW for every behavior.
+- Answer WHY and HOW for every major malicious function.
 
 Respond STRICTLY with a valid JSON object:
 {{
@@ -2008,34 +2038,28 @@ Respond STRICTLY with a valid JSON object:
     return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096)
 
 def generate_malware_analysis_assessment(digest, ai_cfg, log_fn):
-    prompt = f"""Context: {digest}
+    prompt = f"""Analyst Notebook: 
+{digest}
 
-You are a senior malware reverse engineer and head of Analysis reporting, writing a professional Executive Summary section for a high-stakes malware analysis report.
+You are a senior malware reverse engineer and head of Analysis reporting. Your analysts have prepared the "Analyst Notebook" above containing the highest-risk functions found in the binary. You must write a professional Executive Summary section for a high-stakes malware analysis report based ONLY on these notes.
 
 You must:
-- Base every statement only on observed APIs, call graph, entropy, or strings.
-- Do NOT infer lifecycle stages.
-- Do not talk about compiler or linker findings.
-- Do not talk about any system DLLs, runtime error strings, Dynamic Runtime Type Information, Thread Local Storage Management or any other standard library functions.
-- Do NOT describe architecture unless call graph depth > 3 AND distinct logical modules are proven.
-- If persistence APIs are not observed, explicitly state no persistence observed.
-- If C2 APIs are not observed, explicitly state no C2 observed.
+- Determine the threat category (e.g. Spyware, Ransomware, Dropper, Benign) based on the "CRITICAL MALICIOUS PAYLOADS" and "STRATEGIC INDICATORS" sections in the notebook.
+- Do NOT infer lifecycle stages beyond what the notes explicitly state.
+- Do not talk about generic functions or compiler operations.
+- If no Malicious payloads exist, explicitly state the program appears to be Safe or Adware.
 
 STRICT REQUIREMENTS:
-- STRONGLY PRIORITIZE the "DEEP Analysis FINDINGS (Sub-Routines)" section of the context. Do NOT constrain your summary to just the "Layer 1" Entry Dispatch.
-- You MUST explicitly document and emphasize the highest-risk (Malicious/Suspicious) sub-routines found deep in the call graph (e.g. data collection, C2, evasion, injection).
-- Base every statement ONLY on analyzed functions and confirmed observed behavior.
+- STRONGLY PRIORITIZE the "CRITICAL MALICIOUS PAYLOADS" section of the notebook. Do NOT constrain your summary to just the Layer 1 dispatch.
+- You MUST explicitly document and emphasize the highest-risk sub-routines (e.g. data collection, C2, evasion, injection).
+- Base every statement ONLY on the functions provided in the notebook.
 - Do NOT speculate, infer intent beyond technical evidence, or attribute capabilities that are not explicitly implemented in code.
-- Do NOT repeat the same capability multiple times.
-- Exclude standard compiler-generated routines (e.g., CRT handlers such as __matherr, ___report_error, runtime stubs) unless they directly participate in malicious logic.
-- Use neutral technical language.
 - Avoid qualitative adjectives.
 - For EVERY major observation, you MUST answer the following questions within the narrative:
-  1. What is the specific behavior or capability?
-  2. What is the technical objective or intent behind this behavior?
-  3. How is the behavior implemented (Registry keys, specific APIs, logic flows)?
-  4. Identify specific malicious function names (e.g., fn_function) where the logic resides.
-  5. Explain how these deep subroutines fit into the overall attack narrative.
+  1. What is the specific malicious capability?
+  2. What is the technical objective behind it?
+  3. Identify specific malicious function names (e.g., fn_function) where the logic resides.
+  4. Explain how these disjointed functions fit into the overall attack narrative.
 
 Respond STRICTLY with a valid JSON object matching this structure:
 {{
@@ -2045,8 +2069,10 @@ Respond STRICTLY with a valid JSON object matching this structure:
     return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn, max_tokens=4096)
 
 def generate_key_capabilities(digest, ai_cfg, log_fn):
-    prompt = f"""Context: {digest}
-Identify key technical capabilities matching malware features. For each capability, list which specific function(s) from the context perform or contribute to it.
+    prompt = f"""Analyst Notebook: 
+{digest}
+
+Identify key technical capabilities matching malware features based solely on the Analyst Notebook. For each capability, list which specific function(s) perform or contribute to it.
 Respond STRICTLY with a valid JSON object matching this structure:
 {{
   "capabilities": [
@@ -2054,37 +2080,41 @@ Respond STRICTLY with a valid JSON object matching this structure:
       "name": "Capability Name (e.g. Network C2)", 
       "description": "Brief technical description",
       "associated_functions": ["func_name1", "func_name2"]
-    }},
-    {{"name": "...", "description": "...", "associated_functions": []}}
+    }}
   ]
 }}
-Ensure you list 5-8 capabilities. Use function names provided in 'Context'."""
+CRITICAL: Do NOT list generic CRT wrappers, error handling, pointer encryption, thread-local storage, or memory allocation as capabilities. If no actual malicious or significant capabilities exist, it is perfectly acceptable to return a very small list.
+Use ONLY function names explicitly listed in the Analyst Notebook."""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
     return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
 
 def generate_suspicious_functions(digest, ai_cfg, log_fn):
-    prompt = f"""Context: {digest}
-Identify functions performing highly suspicious operations.
+    prompt = f"""Analyst Notebook: 
+{digest}
+
+Extract functions performing highly suspicious operations directly from the notebook. Do not hallucinate external routines.
 Respond STRICTLY with a valid JSON object matching this structure:
 {{
   "functions": [
     {{"address": "0x123456", "name": "func_name", "reasoning": "why it's suspicious"}}
   ]
 }}
-IMPORTANT: Replace 0x123456 with the actual hex address from the Context."""
+IMPORTANT: Replace 0x123456 with the actual hex address from the Analyst Notebook."""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
     return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
 
 def generate_malicious_functions(digest, ai_cfg, log_fn):
-    prompt = f"""Context: {digest}
-Identify definitive malicious functions and patterns.
+    prompt = f"""Analyst Notebook: 
+{digest}
+
+Extract definitive malicious functions and patterns directly from the notebook. Do not hallucinate external routines.
 Respond STRICTLY with a valid JSON object matching this structure:
 {{
   "functions": [
     {{"address": "0x123456", "name": "func_name", "reasoning": "pattern description"}}
   ]
 }}
-IMPORTANT: Replace 0x123456 with the actual hex address from the Context."""
+IMPORTANT: Replace 0x123456 with the actual hex address from the Analyst Notebook."""
     sys_p = "You are a senior reverse engineer. Respond ONLY with valid JSON."
     return _validated_ai_request(ai_cfg, prompt, sys_prompt=sys_p, logger=log_fn)
 
@@ -2386,26 +2416,56 @@ def generate_call_flow_mermaid(graph, entry_ea, analyzed_results, log_fn=None):
     lines.extend(classdefs)
     return "\n".join(lines) if nodes_declared else None
 
-def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn=None, log_fn=None):
+def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn=None, log_fn=None, output_dir=None):
     PLACEHOLDER_SUMMARIES = {"batch parsed function.", "trivial or wrapper function.", "", "(no summary available)"}
     MIN_CONFIDENCE = 40
 
     all_nodes = sorted([n for n in graph.values() if not n.is_library], key=lambda x: (x.depth, x.name))
     
     # 1. Aggregate categorized APIs (not just high-sev)
-    categorized_apis = collections.defaultdict(set)
+    try:
+        from pseudonote.api_taxonomy import get_api_tags_for_function as _real_get_api_tags
+        from pseudonote.api_taxonomy import get_category_severity as _real_get_category_severity
+    except ImportError:
+        _real_get_api_tags = get_api_tags_for_function
+        _real_get_category_severity = lambda c: "LOW"
+        
+    names_map = {n.ea: n.name for n in graph.values()}
+    categorized_apis = collections.defaultdict(list)
+    
     for node in graph.values():
         if node.is_library: continue
-        hits = get_api_tags_for_function(node.ea, getattr(node, 'callees', []))
+        hits = _real_get_api_tags(node.ea, getattr(node, 'callees', []), names_map=names_map)
         for cat, apis in hits.items():
             for api in apis:
-                # Add function context to the API hit for better AI attribution
-                categorized_apis[cat].add(f"{api} (in {node.name})")
+                categorized_apis[cat].append((api, node.name))
     
     api_digest = []
-    for cat, apis in sorted(categorized_apis.items()):
-        api_list = sorted(list(apis))
-        api_digest.append(f"[{cat}]: {', '.join(api_list[:12])}{'...' if len(api_list) > 12 else ''}")
+    
+    def _cat_sort_key(cat):
+        sev = _real_get_category_severity(cat).upper()
+        if sev == "CRITICAL": return 0
+        if sev == "HIGH": return 1
+        if sev == "MEDIUM": return 2
+        return 3
+        
+    sorted_cats = sorted(categorized_apis.keys(), key=lambda c: (_cat_sort_key(c), c))
+    
+    for cat in sorted_cats:
+        cat_apis = categorized_apis[cat]
+        api_usage = collections.defaultdict(set)
+        for api, caller in cat_apis:
+            api_usage[api].add(caller)
+            
+        formatted_apis = []
+        for api in sorted(api_usage.keys(), key=lambda a: (-len(api_usage[a]), a)):
+            callers = sorted(list(api_usage[api]))
+            caller_str = ", ".join(callers[:3])
+            if len(callers) > 3:
+                caller_str += f", +{len(callers)-3} more"
+            formatted_apis.append(f"{api} (in {caller_str})")
+            
+        api_digest.append(f"[{cat}]: {', '.join(formatted_apis[:15])}{'...' if len(formatted_apis) > 15 else ''}")
     
     api_summary_text = "\n".join(api_digest) if api_digest else "None explicitly categorized."
 
@@ -2442,30 +2502,80 @@ def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn
             entry_children_blocks.append(f"  [{ch.name}] depth={ch.depth} conf={ch.confidence}% [Risk: {getattr(ch, 'risk_tag', 'benign')}]\n    Purpose: {one_liner.strip()}\n")
 
     quality_nodes = []
+    # Absolute drop list for Notebook (do not waste Analyst Notebook tokens on CRT/compiler wrappers unless malicious)
+    ignore_stubs = ['__chkstk', '_fpreset', 'mainCRTStartup', '_start', '__main', 'TlsGetValue', '__mingw', 
+                    '_init_', '_fini_', 'bad_alloc', 'bad_cast', 'exception', '_acmdln', 'get_osfhandle', 
+                    '_isatty', '_setmode', '_cinit', '_invalid_parameter', '_pei386', '_encode_pointer', 
+                    '_decode_pointer', 'IsProcessorFeaturePresent', 'atexit', '__security_init_cookie', 
+                    '__CxxFrameHandler', '_purecall', '__acrt_', 'wcrtomb', 'mbrtowc', 'memset', 'memcpy', 
+                    'memmove', 'memcmp', 'strlen', 'strcpy', 'strcmp', 'FlsAlloc', 'FlsGetValue', 'FlsSetValue', 
+                    'FlsFree', '_NMSG_WRITE', 'GetProcessWindowStation', 'GetUserObjectInformation',
+                    '__matherr', '_fpclass', '_statusfp', '_clearfp', '_controlfp', '_clear87', '_control87', '_status87',
+                    'std::', 'std::allocator', 'std::vector', 'std::string', 'std::map', 'std::set', 'std::list',
+                    'operator new', 'operator delete', '`new[]', '`delete[]', '`vector constructor iterator', '`vector destructor iterator',
+                    'dynamic initializer for', 'dynamic atexit destructor for', '`vbase destructor', '`eh vector constructor',
+                    '__RTC_CheckEsp', '__RTC_InitBase', '__RTC_Shutdown', 'GetActiveWindow', 'GetLastActivePopup',
+                    '__tmainCRTStartup', 'wmainCRTStartup', '__scrt_common_main', '__scrt_common_main_seh',
+                    '__scrt_initialize_crt', '__scrt_initialize_onexit_tables', '__scrt_acquire_startup_lock',
+                    '__scrt_release_startup_lock', '__scrt_get_dyn_tls_init_callback', '__scrt_fastfail',
+                    '__scrt_uninitialize_crt', '__security_check_cookie', '__security_cookie', '__GSHandlerCheck',
+                    '__GSHandlerCheck_SEH', '__report_gsfailure', '__CxxThrowException', '__CxxFrameHandler3',
+                    '__CxxFrameHandler4', '__std_terminate', '__std_exception_copy', '__std_exception_destroy',
+                    '__RTtypeid', '__RTDynamicCast', '__RTCastToVoid', 'type_info', 'TlsAlloc', 'TlsFree',
+                    'TlsSetValue', 'TlsGetValue', 'std::_Tree', 'std::_Vector', 'std::_List', 'std::_String',
+                    'std::_Map', 'std::_Set', 'std::_Deque', 'std::_Hash', 'std::_Iterator', 'std::_Container',
+                    '_interlockedincrement', '_interlockeddecrement', '_interlockedcompareexchange',
+                    '_bit_scan_forward', '_bit_scan_reverse', 'InitializeCriticalSection', 'DeleteCriticalSection',
+                    'EnterCriticalSection', 'LeaveCriticalSection', 'CreateThread', 'CreateThreadpoolWork',
+                    'CloseHandle', 'WaitForSingleObject', 'HeapAlloc', 'HeapFree', 'HeapReAlloc', 'LocalAlloc',
+                    'LocalFree', 'GlobalAlloc', 'GlobalFree',
+                    # Golang stubs
+                    'runtime.', 'type..', 'go.itab.', 'go.info.', 'go.string.', 'go.func.',
+                    'fmt.', 'sync.', 'reflect.', 'strconv.', 'math.', 'internal.', 'syscall.',
+                    # Rust stubs
+                    'core::', 'alloc::', 'std::sys::', 'std::rt::', 'std::panicking::', 
+                    'core::fmt::', 'core::panicking::', 'core::ptr::drop_in_place', 
+                    'rust_panic', 'rust_begin_unwind', 'rust_eh_personality', 'compiler_builtins::']
+
     for node in all_nodes:
-        if node.ea in entry_child_eas: continue
-        if node.status not in ("analyzed", "preliminary", "contextual"): continue
+        risk_tag = getattr(node, "risk_tag", "benign")
+        is_high_risk = risk_tag in ("malicious", "suspicious")
         
-        # Fallback to node attribute if cache is missing
+        # 1. Skip logic for benign stubs and Layer 1 overlaps
+        if not is_high_risk:
+            # Skip functions already in the Layer 1 Dispatch section to save tokens
+            if node.ea in entry_child_eas: continue
+            
+            # Skip unanalyzed or low-confidence benign nodes
+            if node.status not in ("analyzed", "preliminary", "contextual"): continue
+            
+            # Skip generic CRT and utility stubs
+            if any(stub.lower() in node.name.lower() for stub in ignore_stubs): continue
+            
+            one_liner = (analysis_cache.get(node.ea, "") if analysis_cache else "") or getattr(node, "one_liner", "") or ""
+            if (one_liner.lower() in PLACEHOLDER_SUMMARIES and not getattr(node, 'suspicious', [])) or node.confidence < MIN_CONFIDENCE: 
+                 continue
+        
+        # 2. Extract detail
         one_liner = (analysis_cache.get(node.ea, "") if analysis_cache else "") or getattr(node, "one_liner", "") or ""
         full_summary = getattr(node, "summary", "") or ""
-        
-        if (one_liner.lower() in PLACEHOLDER_SUMMARIES and not getattr(node, 'suspicious', [])) or node.confidence < MIN_CONFIDENCE: 
-             continue
         
         quality_nodes.append({
             "node": node,
             "one_liner": one_liner,
             "summary": full_summary,
             "interest": interest_calc_fn(node) if interest_calc_fn else 0,
-            "risk_tag": getattr(node, "risk_tag", "benign")
+            "risk_tag": risk_tag
         })
 
     quality_nodes.sort(key=lambda x: (_RISK_ORDER.get(x["risk_tag"], 0), x["interest"]), reverse=True)
-    digest_lines = ["DETAILED FINDINGS:"]
-    for q in quality_nodes[:80]:
+    # Convert all candidate nodes into notebook objects
+    malicious_blocks = []
+    suspicious_blocks = []
+    benign_blocks = []
+    
+    for q in quality_nodes:
         n = q["node"]
-        # Extract indicators from preliminary_analysis if available
         indicators = []
         if hasattr(n, 'preliminary_analysis') and isinstance(n.preliminary_analysis, dict):
             indicators = n.preliminary_analysis.get('suspicious', [])
@@ -2473,23 +2583,158 @@ def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn
             indicators = n.suspicious
             
         ind_str = ", ".join(indicators[:5]) if indicators else "None"
-        risk_label = q['risk_tag'].upper()
-        # For high-risk functions, include the full summary for maximum context
-        summary_to_show = q['summary'] if (risk_label in ("MALICIOUS", "SUSPICIOUS") and q['summary']) else q['one_liner']
+        risk = q['risk_tag'].lower()
         
-        digest_lines.append(f"Function: {n.name} (0x{n.ea:X}) [Risk: {risk_label}]\n  Summary: {summary_to_show}\n  Indicators: {ind_str}")
+        # Determine how much detail to show
+        # Malicious targets get the full extensive summary. Benign only get one-liners.
+        summary_to_show = q['summary'] if (risk in ("malicious", "suspicious") and q['summary']) else q['one_liner']
+        
+        rich_details = ""
+        if risk in ("malicious", "suspicious"):
+            if hasattr(n, "pattern_matches") and n.pattern_matches:
+                pat_str = ", ".join([p.get("name", "") for p in n.pattern_matches if isinstance(p, dict)])
+                if pat_str: rich_details += f"\n    Patterns: {pat_str}"
+            if hasattr(n, "semantic_tags") and n.semantic_tags:
+                tag_str = ", ".join(n.semantic_tags)
+                if tag_str: rich_details += f"\n    Tags: {tag_str}"
+            # Extract high-level "Malware Capabilities" from deep analyzer markers
+            if hasattr(n, 'preliminary_analysis') and isinstance(n.preliminary_analysis, dict):
+                caps = n.preliminary_analysis.get('capabilities', [])
+                if caps:
+                    rich_details += f"\n    Capabilities: {', '.join(caps)}"
 
-    full_digest = f"""PRIMARY EXECUTION DISPATCH (Layer 1):
-{' '.join(entry_children_blocks)}
+            # Inclusion: Add the AI-generated Readable C code for the notebook synthesis
+            if output_dir:
+                readable_c = load_readable_from_disk(n.ea, n.name, output_dir)
+                if readable_c:
+                    # Provide the most critical parts for the synthesis AI (cap at 2000 chars)
+                    capped_c = readable_c[:2000] + ("\n... [TRUNCATED FOR BREVITY]" if len(readable_c) > 2000 else "")
+                    rich_details += f"\n    C Code Snippet:\n{capped_c}"
+        
+        block = f"  [{n.name}] (0x{n.ea:X})\n    Summary: {summary_to_show}\n    Indicators: {ind_str}{rich_details}"
+        
+        if risk == "malicious":
+            malicious_blocks.append(block)
+        elif risk == "suspicious":
+            suspicious_blocks.append(block)
+        else:
+            # We only pull the top highly interesting benign functions contextually
+            if len(benign_blocks) < 15:
+                benign_blocks.append(block)
 
-DEEP Analysis FINDINGS (Sub-Routines):
-{chr(10).join(digest_lines)}
+    # ---------------------------------------------------------
+    # BUILD BINARY CONTEXT & METADATA
+    # ---------------------------------------------------------
+    bin_info = {"name": "unknown", "md5": "unknown", "sha256": "unknown", "arch": "unknown", "is_64": False}
+    
+    def _sync_metadata():
+        import ida_nalt, ida_ida
+        bin_info["name"] = idaapi.get_input_file_path() or "unknown"
+        bin_info["arch"] = ida_ida.inf_get_procname() or "unknown"
+        bin_info["is_64"] = ida_ida.inf_is_64bit()
+        
+        md5_b = getattr(ida_nalt, 'retrieve_input_file_md5', lambda: b'')()
+        sha_b = getattr(ida_nalt, 'retrieve_input_file_sha256', lambda: b'')()
+        if md5_b: bin_info["md5"] = md5_b.hex() if isinstance(md5_b, bytes) else str(md5_b)
+        if sha_b: bin_info["sha256"] = sha_b.hex() if isinstance(sha_b, bytes) else str(sha_b)
 
-CATEGORIZED WINAPI BEHAVIORS:
-{api_summary_text}
+    if idaapi:
+        idaapi.execute_sync(_sync_metadata, idaapi.MFF_READ)
 
-STRATEGIC STRING ARTIFACTS:
-{str_summary_text}"""
+    # Calculate Global Threat Intensity
+    mal_count = len(malicious_blocks)
+    sus_count = len(suspicious_blocks)
+    total_custom = len(all_nodes)
+    avg_entropy = sum(n.entropy for n in all_nodes) / total_custom if total_custom else 0.0
+    
+    nb_system = (
+        f"=== SYSTEM & BINARY CONTEXT ===\n"
+        f"Input Binary: {os.path.basename(bin_info['name'])}\n"
+        f"MD5/SHA256: {bin_info['md5']} / {bin_info['sha256']}\n"
+        f"Architecture: {bin_info['arch']} ({'64-bit' if bin_info['is_64'] else '32-bit'})\n"
+        f"Analysis Scope: {total_custom} custom functions identified.\n"
+        f"Threat Density: {mal_count} Malicious, {sus_count} Suspicious, {len(benign_blocks)} Relevant structural markers.\n"
+        f"Aggregated Entropy: {avg_entropy:.2f} ({'Potentially Packed/Encrypted' if avg_entropy > 6.5 else 'Standard Code Intensity'})\n"
+    )
+
+    # Notebook Section 1: APIs & Strings
+    nb_indicators = f"=== STRATEGIC INDICATORS ===\nCATEGORIZED WINAPIS:\n{api_summary_text}\n\nSTRATEGIC STRINGS:\n{str_summary_text}\n"
+    
+    # Notebook Section 2: Execution Chain & Call Graph
+    cg_ascii = get_graph_ascii(graph, entry_ea)
+    if cg_ascii:
+        cg_lines = cg_ascii.splitlines()
+        if len(cg_lines) > 500:
+            cg_ascii = "\n".join(cg_lines[:500]) + "\n  ... [TRUNCATED: Call Graph exceeds context limits]"
+    else:
+        cg_ascii = "  No call graph available."
+
+    nb_dispatch = f"=== EXECUTION DISPATCH & CALL GRAPH ===\nLAYER 1 DISPATCH:\n{chr(10).join(entry_children_blocks) if entry_children_blocks else '  No immediate operational calls identifiable.'}\n\nCALL GRAPH HIERARCHY:\n{cg_ascii}\n"
+    
+    # Notebook Section 3: Critical Payloads (NEVER TRUNCATED)
+    nb_malicious = f"=== CRITICAL MALICIOUS PAYLOADS ===\n{chr(10).join(malicious_blocks) if malicious_blocks else '  No explicitly malicious payload functions discovered.'}\n"
+    
+    # Notebook Section 4: Suspicious Infrastructure (Bounded)
+    sus_list = suspicious_blocks[:55]
+    if len(suspicious_blocks) > 55:
+         sus_list.append(f"  [... {len(suspicious_blocks)-55} MORE SUSPICIOUS INFRASTRUCTURE FUNCTIONS OMITTED FOR BREVITY ...]")
+    nb_suspicious = f"=== SUSPICIOUS INFRASTRUCTURE ===\n{chr(10).join(sus_list) if sus_list else '  No distinct suspicious capability blocks found.'}\n"
+    
+    # Notebook Section 5: Key Operations
+    nb_benign = f"=== STRUCTURAL OPERATIONS OF INTEREST ===\n{chr(10).join(benign_blocks[:25]) if benign_blocks else '  None.'}\n"
+
+    # Calculate MITRE TTPs for the notebook
+    # Re-use the data we already built for quality_nodes to identify TTPs
+    temp_fd_list = []
+    for q in quality_nodes:
+        n = q["node"]
+        temp_fd_list.append({
+            "name": n.name,
+            "capabilities": n.preliminary_analysis.get('capabilities', []) if hasattr(n, 'preliminary_analysis') and isinstance(n.preliminary_analysis, dict) else [],
+            "semantic_tags": n.semantic_tags if hasattr(n, 'semantic_tags') else []
+        })
+    
+    mitre_techs = _mitre_from_data(temp_fd_list)
+    mitre_summary = []
+    for tid, tname, funcs in mitre_techs:
+        mitre_summary.append(f"  [{tid}] {tname} (Associated Functions: {funcs})")
+    
+    nb_mitre = f"=== TTP MAPPING (MITRE ATT&CK) ===\n{chr(10).join(mitre_summary) if mitre_summary else '  No distinct TTP patterns identified.'}\n"
+
+    # 6. Extract Suspicious Imports & Modules (Real Binary Fingerprint)
+    import_digest = []
+    suspicious_libs = {"wininet", "ws2_32", "urlmon", "winhttp", "advapi32", "psapi", "imagehlp", "wtsapi32", "crypt32", "iphlpapi", "shell32", "userenv", "shlwapi", "netapi32", "dnsapi", "mpr", "winscard"}
+    
+    import_data = {}
+    def _collect_imports_sync():
+        qty = ida_nalt.get_import_module_qty()
+        for i in range(qty):
+            lib_name_raw = ida_nalt.get_import_module_name(i)
+            if not lib_name_raw: continue
+            lib_name_low = lib_name_raw.lower().split('.')[0]
+            if lib_name_low in suspicious_libs:
+                funcs_found = []
+                def _imp_cb(ea, name, ordinal):
+                    if name: funcs_found.append(name)
+                    return True
+                ida_nalt.enum_import_names(i, _imp_cb)
+                if funcs_found:
+                    import_data[lib_name_raw] = sorted(list(set(funcs_found)))
+
+    if idaapi:
+        idaapi.execute_sync(_collect_imports_sync, idaapi.MFF_READ)
+    
+    for lib, funcs in sorted(import_data.items()):
+        func_summary = ", ".join(funcs[:12]) + ("..." if len(funcs) > 12 else "")
+        import_digest.append(f"  [{lib}]: {func_summary}")
+    
+    nb_imports = f"=== SUSPICIOUS IMPORTS & LIBRARIES ===\n{chr(10).join(import_digest) if import_digest else '  No highly suspicious third-party libraries identified in import table.'}\n"
+
+    # ---------------------------------------------------------
+    # FINAL NOTEBOOK AGGREGATION
+    # ---------------------------------------------------------
+    
+    full_digest = f"{nb_system}\n{nb_indicators}\n{nb_imports}\n{nb_mitre}\n{nb_dispatch}\n{nb_malicious}\n{nb_suspicious}\n{nb_benign}"
 
     return full_digest, len(entry_children_blocks), str_digest
 

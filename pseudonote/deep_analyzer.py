@@ -2255,29 +2255,62 @@ def determine_risk_with_context(node, result, context, graph):
     confidence = result.get("confidence", 0)
 
     # ── 0. CRT / COMPILER STUB HARD BYPASS ────────────────────────────────────
-    crt_stubs = [
+    # We must be extremely careful here. Substring matches for 'memcpy' or 'CreateThread' 
+    # will catch 'malicious_memcpy_payload'. We use a mix of prefix and exact matches.
+    prefix_stubs = ['std::', 'runtime.', 'type..', 'go.itab.', 'go.info.', 'go.string.', 'go.func.',
+                    'fmt.', 'sync.', 'reflect.', 'strconv.', 'math.', 'internal.', 'syscall.',
+                    'core::', 'alloc::', 'std::sys::', 'std::rt::', 'std::panicking::', 
+                    'core::fmt::', 'core::panicking::', 'core::ptr::drop_in_place', 
+                    'rust_panic', 'rust_begin_unwind', 'rust_eh_personality', 'compiler_builtins::']
+    
+    exact_stubs = [
         '__chkstk', '_fpreset', 'mainCRTStartup', '_start', '__main', 'TlsGetValue',
         '__mingw', '_init_', '_fini_', 'bad_alloc', 'bad_cast', 'exception',
         '_acmdln', '_p__acmdln', 'get_osfhandle', '_isatty', '_setmode', '_cinit',
         '_set_invalid_parameter_handler', '_invalid_parameter', '_pei386_runtime_relocator',
         '_encode_pointer', '_decode_pointer', 'IsProcessorFeaturePresent',
-        # Extended stubs
         'atexit', '__security_init_cookie', '__security_check_cookie',
         '__CxxFrameHandler', '_purecall', '__acrt_', 'wcrtomb', 'mbrtowc',
         'memset', 'memcpy', 'memmove', 'memcmp', 'strlen', 'strcpy', 'strcmp',
+        '__matherr', '_fpclass', '_statusfp', '_clearfp', '_controlfp', '_clear87', '_control87', '_status87',
+        'operator new', 'operator delete', '`new[]', '`delete[]', '`vector constructor iterator', '`vector destructor iterator',
+        'dynamic initializer for', 'dynamic atexit destructor for', '`vbase destructor', '`eh vector constructor',
+        '__RTC_CheckEsp', '__RTC_InitBase', '__RTC_Shutdown', 'GetActiveWindow', 'GetLastActivePopup',
+        '__tmainCRTStartup', 'wmainCRTStartup', '__scrt_common_main', '__scrt_common_main_seh',
+        '__scrt_initialize_crt', '__scrt_initialize_onexit_tables', '__scrt_acquire_startup_lock',
+        '__scrt_release_startup_lock', '__scrt_get_dyn_tls_init_callback', '__scrt_fastfail',
+        '__scrt_uninitialize_crt', '__security_cookie', '__GSHandlerCheck',
+        '__GSHandlerCheck_SEH', '__report_gsfailure', '__CxxThrowException', '__CxxFrameHandler3',
+        '__CxxFrameHandler4', '__std_terminate', '__std_exception_copy', '__std_exception_destroy',
+        '__RTtypeid', '__RTDynamicCast', '__RTCastToVoid', 'type_info', 'TlsAlloc', 'TlsFree',
+        'TlsSetValue', 'TlsGetValue', 'InitializeCriticalSection', 'DeleteCriticalSection',
+        'EnterCriticalSection', 'LeaveCriticalSection', 'CreateThread', 'CreateThreadpoolWork',
+        'CloseHandle', 'WaitForSingleObject', 'HeapAlloc', 'HeapFree', 'HeapReAlloc', 'LocalAlloc',
+        'LocalFree', 'GlobalAlloc', 'GlobalFree', 'TopLevelExceptionFilter'
     ]
-    if any(stub in node.name for stub in crt_stubs):
+    
+    name_low = node.name.lower()
+    is_stub = any(name_low.startswith(p.lower()) for p in prefix_stubs) or any(name_low == e.lower() for e in exact_stubs)
+    
+    if is_stub:
         result["risk_tag"] = "benign"
         result["suspicious"] = []
         return result
 
-    # ── 1. FUNCTION SIZE FLOOR ─────────────────────────────────────────────────
-    # Tiny functions cannot carry enough evidence to be classified malicious.
+    # ── 1. FUNCTION SIZE & LEAF STUB SUPPRESSION ──────────────────────────────
+    # A tiny function (< 6 lines) with NO callees is almost certainly a return stub.
+    # It should NEVER be upgraded based on context alone.
     func_lines = getattr(node, 'line_count', 0) or 0
+    callee_count = len(node.callees) if hasattr(node, "callees") else 0
+    
+    if func_lines < 6 and callee_count == 0 and not has_high_severity_api:
+        result["risk_tag"] = "benign"
+        result["suspicious"] = ["Function identified as return stub (tiny leaf with no side effects)."]
+        return result
+
     if func_lines < 8 and risk != "malicious":
         # Tiny functions: cap at suspicious at most
-        if risk == "malicious":
-            risk = "suspicious"
+        risk = "suspicious"
 
     # ── 2. MARKER / PATTERN COMPUTATION ───────────────────────────────────────
     malicious_markers = get_malicious_context_semantic(node, graph)
@@ -2295,8 +2328,8 @@ def determine_risk_with_context(node, result, context, graph):
     ) if api_hits else False
 
     has_local_indicator = (
-        len(suspicious) >= 2 or                             # 2+ suspicious items (not just 1)
-        (node.entropy and node.entropy > 7.0) or            # raised from 6.5
+        len(suspicious) >= 3 or                             # 3+ suspicious items to mitigate AI hallucinations
+        (node.entropy and node.entropy > 7.0) or            # Encrypted/Packed logic
         has_high_severity_api                               # only HIGH-severity API
     )
 
@@ -2316,7 +2349,8 @@ def determine_risk_with_context(node, result, context, graph):
             upgrade_reasons.append(f"Part of attack pattern: {pattern}")
 
     # Condition 3: Supports a malicious direct caller (1-hop only, with local indicator)
-    if has_local_indicator:
+    # Exclude deep leaf nodes from this inheritance; they must stand on their own merit.
+    if has_local_indicator and hasattr(node, "callees") and len(node.callees) > 0:
         for caller_ea in node.callers:
             if caller_ea not in graph:
                 continue
@@ -2339,6 +2373,12 @@ def determine_risk_with_context(node, result, context, graph):
     # ── 5. MINIMUM CONDITIONS GATE ────────────────────────────────────────────
     # Require at least 2 independent conditions to upgrade to malicious.
     upgrade_to_malicious = conditions_fired >= 2
+    
+    # HARD OVERRIDE: If the function utilizes inherently highly dangerous APIs 
+    # (e.g., Process Injection, C2 Comms, Executing Shells), bypass the condition counter.
+    if has_high_severity_api:
+        upgrade_to_malicious = True
+        upgrade_reasons.append("Function executes HIGH severity malware-associated APIs natively.")
 
     # ── 6. CONFIDENCE GATE ────────────────────────────────────────────────────
     # Even if conditions fire, enforce a minimum confidence from Stage 4/5 AI.
@@ -2363,9 +2403,13 @@ def determine_risk_with_context(node, result, context, graph):
         ]
         is_utility_name = any(term in node.name.lower() for term in benign_terms)
 
+        malicious_action_words = ['self', 'startup', 'inject', 'exec', 'shell', 'payload', 'c2', 'persist', 
+                                  'run', 'drop', 'hook', 'keylog', 'ransom', 'crypt', 'backdoor', 'mutex', 'stealth']
+        has_malicious_intent = any(m in node.name.lower() for m in malicious_action_words)
+
         if upgrade_to_malicious:
-            if is_utility_name and len(malicious_markers) < 3:
-                # Utility-named function: cap at suspicious unless overwhelming evidence
+            if is_utility_name and not has_malicious_intent and len(malicious_markers) < 3:
+                # Utility-named function: cap at suspicious unless overwhelming evidence or malicious intent overrides
                 risk = "suspicious"
                 suspicious.append("Utility-named function capped at suspicious despite malicious context.")
             else:
@@ -2417,8 +2461,38 @@ def determine_risk_with_context(node, result, context, graph):
         downgrade_to_benign = True
         downgrade_reasons.append(f"Confidence {confidence}% below threshold with no context markers")
 
-    # Apply downgrade
-    if downgrade_to_benign and risk == "suspicious":
+    # Condition 4: Targetted Utility Function Suppression List (Aggressive False Positive filtering)
+    # This filters out library-heavy artifacts that superficially look like custom logic.
+    utility_patterns = [
+        'cleanup', 'initialize', 'validate', 'compare', 'erase', 'insert',
+        'rotate', 'rebalance', 'iterator', 'buffer', 'tree_node', 'lookup', 
+        'map_set', 'linked_list', 'list_node', 'relink', 'pointer', 'destructor', 
+        'constructor', 'deallocate', 'release', 'resize', 'substring', 
+        'exception', 'throw', 'error', 'vtable', 'bad_call', 'calc', 'offset',
+        'ssl_socket', 'tcp_socket', 'plugin_object', 'return_zero', 'return_val',
+        'stub', 'map_erase', 'map_delete', 'vector_erase'
+    ]
+    
+    # If the function heavily matches our utility list AND doesn't have an explicit, hardcoded malicious API call 
+    # (like networking/injection capabilities that trigger high severity), squash it to benign immediately.
+    is_suppression_utility = any(p in node.name.lower() for p in utility_patterns)
+    
+    # PROTECTIVE BYPASS: Don't squash if the function also has an explicitly malicious action word in its name
+    malicious_action_words = ['self', 'startup', 'inject', 'exec', 'shell', 'payload', 'c2', 'persist', 
+                              'run', 'drop', 'hook', 'keylog', 'ransom', 'crypt', 'backdoor', 'mutex', 'stealth',
+                              'network', 'request', 'command', 'callback', 'worker']
+    has_malicious_intent = any(m in node.name.lower() for m in malicious_action_words)
+
+    # NEW: PROTECTIVE BYPASS 2: Respect high-confidence AI classification
+    # If the AI is very sure (>80%) and explicitly tagged it Malicious/Suspicious, don't squash it.
+    is_confident_ai = (confidence >= 80 and (result.get("risk_tag") in ("malicious", "suspicious")))
+
+    if is_suppression_utility and not has_high_severity_api and not has_malicious_intent and not is_confident_ai:
+        downgrade_to_benign = True
+        downgrade_reasons.append("Matches utility function suppression list (no malicious API used)")
+
+    # Apply downgrade (can force downgrade malicious routines)
+    if downgrade_to_benign and risk in ("suspicious", "malicious"):
         suspicious.extend(downgrade_reasons)
         risk = "benign"
 
@@ -2582,6 +2656,7 @@ IMPORTANT RULES:
 3. If API Behavior Tags are listed, reference the category name in your bullets (e.g., 'Injection_Memory-class API: VirtualAllocEx called with PAGE_EXECUTE_READWRITE')
 4. Describe WHAT the code does, not WHY or what it might be for unless malicious intent is technically undeniable (e.g. process hollowing).
 5. If the Preliminary Heuristic Risk Level is MALICIOUS, do not downgrade it unless you can definitively prove the context is benign.
+6. If the function contains explicit Persistence (e.g. Registry Run Keys + File Copying), C2 commands (Reverse Shells), or Injection loops, do NOT hesitate to assign the 'malicious' risk tag. Do NOT water it down to 'suspicious'.
 
 Reply with ONLY valid JSON. No markdown backticks."""
     
@@ -2750,6 +2825,7 @@ Respond with JSON:
 REMEMBER: Base your risk assessment on the FULL PICTURE, not just isolated operations.
 If the call chain shows LSASS targeting + privilege escalation + memory dumping, 
 even a simple buffer allocation is part of a credential theft attack.
+If the function contains explicit Persistence (e.g. Registry Run Keys + File Copying), C2 commands (Reverse Shells), or Injection loops, do NOT hesitate to assign the 'malicious' risk tag. Do NOT water it down to 'suspicious'.
 
 Reply with ONLY valid JSON. No markdown backticks."""
     
@@ -2856,8 +2932,11 @@ def analyze_single_function(ea, node, graph, output_dir, ai_cfg, analyzed_eas, l
             except: pass
             
         # Fallback to the aggressive bracket counting
-        t_agg = text
-        if t_agg.count('"') % 2 != 0: t_agg += '"'
+        t_agg = t  # Use the cleaned 't' (no trailing backslashes) instead of raw 'text'
+        
+        # Count actual structural quotes (ignore escaped quotes like \")
+        quote_count = t_agg.count('"') - t_agg.count('\\"')
+        if quote_count % 2 != 0: t_agg += '"'
         opens = t_agg.count('{') - t_agg.count('}')
         if opens > 0: t_agg += '}' * opens
         obrak = t_agg.count('[') - t_agg.count(']')
@@ -3524,7 +3603,13 @@ class AnalysisWorker(QThread):
                             ea = node.ea; analyzed_eas.add(ea)
                             node.status = "preliminary"; node.confidence = result.get("confidence", 0)
                             node.stage4_status = "OK"
-                            _analysis_cache[ea] = result.get("one_liner", "")
+                            
+                            # Cache properties to memory immediately for report_generator.py Analyst Notebook
+                            node.one_liner = result.get("one_liner", "")
+                            node.summary = result.get("summary", "")
+                            node.risk_tag = result.get("risk_tag", "benign")
+                            node.suspicious = result.get("suspicious", [])
+                            _analysis_cache[ea] = node.one_liner
 
                             # Step 3e: Apply Renames first
                             if self.do_analysis_rename:
@@ -3686,7 +3771,12 @@ class AnalysisWorker(QThread):
                             except: pass
                             # ─────────────────────────────────────────────────────────────────
 
-                            _analysis_cache[ea] = result.get("one_liner", "")
+                            # Cache properties to memory immediately for report_generator.py Analyst Notebook
+                            node.one_liner = result.get("one_liner", node.one_liner if hasattr(node, 'one_liner') else "")
+                            node.summary = result.get("summary", node.summary if hasattr(node, 'summary') else "")
+                            node.risk_tag = result.get("risk_tag", node.risk_tag if hasattr(node, 'risk_tag') else "benign")
+                            node.suspicious = result.get("suspicious", node.suspicious if hasattr(node, 'suspicious') else [])
+                            _analysis_cache[ea] = node.one_liner
 
                             
                             # Re-apply rename if needed (context might suggest better name)
@@ -3866,7 +3956,16 @@ class AnalysisWorker(QThread):
                        % (n_analyzed, n_total, n_error), "ok")
 
                 entry_name = self.graph[self.entry_ea].name if self.entry_ea in self.graph else hex(self.entry_ea)
-                digest, entry_children_count, all_strings = build_analysis_digest(self.graph, self.entry_ea, log_fn=log_fn)
+                digest, entry_children_count, all_strings = build_analysis_digest(self.graph, self.entry_ea, log_fn=log_fn, output_dir=output_dir)
+                
+                # Dump the generated Analyst Notebook to disk for transparency
+                notebook_path = os.path.join(output_dir, "analyst_notebook.txt")
+                try:
+                    with open(notebook_path, "w", encoding="utf-8") as f:
+                        f.write(digest)
+                except Exception as e:
+                    log_fn(f"Failed to save Analyst Notebook to disk: {e}", "warn")
+                
                 sections = {}
 
                 self.llm_state_signal.emit("requesting")
