@@ -2328,7 +2328,7 @@ def determine_risk_with_context(node, result, context, graph):
     ) if api_hits else False
 
     has_local_indicator = (
-        len(suspicious) >= 5 or                             # 5+ suspicious items (increased from 3 to reduce noise)
+        len(suspicious) >= 4 or                             # 5+ suspicious items (increased from 3 to reduce noise)
         (node.entropy and node.entropy > 7.0) or            # Encrypted/Packed logic
         has_high_severity_api                               # only HIGH-severity API
     )
@@ -2468,13 +2468,13 @@ def determine_risk_with_context(node, result, context, graph):
     # Condition 4: Targetted Utility Function Suppression List (Aggressive False Positive filtering)
     # This filters out library-heavy artifacts that superficially look like custom logic.
     utility_patterns = [
-        'initialize', 'validate', 'compare', 'erase', 'insert',
+        'initialize', 'cleanup', 'validate', 'compare', 'erase', 'insert',
         'rotate', 'rebalance', 'iterator', 'buffer', 'tree_node', 'lookup', 
         'map_set', 'linked_list', 'list_node', 'relink', 'pointer', 'destructor', 
         'constructor', 'release', 'resize', 'substring', 
         'exception', 'throw', 'error', 'vtable', 'bad_call', 'calc', 'offset',
         'ssl_socket', 'tcp_socket', 'plugin_object', 'return_zero', 'return_val',
-        'stub', 'map_erase', 'map_delete', 'vector_erase'
+        'stub', 'map_erase', 'map_delete','deallocate', 'vector_erase'
     ]
     
     # If the function heavily matches our utility list AND doesn't have an explicit, hardcoded malicious API call 
