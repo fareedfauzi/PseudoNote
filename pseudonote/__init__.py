@@ -20,7 +20,7 @@ from pseudonote.idb_storage import (
 )
 from pseudonote.handlers import (
     RenameVariablesHandler, RenameFunctionHandler,
-    RenameMalwareFunctionHandler, SuggestFunctionSignatureHandler,
+    RenameMalwareFunctionHandler, SuggestFunctionPrototypeHandler,
     CommentHandler, DeleteCommentsHandler,
     StructAnalysisHandler, StructAnalysisDialog,
     BulkRenameHandler,

@@ -44,6 +44,12 @@ plugin_instance = None
 
 def get_overlay():
     global _global_overlay
+    if _global_overlay:
+        try:
+            _ = _global_overlay.windowTitle()
+        except RuntimeError:
+            _global_overlay = None
+            
     if not _global_overlay:
         _global_overlay = ProgressOverlay()
     return _global_overlay

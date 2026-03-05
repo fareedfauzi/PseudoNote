@@ -240,7 +240,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
 
         # Structure Analysis Action
         struct_action_desc = idaapi.action_desc_t(
-            "pseudonote:analyze_struct", "Analyze Structure",
+            "pseudonote:analyze_struct", "Struct editor",
             StructAnalysisHandler(), "",
             "Analyze variable usage to infer structure", 101
         )

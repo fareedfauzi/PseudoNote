@@ -119,6 +119,87 @@ class RenameVariablesHandler(idaapi.action_handler_t):
 
 
 # ---------------------------------------------------------------------------
+# Globals / Helpers for caller context
+# ---------------------------------------------------------------------------
+class CallerSelectionDialog(QtWidgets.QDialog):
+    def __init__(self, callers_info, parent=None):
+        super(CallerSelectionDialog, self).__init__(parent)
+        self.setWindowTitle("Select Callers for Context")
+        self.resize(400, 300)
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        
+        label = QtWidgets.QLabel("Select which calling functions to include as AI context:")
+        layout.addWidget(label)
+        
+        scroll = QtWidgets.QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll_content = QtWidgets.QWidget()
+        self.checkboxes = []
+        
+        vbox = QtWidgets.QVBoxLayout(scroll_content)
+        for ea, name in callers_info:
+            cb = QtWidgets.QCheckBox(f"0x{ea:X} - {name}")
+            self.checkboxes.append((cb, ea))
+            vbox.addWidget(cb)
+            
+        for i, (cb, ea) in enumerate(self.checkboxes):
+            if i < 3:
+                cb.setChecked(True)
+        
+        vbox.addStretch(1)
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll)
+        
+        btn_box = QtWidgets.QDialogButtonBox()
+        btn_box.addButton(QtWidgets.QDialogButtonBox.Ok)
+        btn_box.addButton(QtWidgets.QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def get_selected(self):
+        return [ea for cb, ea in self.checkboxes if cb.isChecked()]
+
+
+def _get_caller_context_texts(target_func_ea):
+    """Prompts user to select caller functions to decompile and returns text list. Returns None if cancelled."""
+    import idautils
+    callers = set()
+    for ref in idautils.CodeRefsTo(target_func_ea, 0):
+        caller_func = idaapi.get_func(ref)
+        if caller_func and caller_func.start_ea != target_func_ea:
+            callers.add(caller_func.start_ea)
+            
+    callers_info = []
+    for c_ea in callers:
+        name = idc.get_func_name(c_ea) or f"sub_{c_ea:X}"
+        callers_info.append((c_ea, name))
+        
+    selected_callers = []
+    if callers_info:
+        dialog = CallerSelectionDialog(callers_info)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            selected_callers = dialog.get_selected()
+        else:
+            return None # Cancelled by user
+
+    caller_texts = []
+    if selected_callers:
+        _view_mod.show_ai_progress("Decompiling Callers...")
+        for c_ea in selected_callers:
+            try:
+                cfunc_caller = ida_hexrays.decompile(c_ea)
+                if cfunc_caller:
+                    name = idc.get_func_name(c_ea) or f"sub_{c_ea:X}"
+                    caller_texts.append(f"Caller `{name}`:\n{str(cfunc_caller)}")
+            except:
+                pass
+        _view_mod.hide_ai_progress()
+
+    return caller_texts
+
+# ---------------------------------------------------------------------------
 # Rename Function (Code) handler
 # ---------------------------------------------------------------------------
 class RenameFunctionHandler(idaapi.action_handler_t):
@@ -130,9 +211,18 @@ class RenameFunctionHandler(idaapi.action_handler_t):
         AI_CLIENT = _get_ai_client()
         if not AI_CLIENT: return 0
         ea = idaapi.get_screen_ea()
-        cfunc = ida_hexrays.decompile(ea)
+        
+        func = idaapi.get_func(ea)
+        if not func: return 0
+        try: cfunc = ida_hexrays.decompile(func.start_ea)
+        except: return 0
+        
         vdui = ida_hexrays.get_widget_vdui(ctx.widget)
         if not cfunc or not vdui: return 0
+        
+        caller_texts = _get_caller_context_texts(func.start_ea)
+        if caller_texts is None:
+            return 0  # Cancelled dialog
         
         prefix = CONFIG.function_prefix if CONFIG.use_rename_prefix else ""
         _view_mod.show_ai_progress("Naming Function (Code)")
@@ -140,7 +230,16 @@ class RenameFunctionHandler(idaapi.action_handler_t):
         prompt = (
             "Analyze the following C function code:\n"
             f"{str(cfunc)}\n"
-            "Suggest a concise new name for this function. "
+        )
+        if caller_texts:
+            prompt += (
+                "\nFor additional context, here is the decompiled code of functions that call this target function:\n"
+                "---\n"
+                + "\n\n".join(caller_texts) + "\n"
+                "---\n"
+            )
+        prompt += (
+            "\nSuggest a concise new name for this function based on its logic and caller context (if provided). "
             f"Only reply with the new function name, prefixed with '{prefix}' if appropriate."
         )
         def callback(response, **kwargs):
@@ -195,9 +294,18 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
         AI_CLIENT = _get_ai_client()
         if not AI_CLIENT: return 0
         ea = idaapi.get_screen_ea()
-        cfunc = ida_hexrays.decompile(ea)
+        
+        func = idaapi.get_func(ea)
+        if not func: return 0
+        try: cfunc = ida_hexrays.decompile(func.start_ea)
+        except: return 0
+        
         vdui = ida_hexrays.get_widget_vdui(ctx.widget)
         if not cfunc or not vdui: return 0
+        
+        caller_texts = _get_caller_context_texts(func.start_ea)
+        if caller_texts is None:
+            return 0  # Cancelled dialog
         
         prefix = CONFIG.function_prefix if CONFIG.use_rename_prefix else ""
         _view_mod.show_ai_progress("Naming Function (Malware)")
@@ -205,7 +313,16 @@ class RenameMalwareFunctionHandler(idaapi.action_handler_t):
         prompt = (
             "Analyze the following C function code in the context of malware reverse engineering:\n"
             f"{str(cfunc)}\n"
-            "Suggest a concise new name for this function. "
+        )
+        if caller_texts:
+            prompt += (
+                "\nFor additional context, here is the decompiled code of functions that call this target function:\n"
+                "---\n"
+                + "\n\n".join(caller_texts) + "\n"
+                "---\n"
+            )
+        prompt += (
+            "\nSuggest a concise new name for this function based on its logic and caller context (if provided). "
             f"Only reply with the new function name, prefixed with '{prefix}' if appropriate."
         )
         def callback(response, **kwargs):
@@ -263,33 +380,114 @@ class SuggestFunctionPrototypeHandler(idaapi.action_handler_t):
         AI_CLIENT = _get_ai_client()
         if not AI_CLIENT: return 0
         ea = idaapi.get_screen_ea()
-        try: cfunc = ida_hexrays.decompile(ea)
+        
+        func = idaapi.get_func(ea)
+        if not func: return 0
+        
+        try: cfunc = ida_hexrays.decompile(func.start_ea)
         except: return 0
              
         vdui = ida_hexrays.get_widget_vdui(ctx.widget)
         if not cfunc or not vdui: return 0
-            
+        
+        caller_texts = _get_caller_context_texts(func.start_ea)
+        if caller_texts is None:
+            return 0  # Cancelled dialog
+
         _view_mod.show_ai_progress("Suggesting Prototype")
         prompt = (
-            "Analyze the following C function code:\n"
-            f"{str(cfunc)}\n\n"
-            "Suggest a valid C function prototype for this function.\n"
-            "Infer the return type, calling convention, function name, and argument types/names based on usage.\n"
-            "Return ONLY the C prototype string (e.g. `int __fastcall MyFunc(char *a1, int a2)`).\n"
-            "Do not include semicolon or body."
+            "You are an expert reverse engineer analyzing Hex-Rays pseudocode to determine the exact C function prototype.\n\n"
+            "Your task is to infer the most accurate prototype, specifically determining the:\n"
+            "1. Return type\n"
+            "2. Calling convention\n"
+            "3. Function name\n"
+            "4. Parameter types\n"
+            "5. Parameter names\n\n"
+            "Analyze the following decompiled function:\n"
+            "---\n"
+            f"{str(cfunc)}\n"
+            "---\n\n"
+        )
+        
+        if caller_texts:
+            prompt += (
+                "For additional context, here is the decompiled code of functions that call the target function:\n"
+                "---\n"
+                + "\n\n".join(caller_texts) + "\n"
+                "---\n\n"
+            )
+            
+        prompt += (
+            "STRICT INSTRUCTIONS:\n"
+            "- Base your inferences ONLY on observable behavior in the target pseudocode AND how it is used in the caller contexts (e.g., arguments passed, return value usage).\n"
+            "- Do NOT hallucinate known APIs or rename the function to a Windows API unless the match is extremely clear.\n"
+            "- If a type cannot be determined confidently, you must fall back to safe generic types such as: int, void *, or char *.\n"
+            "- If structure usage is detected (e.g., ptr->field or ptr + offset), prefer pointer types.\n"
+            "- Generate descriptive parameter names based on their usage context, avoiding generic names like a1 or v5.\n"
+            "- IMPORTANT: If the original function is `__usercall`, you MUST preserve `__usercall` and the `@<register>` annotations exactly! Removing them breaks Hex-Rays variable mapping.\n"
+            "- If the calling convention is unclear and not `__usercall`, default to __fastcall.\n"
+            "- The output MUST be a single valid C function prototype.\n"
+            "- The output MUST NOT include a trailing semicolon.\n"
+            "- The output MUST NOT include markdown formatting, code blocks, explanations, or any extra text.\n\n"
+            "Examples of exact expected output format:\n"
+            "int __fastcall fn_process_packet(char *buffer, int size)\n"
+            "void * __stdcall fn_allocate_buffer(size_t size)\n"
+            "void __usercall fn_collect_system_info(int info_buffer@<edi>, int status@<eax>)\n\n"
+            "Provide the single C function prototype string now."
         )
         
         def callback(response, **kwargs):
             try:
+                import re
                 if not response: return
                 clean_sig = response.strip().split('{')[0].strip().rstrip(';')
                 func = idaapi.get_func(ea)
                 if not func: return
                 
+                def normalize_sig(s):
+                    # Remove comments (single line and multi-line)
+                    s = re.sub(r'//.*', '', s)
+                    s = re.sub(r'/\*.*?\*/', '', s, flags=re.DOTALL)
+                    # Normalize whitespace
+                    return ' '.join(s.split())
+
+                existing_sig = normalize_sig(str(cfunc).split('{')[0])
+                new_sig = normalize_sig(clean_sig)
+
+                # Extract function names
+                match_new = re.search(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', new_sig)
+                new_func_name = match_new.group(1) if match_new else None
+
+                old_name = idc.get_func_name(func.start_ea)
+                match_old = re.search(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', existing_sig)
+                old_func_name = match_old.group(1) if match_old else old_name
+
+                # Compare structurally (ignoring function names)
+                new_sig_anon = new_sig
+                existing_sig_anon = existing_sig
+                if new_func_name:
+                    new_sig_anon = new_sig.replace(new_func_name, "F_NAME", 1)
+                if old_func_name:
+                    existing_sig_anon = existing_sig.replace(old_func_name, "F_NAME", 1)
+
+                if new_sig_anon == existing_sig_anon and new_func_name == old_name:
+                    ida_kernwin.info("The AI suggested the exact same prototype as the current one.\nNothing to change.")
+                    return
+                
                 msg = f"AI Suggested Signature:\n\n{clean_sig}\n\nApply this signature?"
                 if ida_kernwin.ask_yn(1, msg) == 1:
+                    name_changed = False
+                    if new_func_name and new_func_name != old_name and not new_func_name.startswith("sub_"):
+                        # Apply name first so SetType works correctly with the matching name
+                        safe_name = clean_name(new_func_name, ea=func.start_ea)
+                        if idc.set_name(func.start_ea, safe_name, idc.SN_AUTO):
+                            name_changed = True
+
+                    # Now apply the signature
                     if idc.SetType(func.start_ea, clean_sig + ";"):
                         if vdui: vdui.refresh_view(True)
+                    else:
+                        ida_kernwin.warning("IDA failed to apply the exact prototype types.\n(The function may have been renamed, but types were rejected due to unknown structs/syntax.)")
             finally:
                 _view_mod.hide_ai_progress()
 
@@ -791,30 +989,55 @@ class DeleteAsmCommentsHandler(idaapi.action_handler_t):
 # Structure Analysis Handler & Dialog
 # ---------------------------------------------------------------------------
 class StructAnalysisDialog(QtWidgets.QDialog):
-    def __init__(self, c_struct, on_apply_callback=None, parent=None):
+    def __init__(self, target_name, target_code, vdui, lvar_name, on_apply_callback=None, parent=None):
         super(StructAnalysisDialog, self).__init__(parent)
-        self.setWindowTitle("Structure Analysis (AI)")
-        self.resize(600, 500)
+        self.setWindowTitle(f"Struct Creator / Editor: {target_name}")
+        self.resize(700, 600)
         
+        self.target_name = target_name
+        self.target_code = target_code
+        self.vdui = vdui
+        self.lvar_name = lvar_name
         self.on_apply_callback = on_apply_callback
         
         layout = QtWidgets.QVBoxLayout()
         
         # Editor
         self.editor = QtWidgets.QTextEdit()
-        self.editor.setPlainText(c_struct)
+        self.editor.setPlainText(f"struct Struct_{target_name} {{\n    _DWORD dummy;\n}};\n")
         self.editor.setFont(QtGui.QFont("Consolas", 10))
         layout.addWidget(self.editor)
         
         # Buttons
         btn_layout = QtWidgets.QHBoxLayout()
         
+        ai_btn = QtWidgets.QPushButton("AI Suggestion")
+        ai_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007ACC;
+                color: #FFFFFF;
+                font-weight: bold;
+                padding: 6px;
+                border: 1px solid #005A9E;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #005A9E;
+            }
+            QPushButton:pressed {
+                background-color: #004275;
+            }
+        """)
+        ai_btn.clicked.connect(self.request_ai_suggestion)
+        btn_layout.addWidget(ai_btn)
+        
         copy_btn = QtWidgets.QPushButton("Copy to Clipboard")
         copy_btn.clicked.connect(self.copy_to_clipboard)
         btn_layout.addWidget(copy_btn)
         
-        import_btn = QtWidgets.QPushButton("Import to IDA")
+        import_btn = QtWidgets.QPushButton("Apply to IDA")
         import_btn.clicked.connect(self.import_to_ida)
+        import_btn.setStyleSheet("font-weight: bold; padding: 5px;")
         btn_layout.addWidget(import_btn)
         
         close_btn = QtWidgets.QPushButton("Close")
@@ -823,7 +1046,110 @@ class StructAnalysisDialog(QtWidgets.QDialog):
         
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+
+    def request_ai_suggestion(self):
+        AI_CLIENT = _get_ai_client()
+        if not AI_CLIENT:
+            QtWidgets.QMessageBox.warning(self, "No AI Client", "Please configure the AI provider in settings first.")
+            return
+
+        # 1. Ask for caller context (displays dialog; returns None if cancelled)
+        caller_texts = _get_caller_context_texts(self.vdui.cfunc.entry_ea)
+        if caller_texts is None:
+            return  # Cancelled by user
+
+        # 2. Ask for structure size
+        size_input, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Structure Size (Optional)",
+            "Enter known structure size in bytes (e.g. 0x354)\nLeave empty to let AI infer the size automatically:"
+        )
+        if not ok:
+            return  # Cancelled by user
+
+        size_input = size_input.strip()
+
+        # 3. Start Request
+        _view_mod.show_ai_progress(f"Analyzing Struct: {self.target_name}")
         
+        size_instruction = "- Look carefully at `memset`, `malloc`, or function signatures to determine the EXACT total structure size in bytes, and add trailing padding to match it exactly.\n"
+        if size_input and size_input != '?':
+            size_instruction = f"- VERY IMPORTANT: The user has specified the EXPLICIT total size of this structure is {size_input} bytes. You MUST add trailing padding if necessary so its total size equals exactly {size_input} bytes.\n"
+            
+        prompt = (
+            f"Analyze the C code below. Focus on the usage of variable `{self.target_name}`.\n"
+            f"Infer the most likely C structure definition that `{self.target_name}` represents (or points to).\n"
+            "Analyze all dereferences (e.g. `v5 + 16`, `v5->field_10`) to find fields.\n"
+            "Return ONLY the C struct definition valid for an IDA header input.\n"
+            f"Start the struct name with `Struct_{self.target_name}` or a descriptive name.\n\n"
+            "CRITICAL RULES FOR STRUCT LAYOUT:\n"
+            "- DO NOT hallucinate fields or arrays that are not explicitly accessed in the provided code.\n"
+            "- Pad gaps strictly using `_BYTE padding_X[Y]` arrays to ensure subsequent offsets are perfectly aligned to the EXACT offsets seen in the code.\n"
+            "- Pay very close attention to whether the offsets are in DECIMAL (e.g., `ptr + 306`) or HEXADECIMAL (e.g., `ptr + 0x132`). You must convert everything to a consistent size correctly! Do not confuse `0x132` for `132`.\n"
+            "- The math MUST be perfect. Verify that `previous_offset + sizeof(previous_field) == current_offset`. If not, insert `_BYTE padding[N]` where `N = current_offset - (previous_offset + sizeof(previous_field))`.\n"
+            f"{size_instruction}"
+            "- Use ONLY standard explicit IDA types: `_DWORD` (4 bytes), `_WORD` (2 bytes), `_BYTE` (1 byte), `_QWORD` (8 bytes), `void *` (pointers). DO NOT USE types like `DWORD`, `BYTE`, `FILETIME`, `OSVERSIONINFO`, `wchar_t`, or `__int64` because IDA will throw a Syntax Error if they aren't pre-defined!\n"
+            "- Include comments on EVERY line indicating both the offset and size: `// offset <hex>, size <decimal>`.\n"
+            "- All array sizes and padding sizes MUST be pre-calculated integer literals (e.g. `_BYTE padding_1[42];`). DO NOT under any circumstances output arithmetic expressions like `[0x354 - 0x82C]` or negative sizes.\n"
+            "- CRITICAL ANTI-LOOP RULE: To prevent endless generation, any and all trailing padding MUST be combined into ONE single array. NEVER output multiple consecutive padding fields. Once you have covered up to the highest offset accessed in the code, add exactly ONE trailing padding array to meet the structural size, ensure it has a semicolon `;`, and then on a NEW LINE output `};` to close the struct.\n"
+            "- DO NOT use generic names like `field_0`, `field_112`, `dword_8C`. Every single member MUST be given a highly descriptive, semantic name based on the API functions it is passed to, the strings mapped to it, or its behavior in the code. If you cannot guess the specific name, guess its general purpose (e.g. `unknown_flag`, `config_data`, `linked_list_node`).\n"
+            "- The Struct itself must also have a highly meaningful name representing its entire purpose, rather than just `Struct_buffer`.\n"
+            "- FINAL OUTPUT ONLY: Do NOT output your thought process, do NOT output 'Let me recalculate', do NOT output multiple drafts or versions. Provide EXACTLY ONE structurally perfect C struct inside the markdown block and nothing else.\n\n"
+            "```c\n"
+            f"{self.target_code}\n"
+            "```\n"
+        )
+        
+        if caller_texts:
+            prompt += (
+                "\nFor additional context, here is the decompiled code of functions that call this target function.\n"
+                "If the variable is passed to or returned from these callers, analyze its structure in their context as well:\n"
+                "---\n"
+                + "\n\n".join(caller_texts) + "\n"
+                "---\n"
+            )
+        
+        def wrapped_cb(response, **kwargs):
+            _view_mod.hide_ai_progress()
+            try: 
+                self.handle_ai_response(response)
+            except Exception as e:
+                print(f"[PseudoNote] Struct Analysis Error: {e}")
+
+        total_chars = [0]
+        streamed_buffer = [""]
+        def chunk_cb(t):
+            total_chars[0] += len(t)
+            streamed_buffer[0] += t
+            _view_mod.update_ai_progress_details(total_chars[0])
+            # Stream raw text to editor safely on the Main UI Thread
+            from pseudonote.qt_compat import QtCore
+            QtCore.QTimer.singleShot(0, lambda: self.editor.setPlainText(streamed_buffer[0]))
+
+        self.editor.setReadOnly(True)
+        AI_CLIENT.query_model_async(prompt, wrapped_cb, on_chunk=chunk_cb, on_status=_view_mod.update_ai_progress_details, additional_options={"max_completion_tokens": 8192})
+
+    def handle_ai_response(self, response):
+        self.editor.setReadOnly(False)
+        if not response: 
+            QtWidgets.QMessageBox.warning(self, "AI Error", "No response from AI or an error occurred.")
+            return
+        
+        c_struct = response.strip()
+        if "```" in c_struct:
+            parts = c_struct.split("```")
+            for i in range(1, len(parts), 2):
+                p = parts[i].strip()
+                if p:
+                    lines = p.split('\n')
+                    if lines and lines[0].strip().lower() in ["c", "cpp"]:
+                        c_struct = "\n".join(lines[1:]).strip()
+                    else:
+                        c_struct = p
+                    break
+        
+        self.editor.setPlainText(c_struct)
+
     def copy_to_clipboard(self):
         cb = QtWidgets.QApplication.clipboard()
         cb.setText(self.editor.toPlainText())
@@ -848,8 +1174,10 @@ class StructAnalysisDialog(QtWidgets.QDialog):
                         QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
                     )
                     if reply == QtWidgets.QMessageBox.Yes:
-                        self.on_apply_callback(struct_name)
-                        QtWidgets.QMessageBox.information(self, "Applied", "Variable type updated.")
+                        if self.on_apply_callback(struct_name):
+                            QtWidgets.QMessageBox.information(self, "Applied", "Variable type updated.")
+                        else:
+                            QtWidgets.QMessageBox.warning(self, "Failed", "Failed to apply type to variable.")
                 else:
                     QtWidgets.QMessageBox.information(self, "Success", msg + "\n(Open Shift+F1 to view)")
             else:
@@ -911,64 +1239,17 @@ class StructAnalysisHandler(idaapi.action_handler_t):
             
         if not target_name or not target_code: return 0
             
-        _view_mod.show_ai_progress(f"Analyzing Struct: {target_name}")
-        # Prepare Prompt
-        prompt = (
-            f"Analyze the C code below. Focus on the usage of variable `{target_name}`.\n"
-            f"Infer the most likely C structure definition that `{target_name}` represents (or points to).\n"
-            "Analyze all dereferences (e.g. `v5 + 16`, `v5->field_10`) to find fields.\n"
-            "Return ONLY the C struct definition valid for an IDA header input.\n"
-            "Start the struct name with `Struct_{target_name}` or a descriptive name.\n\n"
-            "```c\n"
-            f"{target_code}\n"
-            "```"
-        )
-        
-        def wrapped_cb(response, **kwargs):
-            _view_mod.hide_ai_progress()
-            try: 
-                self.handle_response(target_name=target_name, vdui=vdui, lvar_name=target_lvar_name, response=response)
-            except Exception as e:
-                print(f"[PseudoNote] Struct Analysis Error: {e}")
-
-        if AI_CLIENT:
-            total_chars = [0]
-            def chunk_cb(t):
-                total_chars[0] += len(t)
-                _view_mod.update_ai_progress_details(total_chars[0])
-
-            AI_CLIENT.query_model_async(prompt, wrapped_cb, on_chunk=chunk_cb, on_status=_view_mod.update_ai_progress_details, additional_options={"max_completion_tokens": 8192})
-        return 1
-
-    def handle_response(self, target_name, vdui, lvar_name, response):
-        if not response: 
-            print("[PseudoNote] Struct Analysis: No response from AI.")
-            return
-        
-        # Extract C code from AI response
-        c_struct = response.strip()
-        if "```" in c_struct:
-            parts = c_struct.split("```")
-            for i in range(1, len(parts), 2):
-                p = parts[i].strip()
-                if p:
-                    # Strip language tags if present
-                    lines = p.split('\n')
-                    if lines and lines[0].strip().lower() in ["c", "cpp"]:
-                        c_struct = "\n".join(lines[1:]).strip()
-                    else:
-                        c_struct = p
-                    break
-        
         # Define apply callback to update the variable type in IDA
         def on_apply(type_name):
-            if not vdui or not lvar_name: return False
+            if not vdui or not target_lvar_name: return False
             try:
                 for lvar in vdui.cfunc.get_lvars():
-                    if lvar.name == lvar_name:
+                    if lvar.name == target_lvar_name:
                         new_type = idaapi.tinfo_t()
-                        # parse_decl expects "TYPE NAME;" snippet to infer the type
-                        if idaapi.parse_decl(new_type, None, f"{type_name} dummy;", 0):
+                        # parse_decl expects "TYPE NAME dummy;" snippet to infer the type
+                        # We apply it as a pointer, because variables we analyze structure for are almost always pointers
+                        decl_str = f"struct {type_name} *dummy;"
+                        if idaapi.parse_decl(new_type, None, decl_str, 0) or idaapi.parse_decl(new_type, None, f"{type_name} *dummy;", 0):
                             if vdui.set_lvar_type(lvar, new_type):
                                 vdui.refresh_view(True)
                                 return True
@@ -976,9 +1257,15 @@ class StructAnalysisHandler(idaapi.action_handler_t):
                 print(f"[PseudoNote] Failed to apply struct type: {e}")
             return False
 
-        # Create and show the result dialog
-        dlg = StructAnalysisDialog(c_struct, on_apply_callback=on_apply)
-        dlg.exec_()
+        # Create and show the result dialog immediately
+        dlg = StructAnalysisDialog(target_name, target_code, vdui, target_lvar_name, on_apply_callback=on_apply)
+        if not hasattr(_view_mod, "_struct_dialogs"):
+            _view_mod._struct_dialogs = []
+        _view_mod._struct_dialogs.append(dlg)
+        
+        from pseudonote.qt_compat import QtCore
+        dlg.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        dlg.show()
 
     def update(self, ctx):
         """Enable this action only for the Pseudocode view (where structure analysis is supported)."""
