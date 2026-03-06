@@ -102,9 +102,12 @@ class GraphLinearHighlightHooks(idaapi.IDB_Hooks):
 
 # --- Toggle handlers ---
 
-class toggle_highlight_on_handler(ida_kernwin.action_handler_t):
+class toggle_highlight_handler(ida_kernwin.action_handler_t):
     def activate(self, ctx):
-        enable_highlighting()
+        if highlight_plugin_enabled:
+            disable_highlighting()
+        else:
+            enable_highlighting()
         return 1
 
     def update(self, ctx):
@@ -113,31 +116,12 @@ class toggle_highlight_on_handler(ida_kernwin.action_handler_t):
         return ida_kernwin.AST_DISABLE_FOR_WIDGET
 
 
-class toggle_highlight_off_handler(ida_kernwin.action_handler_t):
+class toggle_disasm_highlight_handler(ida_kernwin.action_handler_t):
     def activate(self, ctx):
-        disable_highlighting()
-        return 1
-
-    def update(self, ctx):
-        if idaapi.get_widget_type(ctx.widget) == idaapi.BWN_PSEUDOCODE:
-            return ida_kernwin.AST_ENABLE_FOR_WIDGET
-        return ida_kernwin.AST_DISABLE_FOR_WIDGET
-
-
-class toggle_disasm_highlight_on_handler(ida_kernwin.action_handler_t):
-    def activate(self, ctx):
-        enable_disasm_highlighting()
-        return 1
-
-    def update(self, ctx):
-        if idaapi.get_widget_type(ctx.widget) in [idaapi.BWN_DISASMS, idaapi.BWN_DISASM]:
-            return ida_kernwin.AST_ENABLE_FOR_WIDGET
-        return ida_kernwin.AST_DISABLE_FOR_WIDGET
-
-
-class toggle_disasm_highlight_off_handler(ida_kernwin.action_handler_t):
-    def activate(self, ctx):
-        disable_disasm_highlighting()
+        if highlight_plugin_enabled:
+            disable_disasm_highlighting()
+        else:
+            enable_disasm_highlighting()
         return 1
 
     def update(self, ctx):

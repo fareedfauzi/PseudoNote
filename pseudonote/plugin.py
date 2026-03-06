@@ -11,10 +11,8 @@ from pseudonote.ai_client import SimpleAI
 import pseudonote.ai_client as _ai_mod
 from pseudonote.highlight import (
     _create_highlight_hooks,
-    toggle_highlight_on_handler,
-    toggle_highlight_off_handler,
-    toggle_disasm_highlight_on_handler,
-    toggle_disasm_highlight_off_handler,
+    toggle_highlight_handler,
+    toggle_disasm_highlight_handler,
 )
 from pseudonote.handlers import (
     RenameVariablesHandler,
@@ -32,6 +30,9 @@ from pseudonote.handlers import (
     ShellcodeAnalystHandler,
     BulkVarRenameHandler,
     BulkAnalyzeHandler,
+    SearchBytesVTHandler,
+    SearchStringHandler,
+    SearchBytesCyberChefHandler,
 )
 from pseudonote.deep_analyzer import DeepAnalyzerHandler
 
@@ -72,25 +73,15 @@ class PseudoNotePlugin(idaapi.plugin_t):
 
         # Register Highlighter Actions (Pseudocode)
         idaapi.register_action(idaapi.action_desc_t(
-            "pseudonote:highlight_on", "Enable Highlighting (Pseudocode)",
-            toggle_highlight_on_handler(), "",
-            "Enable function call highlighting in pseudocode", 48
-        ))
-        idaapi.register_action(idaapi.action_desc_t(
-            "pseudonote:highlight_off", "Disable Highlighting (Pseudocode)",
-            toggle_highlight_off_handler(), "",
-            "Disable function call highlighting in pseudocode", 48
+            "pseudonote:toggle_highlight", "Toggle Call Highlight (Pseudocode)",
+            toggle_highlight_handler(), "",
+            "Toggle function call highlighting in pseudocode", 48
         ))
         # Register Highlighter Actions (Disasm)
         idaapi.register_action(idaapi.action_desc_t(
-            "pseudonote:disasm_highlight_on", "Enable Highlighting (Graph/Linear)",
-            toggle_disasm_highlight_on_handler(), "",
-            "Enable function call highlighting in Graph/Linear view", 48
-        ))
-        idaapi.register_action(idaapi.action_desc_t(
-            "pseudonote:disasm_highlight_off", "Disable Highlighting (Graph/Linear)",
-            toggle_disasm_highlight_off_handler(), "",
-            "Disable function call highlighting in Graph/Linear view", 48
+            "pseudonote:toggle_disasm_highlight", "Toggle Call Highlight (Graph/Linear)",
+            toggle_disasm_highlight_handler(), "",
+            "Toggle function call highlighting in Graph/Linear view", 48
         ))
 
         if ida_hexrays.init_hexrays_plugin():
@@ -293,7 +284,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(bulk_var_rename_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename", idaapi.SETMENU_APP)
 
-        # Ask AI Chat Action
         ask_chat_desc = idaapi.action_desc_t(
             "pseudonote:ask_chat",
             "Ask Chat (AI)",
@@ -304,6 +294,43 @@ class PseudoNotePlugin(idaapi.plugin_t):
         )
         idaapi.register_action(ask_chat_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat", idaapi.SETMENU_APP)
+
+        # Register Search Utils Actions
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:search_bytes_vt", "Search bytes in VirusTotal",
+            SearchBytesVTHandler(), "",
+            "Search highlighted bytes in VirusTotal", -1
+        ))
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:search_bytes_cyberchef", "Add bytes to CyberChef input",
+            SearchBytesCyberChefHandler(), "",
+            "Add highlighted bytes to CyberChef input", -1
+        ))
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:search_str_vt", "Search string in VirusTotal",
+            SearchStringHandler("vt"), "",
+            "Search string in VirusTotal", -1
+        ))
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:search_str_google", "Search string in Google",
+            SearchStringHandler("google"), "",
+            "Search string in Google", -1
+        ))
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:search_str_github", "Search string in GitHub",
+            SearchStringHandler("github"), "",
+            "Search string in GitHub", -1
+        ))
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:search_str_msdn", "Search string (WinAPI) in MSDN",
+            SearchStringHandler("msdn"), "",
+            "Search string (WinAPI) in MSDN Documentation", -1
+        ))
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:search_str_cyberchef", "Add strings to CyberChef input",
+            SearchStringHandler("cyberchef"), "",
+            "Add string to CyberChef input", -1
+        ))
 
         self.ctx_hooks = vm.ContextMenuHooks()
         self.ctx_hooks.hook()
@@ -343,9 +370,12 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:shellcode_analyst",
             "pseudonote:analyze_struct", "pseudonote:bulk_rename",
             "pseudonote:bulk_var_rename",
-            "pseudonote:highlight_on", "pseudonote:highlight_off",
-            "pseudonote:disasm_highlight_on", "pseudonote:disasm_highlight_off",
+            "pseudonote:toggle_highlight", "pseudonote:toggle_disasm_highlight",
             "pseudonote:ask_chat", "pseudonote:deep_analyzer",
+            "pseudonote:search_bytes_vt", "pseudonote:search_str_vt",
+            "pseudonote:search_str_google", "pseudonote:search_str_github",
+            "pseudonote:search_str_msdn", "pseudonote:search_bytes_cyberchef",
+            "pseudonote:search_str_cyberchef",
         ]:
             idaapi.unregister_action(action_id)
 

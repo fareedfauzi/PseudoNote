@@ -2579,6 +2579,15 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:deep_analyzer", "PseudoNote/")
+        # Search menu actions
+        if wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_bytes_vt", "PseudoNote/Search.../")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_bytes_cyberchef", "PseudoNote/Search.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_vt", "PseudoNote/Search.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_google", "PseudoNote/Search.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_github", "PseudoNote/Search.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_msdn", "PseudoNote/Search.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_cyberchef", "PseudoNote/Search.../")
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_var_rename", "PseudoNote/")
@@ -2599,12 +2608,9 @@ class ContextMenuHooks(idaapi.UI_Hooks):
 
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         if wtype == idaapi.BWN_PSEUDOCODE:
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:highlight_on", "PseudoNote/Call Highlight/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:highlight_off", "PseudoNote/Call Highlight/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:toggle_highlight", "PseudoNote/")
         elif wtype in [idaapi.BWN_DISASMS, idaapi.BWN_DISASM]:
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:disasm_highlight_on", "PseudoNote/Call Highlight/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:disasm_highlight_off", "PseudoNote/Call Highlight/")
-
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:toggle_disasm_highlight", "PseudoNote/")
 
 class ShellcodeAnalystDialog(QtWidgets.QDialog):
     """A standalone dialog for manual shellcode analysis (Static analysis context)."""

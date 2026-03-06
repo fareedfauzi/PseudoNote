@@ -505,6 +505,12 @@ def extract_ida_strings(graph=None, log_fn=None):
                 log(f"Decompiled scan error: {e}", "err")
 
         # 4. Deterministic Segment Scanning (The "No matter what" scan)
+        # We are commenting this out because blindly pulling sequences of 4 ASCII
+        # printable characters from binary segments results in a massive amount of
+        # false positives (opcodes interpreted as strings), filling the report with
+        # garbage. IDA's built-in strings list (`idautils.Strings`) and the
+        # Function Supplement scanner are already pulling the valid strings.
+        """
         try:
             log("Performing deterministic segment-level scan...", "info")
             for i in range(idaapi.get_segm_qty()):
@@ -534,6 +540,7 @@ def extract_ida_strings(graph=None, log_fn=None):
                     ea += curr_chunk
         except Exception as e:
             log(f"Deterministic segment scan error: {e}", "err")
+        """
             
         results_container.extend(local_results)
         return idaapi.MFF_READ
@@ -2269,6 +2276,8 @@ CRITICAL RULES:
 - DO NOT list standard Windows API names (e.g. GetCurrentProcess, CloseHandle, LoadLibraryA, GetProcAddress, TerminateProcess, etc.) as IOCs. These are standard system behaviors, not unique forensic indicators.
 - DO NOT classify Windows DLLs or Windows API names as "domain" or "url". DLL names like advapi32, ntdll, or api-ms-win-* are NOT domains.
 - STANDALONE strings that represent days of the week (Sunday, Monday, etc.), months (January, etc.), or common date formats (MM/dd/yy) are NOT IOCs and should be ignored.
+- IGNORE generic CRT runtime errors and placeholder strings (e.g., "R6033", "R6032", "R6025", "SING error", "DOMAIN error", "Microsoft Visual C++ Runtime Library", "<program name unknown>", "nruntime error", "HH:mm:ss").
+- IGNORE short, random-looking obfuscated strings or encoding artifacts (e.g., "6iekA", "g;9k~.!E_v", "hj9C:hq4", "Pj@QR", "RPQSh", "hr3w3", "_BJhr8iE", "huglD", "u WPS", "u&WVS", "uTVWhU", "j@j ^V", "SWf9M", "t?VSP", "< tK<", "wf93t", "@PSVV", "URPQQh0", "9](SS", "t\"SS9] u", "9] SS", "SVWUj", "UQPXY]Y[") unless they represent a clear forensic pattern.
 - For each IOC, explain its Analysis significance.
 - associated_functions MUST be a list of function names from the context that reference this indicator.
 

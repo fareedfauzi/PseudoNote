@@ -10,8 +10,8 @@ from pseudonote.ai_client import SimpleAI, AI_CLIENT
 from pseudonote.highlight import (
     enable_highlighting, disable_highlighting,
     enable_disasm_highlighting, disable_disasm_highlighting,
-    toggle_highlight_on_handler, toggle_highlight_off_handler,
-    toggle_disasm_highlight_on_handler, toggle_disasm_highlight_off_handler,
+    toggle_highlight_handler,
+    toggle_disasm_highlight_handler,
     _create_highlight_hooks,
 )
 from pseudonote.idb_storage import (

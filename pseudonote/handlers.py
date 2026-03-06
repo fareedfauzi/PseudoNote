@@ -1462,3 +1462,127 @@ class ShellcodeAnalystHandler(idaapi.action_handler_t):
         if ctx.widget_type == idaapi.BWN_PSEUDOCODE:
             return idaapi.AST_DISABLE_FOR_WIDGET
         return idaapi.AST_ENABLE_ALWAYS
+
+# ---------------------------------------------------------------------------
+# Search Utilities Handlers
+# ---------------------------------------------------------------------------
+class SearchBytesVTHandler(idaapi.action_handler_t):
+    """Search highlighted bytes in VirusTotal."""
+    def __init__(self):
+        super(SearchBytesVTHandler, self).__init__()
+
+    def activate(self, ctx):
+        import binascii
+        import urllib.parse
+        import webbrowser
+        import ida_bytes
+        
+        ok, start_ea, end_ea = idaapi.read_range_selection(ctx.widget)
+        if not ok:
+            # Fallback to current item if no selection
+            start_ea = idaapi.get_screen_ea()
+            end_ea = idc.next_head(start_ea)
+            
+        if start_ea != idaapi.BADADDR and end_ea > start_ea:
+            size = end_ea - start_ea
+            if size > 0 and size < 10000:
+                blob = ida_bytes.get_bytes(start_ea, size)
+                if blob:
+                    hex_str = binascii.hexlify(blob).decode("utf-8").upper()
+                    query = urllib.parse.quote("content: {" + hex_str + "}")
+                    url = f"https://www.virustotal.com/gui/search?query={query}&type=files"
+                    webbrowser.open_new_tab(url)
+                    return 1
+        print("[PseudoNote] Please highlight assembly bytes to search.")
+        return 1
+
+    def update(self, ctx):
+        if ctx.widget_type in (idaapi.BWN_DISASM, idaapi.BWN_DISASMS):
+            return idaapi.AST_ENABLE_FOR_WIDGET
+        return idaapi.AST_DISABLE_FOR_WIDGET
+
+
+class SearchBytesCyberChefHandler(idaapi.action_handler_t):
+    """Add highlighted bytes to CyberChef input."""
+    def __init__(self):
+        super(SearchBytesCyberChefHandler, self).__init__()
+
+    def activate(self, ctx):
+        import base64
+        import webbrowser
+        import ida_bytes
+        
+        ok, start_ea, end_ea = idaapi.read_range_selection(ctx.widget)
+        if not ok:
+            start_ea = idaapi.get_screen_ea()
+            end_ea = idc.next_head(start_ea)
+            
+        if start_ea != idaapi.BADADDR and end_ea > start_ea:
+            size = end_ea - start_ea
+            if size > 0 and size < 10000:
+                blob = ida_bytes.get_bytes(start_ea, size)
+                if blob:
+                    encoded = base64.b64encode(blob).decode('utf-8')
+                    url = f"https://gchq.github.io/CyberChef/#input={encoded}"
+                    webbrowser.open_new_tab(url)
+                    return 1
+        print("[PseudoNote] Please highlight assembly bytes to send.")
+        return 1
+
+    def update(self, ctx):
+        if ctx.widget_type in (idaapi.BWN_DISASM, idaapi.BWN_DISASMS):
+            return idaapi.AST_ENABLE_FOR_WIDGET
+        return idaapi.AST_DISABLE_FOR_WIDGET
+
+
+class SearchStringHandler(idaapi.action_handler_t):
+    """Search string in various engines."""
+    def __init__(self, mode):
+        super(SearchStringHandler, self).__init__()
+        self.mode = mode
+
+    def activate(self, ctx):
+        import urllib.parse
+        import webbrowser
+        import ida_kernwin
+        
+        text = ""
+        v = ida_hexrays.get_widget_vdui(ctx.widget)
+        if v:
+            highlight = ida_kernwin.get_highlight(ida_kernwin.get_current_viewer())
+            if highlight and highlight[0]:
+                text = highlight[0]
+        else:
+            highlight = ida_kernwin.get_highlight(ida_kernwin.get_current_viewer())
+            if highlight and highlight[0]:
+                text = highlight[0]
+                
+        if not text:
+            # If no highlight, prompt user
+            text = ida_kernwin.ask_str("", 0, "Enter string to search:")
+            
+        if text:
+            text = text.strip('"').strip("'")
+            if self.mode == "vt":
+                query = urllib.parse.quote('content: "' + text + '"')
+                url = f"https://www.virustotal.com/gui/search?query={query}&type=files"
+            elif self.mode == "google":
+                query = urllib.parse.quote('"' + text + '"')
+                url = f"https://www.google.com/search?q={query}"
+            elif self.mode == "github":
+                query = urllib.parse.quote(text)
+                url = f"https://github.com/search?q={query}&type=code"
+            elif self.mode == "msdn":
+                query = urllib.parse.quote(text)
+                url = f"https://learn.microsoft.com/en-us/search/?terms={query}&category=Documentation"
+            elif self.mode == "cyberchef":
+                import base64
+                encoded = base64.b64encode(text.encode('utf-8')).decode('utf-8')
+                url = f"https://gchq.github.io/CyberChef/#input={encoded}"
+            
+            webbrowser.open_new_tab(url)
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
