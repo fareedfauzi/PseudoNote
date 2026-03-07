@@ -1856,7 +1856,7 @@ details[open] .toggle-icon {{ transform: rotate(90deg); }}
 
   <!-- Indicator of Compromise -->
   <div class="section" id="sec-10">
-    <h2 class="section-title">Indicator of Compromise</h2>
+    <h2 class="section-title">Interesting Strings</h2>
     {ioc_html}
   </div>
 

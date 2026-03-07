@@ -273,6 +273,16 @@ def calculate_interest_score(node):
 # FuncNode
 # ---------------------------------------------------------------------------
 
+def _is_valid_seg_raw(ea):
+    seg = ida_segment.getseg(ea)
+    if not seg: return False
+    name = ida_segment.get_segm_name(seg)
+    if not name: return True
+    nl = name.lower()
+    if any(x in nl for x in ('.plt', 'extern', '.got', '.note', '.init', '.fini', '.interp', '.hash', '.idata', '.plt.got')):
+        return False
+    return True
+
 def is_library_like(ea, name):
     """Unified library/thunk/import detection used across all graph operations."""
     # 1. Name-based heuristics (Fast, thread-safe)
@@ -286,7 +296,7 @@ def is_library_like(ea, name):
     res = {"is_lib": False}
     def _check_ida():
         # Segment-based check (Handles thunks/imports)
-        if not is_valid_seg(ea):
+        if not _is_valid_seg_raw(ea):
             res["is_lib"] = True
             return
             
@@ -317,7 +327,8 @@ class FuncNode:
         self.depth = depth
         self.callers = []
         self.callees = []
-        self.is_library = is_library_like(ea, name)
+        # If depth == 0, this is the explicit entry point chosen by the user, so NEVER skip it as a library.
+        self.is_library = False if depth == 0 else is_library_like(ea, name)
         self.is_callback = False
         self.is_indirect = False   # Via vtable or indirect reg call
         self.is_recursive = False  # Part of a mutual recursion cycle
@@ -381,7 +392,7 @@ def build_call_graph(entry_ea: int, stop_checker: Optional[Callable[[], bool]] =
     res_entry = {"f_entry": None, "is_valid": False, "name": ""}
     def _sync_entry():
         res_entry["f_entry"] = ida_funcs.get_func(entry_ea)
-        res_entry["is_valid"] = is_valid_seg(entry_ea)
+        res_entry["is_valid"] = _is_valid_seg_raw(entry_ea)
         res_entry["name"] = idc.get_func_name(entry_ea) or ""
     idaapi.execute_sync(_sync_entry, idaapi.MFF_READ)
 
@@ -391,9 +402,9 @@ def build_call_graph(entry_ea: int, stop_checker: Optional[Callable[[], bool]] =
         return {}
 
     entry_name = res_entry["name"]
-    if is_sys_func(entry_name):
-        if log_fn: log_fn(f"Warning: 0x{entry_ea:X} ({entry_name}) appears to be a library/system function. Skipping.", "warn")
-        return {}
+    # We bypass the is_sys_func check for the root entry point, because if the user explicitly right-clicked it
+    # they want to analyze it, even if it's named 'start' or '_main'.
+    # Validations for deep children will still respect is_sys_func later in the pipeline.
         
     if f_entry:
         entry_ea = f_entry.start_ea
@@ -527,7 +538,7 @@ def build_call_graph(entry_ea: int, stop_checker: Optional[Callable[[], bool]] =
             for ref_ea in res_drefs["refs"]:
                 res_indirect = {"f": None, "ea": 0, "name": "", "is_valid": False, "is_code": False}
                 def _sync_indirect():
-                    res_indirect["is_valid"] = is_valid_seg(ref_ea)
+                    res_indirect["is_valid"] = _is_valid_seg_raw(ref_ea)
                     if not res_indirect["is_valid"]: return
                     
                     seg = ida_segment.getseg(ref_ea)
@@ -1162,9 +1173,9 @@ Reply with ONLY the JSON object."""
     # Step 9: Post-Rename Refresh & Save (Readable C Code)
     def _fetch_fresh_code():
         ida_hexrays.mark_cfunc_dirty(ea) # Force fresh decompilation
-        return get_code_fast(ea) or (code if 'code' in locals() else "")
     
-    fresh_code = idaapi.execute_sync(_fetch_fresh_code, idaapi.MFF_READ)
+    idaapi.execute_sync(_fetch_fresh_code, idaapi.MFF_READ)
+    fresh_code = get_code_fast(ea) or (code if 'code' in locals() else "")
     save_decompiled_to_disk(ea, final_name, fresh_code, output_dir)
     
     idaapi.execute_sync(lambda: save_to_idb(ea, "renamed_by_analyzer", tag=84), idaapi.MFF_WRITE)
@@ -1381,13 +1392,11 @@ class RenameWorker(QThread):
                 self.progress_signal.emit(0, len(wave), "")
                 
                 res_data = {}
-                def _gather_wave():
-                    for ea in wave:
-                        if self._stop: break
-                        c = get_code_fast(ea) or ""
-                        s = get_strings_fast(ea)
-                        res_data[ea] = {"code": c, "strings": s}
-                idaapi.execute_sync(_gather_wave, idaapi.MFF_READ)
+                for ea in wave:
+                    if self._stop: break
+                    c = get_code_fast(ea) or ""
+                    s = get_strings_fast(ea)
+                    res_data[ea] = {"code": c, "strings": s}
 
                 wave_tasks = []
                 current_batch = []
@@ -1598,7 +1607,7 @@ def apply_variable_renames_in_ida(ea, var_map, log_fn):
     res_box = {"applied": 0, "failed": 0, "skipped": False}
     def _do_rename():
         # Move IDA API checks inside the main thread wrapper
-        if is_sys_func(idc.get_func_name(ea) or "") or not is_valid_seg(ea):
+        if is_sys_func(idc.get_func_name(ea) or "") or not _is_valid_seg_raw(ea):
             res_box["skipped"] = True
             return
 
@@ -2297,6 +2306,13 @@ def determine_risk_with_context(node, result, context, graph):
         result["suspicious"] = []
         return result
 
+    # ── 0.5. LOCAL API ANALYSIS (Used early for stub checks) ──────────────────
+    api_hits = get_api_tags_for_function(node.ea, node.callees if hasattr(node, 'callees') else [])
+    has_high_severity_api = any(
+        _CATEGORY_TO_SEVERITY.get(cat, "LOW") == "HIGH"
+        for cat in api_hits
+    ) if api_hits else False
+
     # ── 1. FUNCTION SIZE & LEAF STUB SUPPRESSION ──────────────────────────────
     # A tiny function (< 6 lines) with NO callees is almost certainly a return stub.
     # It should NEVER be upgraded based on context alone.
@@ -2321,11 +2337,6 @@ def determine_risk_with_context(node, result, context, graph):
 
     # ── 3. STRICT LOCAL INDICATOR DEFINITION ──────────────────────────────────
     # No longer satisfied by any API hit — requires HIGH severity or multiple items.
-    api_hits = get_api_tags_for_function(node.ea, node.callees if hasattr(node, 'callees') else [])
-    has_high_severity_api = any(
-        _CATEGORY_TO_SEVERITY.get(cat, "LOW") == "HIGH"
-        for cat in api_hits
-    ) if api_hits else False
 
     has_local_indicator = (
         len(suspicious) >= 4 or                             # 5+ suspicious items (increased from 3 to reduce noise)
@@ -2400,15 +2411,111 @@ def determine_risk_with_context(node, result, context, graph):
     if (upgrade_to_malicious or conditions_fired >= 1) and risk != "malicious":
         # Extended benign_terms list to catch more utility-like function names
         benign_terms = [
-            'print', 'report', 'log', 'string', 'format', 'dump_data',
-            'display', 'render', 'show', 'output', 'write', 'trace',
-            'debug', 'verbose', 'util', 'helper', 'hash', 'checksum',
-            'crc', 'encode', 'decode', 'parse', 'convert', 'serialize',
+
+        # Logging / Debugging
+        'log', 'trace', 'debug', 'verbose', 'print',
+        'report', 'dump_data', 'trace_event',
+
+        # Output / Display
+        'display', 'render', 'show', 'output', 'write',
+        'print_line', 'format_output',
+
+        # String Handling
+        'string', 'str', 'format', 'concat', 'join',
+        'split', 'substring', 'trim', 'replace',
+
+        # Parsing / Serialization
+        'parse_data',
+        'convert', 'serialize', 'deserialize',
+        'marshal', 'unmarshal',
+
+        # Memory / Buffer helpers
+        'buffer', 'mem', 'copy', 'move', 'alloc',
+        'free', 'resize', 'init_buffer',
+
+        # Data structure helpers
+        'list', 'array', 'vector', 'map',
+        'insert', 'remove', 'push', 'pop',
+        'append', 'clear', 'iterate',
+
+        # Math / Calculation
+        'calc', 'compute', 'sum', 'average',
+        'min', 'max', 'round',
+
+        # Validation / Checking
+        'check', 'validate', 'verify',
+        'compare', 'match',
+
+        # Time utilities
+        'time', 'timestamp', 'date',
+        'get_time', 'format_time',
+
+        # Generic utilities
+        'util', 'utils', 'helper', 'common',
+        'misc', 'internal',
+
+        # Initialization / cleanup
+        'init', 'initialize', 'setup',
+        'cleanup', 'destroy',
+
+        # Conversion
+        'to_string', 'from_string',
+        'to_int', 'to_float'
         ]
         is_utility_name = any(term in node.name.lower() for term in benign_terms)
 
-        malicious_action_words = ['self', 'startup', 'inject', 'exec', 'shell', 'payload', 'c2', 'persist', 
-                                  'run', 'drop', 'hook', 'keylog', 'ransom', 'crypt', 'backdoor', 'mutex', 'stealth']
+        malicious_action_words = [
+            # Execution / Code Injection
+            'inject', 'hollow', 'reflect', 'exec', 'execute', 'spawn', 'shell',
+            'shellcode', 'process_hollow', 'apc_inject', 'thread_inject',
+            'remote_thread', 'map_pe', 'load_pe', 'manual_map',
+
+            # Payload Handling
+            'payload', 'drop', 'download', 'stage', 'loader', 'unpack',
+            'decrypt_payload', 'decode_payload', 'install',
+
+            # Persistence
+            'persist', 'startup', 'autorun', 'registry_run', 'reg_run',
+            'scheduled_task', 'service_install', 'bootkit', 'run_key',
+
+            # Command and Control
+            'c2', 'beacon', 'callback', 'connect_c2', 'command_loop',
+            'command_dispatch', 'task_handler', 'bot', 'agent',
+
+            # Credential Access
+            'keylog', 'credential', 'dump', 'lsass', 'ntds', 'hashdump',
+            'password', 'token_steal', 'steal_creds',
+
+            # Defense Evasion
+            'hook', 'unhook', 'bypass', 'patch_amsi', 'disable_defender',
+            'evade', 'sandbox', 'anti_vm', 'anti_debug', 'detect_debugger',
+            'detect_vm', 'sleep_obfuscation',
+
+            # Discovery / Recon
+            'enumerate', 'scan', 'discover', 'recon', 'fingerprint',
+            'system_info', 'process_list', 'network_scan', 'domain_enum',
+            'ad_enum',
+
+            # Lateral Movement
+            'psexec', 'wmiexec', 'dcom_exec', 'smb_exec', 'remote_exec',
+            'lateral', 'spread',
+
+            # Data Exfiltration
+            'exfil', 'upload', 'send_data', 'steal', 'collect',
+            'grab', 'harvest',
+
+            # Encryption / Ransomware
+            'encrypt', 'decrypt', 'crypt', 'ransom', 'locker',
+            'file_encrypt', 'crypto',
+
+            # Stealth / Evasion
+            'stealth', 'obfuscate', 'hide', 'masquerade',
+            'mutex', 'single_instance',
+
+            # Privilege Escalation
+            'priv_esc', 'elevate', 'uac_bypass', 'token_impersonate',
+            'impersonate', 'enable_debug_privilege'
+            ]
         has_malicious_intent = any(m in node.name.lower() for m in malicious_action_words)
 
         if upgrade_to_malicious:
@@ -2452,9 +2559,62 @@ def determine_risk_with_context(node, result, context, graph):
 
     # Condition 2: Standard C++ runtime / STL names
     generic_patterns = [
-        'exception', 'iostream', 'std::', 'bad_cast', 'bad_alloc',
-        'vector', 'string', 'allocator', 'iterator', 'operator',
-    ]
+
+        # C++ exception / RTTI
+        'exception', 'bad_cast', 'bad_alloc', 'bad_exception',
+        'typeinfo', 'rtti', 'terminate', 'unexpected',
+
+        # C++ STL namespace
+        'std::', 'std::vector', 'std::string', 'std::map',
+        'std::list', 'std::deque', 'std::set', 'std::pair',
+
+        # STL components
+        'allocator', 'iterator', 'reverse_iterator',
+        'const_iterator', 'char_traits',
+
+        # C++ operators
+        'operator', 'operator new', 'operator delete',
+        'operator=', 'operator<<', 'operator>>',
+
+        # C++ I/O streams
+        'iostream', 'istream', 'ostream', 'stringstream',
+        'fstream', 'wostream', 'wistream',
+
+        # Template artifacts
+        '_Traits', '_Alloc', '_Container_base',
+        '_Iterator_base', '_Vector_base',
+
+        # MSVC runtime internals
+        '_CxxThrowException', '_CxxFrameHandler',
+        '_CxxFrameHandler3', '__CxxFrameHandler',
+        '_purecall',
+
+        # MSVC CRT
+        '_initterm', '_initterm_e',
+        '_RTC', '__security_cookie',
+        '__report_gsfailure',
+
+        # MinGW / GCC runtime
+        '__gnu_cxx', '__cxa', '__gxx',
+        '__cxa_throw', '__cxa_allocate_exception',
+        '__cxa_begin_catch', '__cxa_end_catch',
+
+        # Static initialization
+        'static_initialization',
+        'global_ctor', 'global_dtor',
+
+        # Thread / runtime support
+        'atexit', 'onexit', 'tls', 'thread_local',
+
+        # Memory helpers
+        'memcpy', 'memmove', 'memset',
+        'strlen', 'strcmp', 'strcpy',
+
+        # Common compiler artifacts
+        '__thiscall', '__fastcall',
+        'thunk', 'vftable', 'vtable',
+
+        ]
     if any(p in node.name.lower() for p in generic_patterns):
         if not malicious_markers and not sibling_patterns:
             downgrade_to_benign = True
@@ -2468,14 +2628,67 @@ def determine_risk_with_context(node, result, context, graph):
     # Condition 4: Targetted Utility Function Suppression List (Aggressive False Positive filtering)
     # This filters out library-heavy artifacts that superficially look like custom logic.
     utility_patterns = [
-        'initialize', 'cleanup', 'validate', 'compare', 'erase', 'insert',
-        'rotate', 'rebalance', 'iterator', 'buffer', 'tree_node', 'lookup', 
-        'map_set', 'linked_list', 'list_node', 'relink', 'pointer', 'destructor', 
-        'constructor', 'release', 'resize', 'substring', 
-        'exception', 'throw', 'error', 'vtable', 'bad_call', 'calc', 'offset',
-        'ssl_socket', 'tcp_socket', 'plugin_object', 'return_zero', 'return_val',
-        'stub', 'map_erase', 'map_delete','deallocate', 'vector_erase'
-    ]
+
+        # Initialization / Lifecycle
+        'initialize', 'init', 'setup', 'cleanup', 'destroy',
+        'constructor', 'destructor', 'release', 'finalize',
+
+        # Validation / Comparison
+        'validate', 'verify', 'compare', 'equals', 'check',
+
+        # Container operations
+        'insert', 'erase', 'remove', 'delete', 'append',
+        'push', 'pop', 'lookup', 'find',
+
+        # Tree / map structures
+        'tree_node', 'rebalance', 'rotate',
+        'map_set', 'map_insert', 'map_erase', 'map_delete',
+
+        # List / container structures
+        'linked_list', 'list_node', 'relink',
+        'vector_erase', 'vector_insert',
+
+        # Memory / buffer management
+        'buffer', 'allocate', 'alloc', 'deallocate',
+        'resize', 'copy', 'move', 'clear',
+
+        # Pointer utilities
+        'pointer', 'offset', 'offset_by_',
+        '_to_pointer', 'calculate_offset',
+        'get_field_offset', 'struct_member',
+
+        # String utilities
+        'substring', 'split', 'concat', 'format',
+
+        # Error / exception handling
+        'error', 'handle_error', 'throw', 'exception',
+
+        # Return helpers
+        'return_zero', 'return_val',
+
+        # Plugin / framework
+        'plugin_object', 'module', 'component',
+
+        # Concurrency / synchronization
+        'thread', 'worker', 'lock', 'unlock',
+        'rwlock', 'spin_wait', 'sync', 'atomic',
+
+        # Thread helpers
+        'sleep', 'wait', 'wait_for',
+        'once_init', 'thread_local', 'tls',
+
+        # Data structures
+        'data_block', 'data_node', 'entry',
+
+        # Program lifecycle
+        'exit_handler', 'shutdown',
+
+        # Math / calculation helpers
+        'calc', 'calculate', 'compute',
+
+        # Stub / placeholder
+        'stub', 'dummy', 'placeholder'
+        ]
     
     # If the function heavily matches our utility list AND doesn't have an explicit, hardcoded malicious API call 
     # (like networking/injection capabilities that trigger high severity), squash it to benign immediately.
@@ -2571,8 +2784,10 @@ ALWAYS CLASSIFY AS BENIGN IF FUNCTION ONLY DOES:
 • exception handling / runtime errors (Boost, CRT, throw, catch, vtable setup)
 • cleanup / destructors / resource management
 • iterator loops / pointer validation
-• time conversion (time_t, FILETIME)
+• time conversion / sleeping (time_t, FILETIME, nanosleep)
 • STL rebalancing or tree node manipulation
+• thread synchronization (locks, rwlocks, spin waits, critical sections, atomic ops)
+• thread-local storage (TLS) init, thread data block setup, or exit handlers
 
 ------------------------------------------------
 STL / RUNTIME SUPPRESSION RULE
@@ -2584,6 +2799,8 @@ If a function belongs to any of the following categories, it MUST be BENIGN unle
 • exception cloning / vtable setup
 • allocator or iterator logic
 • container node manipulation
+• threading, locks, or concurrency helpers
+• basic pointer arithmetic, struct field offsets, and getter/setter wrappers
 
 ------------------------------------------------
 FALSE POSITIVE EXAMPLES (MUST BE BENIGN)
@@ -2591,6 +2808,8 @@ FALSE POSITIVE EXAMPLES (MUST BE BENIGN)
 - Exception Handling: exception_ctor, runtime_error_init, setup_boost_exception, set_vtable_pointer.
 - Structure Helpers: initialize_struct, allocate_array, copy_or_move_assignment, swap_assignments.
 - String Utils: copy_string_with_limit, format_string, find_string_match, bstr_converters.
+- Threading & Sync: enter_critical_section_wrapper, leave_critical_section, validate_and_decrement_rwlock, spin_wait_until_zero, thread_cleanup, nanosleep_with_timeout.
+- Basic Math/Offsets: add_16_to_pointer, offset_pointer_by_40, get_struct_member_offset_8, calculate_offset, add_40_2.
 - Small Utilities: return_zero, handle_empty_function_call, sub_generic_logic.
 
 CONFIDENCE SCORING:
@@ -3698,8 +3917,8 @@ class AnalysisWorker(QThread):
                             _fresh_res = [""]
                             def _fetch_fresh(): 
                                 ida_hexrays.mark_cfunc_dirty(ea)
-                                _fresh_res[0] = get_code_fast(ea, max_len=100000) or res_data_ana.get(ea, "")
                             idaapi.execute_sync(_fetch_fresh, idaapi.MFF_READ)
+                            _fresh_res[0] = get_code_fast(ea, max_len=100000) or res_data_ana.get(ea, "")
                             fresh_c = _fresh_res[0]
 
                             # Save Artifacts
@@ -3869,8 +4088,9 @@ class AnalysisWorker(QThread):
                                 # current IDA state, not the stale pre-rename Stage 4 snapshot.
                                 _fresh_var_code = [""]
                                 def _fetch_var_code(e=ea):
-                                    _fresh_var_code[0] = get_code_fast(e) or ""
-                                idaapi.execute_sync(_fetch_var_code, idaapi.MFF_READ)
+                                    ida_hexrays.mark_cfunc_dirty(e)
+                                idaapi.execute_sync(_fetch_var_code, idaapi.MFF_WRITE)
+                                _fresh_var_code[0] = get_code_fast(ea) or ""
                                 var_code = _fresh_var_code[0]
                                 var_map = extract_variable_renames_from_analysis(result, var_code)
                                 if var_map:
