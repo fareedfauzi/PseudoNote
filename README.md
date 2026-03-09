@@ -642,7 +642,7 @@ The Deep Analyzer runs in two major phases across 7 stages.
 
 #### Stage 1 — Environment Setup
 
-Initialises workspace directories alongside the IDB, detects the binary path from IDA, validates that the AI is configured, and checks all dependencies. A workspace folder named `<binary_name>_pseudonote/` is created next to the IDB file.
+Initialises workspace directories alongside the IDB, detects the binary path from IDA, validates that the AI is configured, and checks all dependencies. A workspace folder named `DeepAnalyzer_{EntryFunction}_{Filename}_{Timestamp}` is created next to the IDB file.
 
 #### Stage 2 — Recursive Call Graph Discovery
 
