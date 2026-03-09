@@ -13,6 +13,7 @@ import idaapi
 import ida_kernwin
 import ida_hexrays
 import idc
+import idautils
 
 import json
 from pseudonote.qt_compat import QtWidgets, QtCore, QtGui, Signal, qt_cast_flags
@@ -270,7 +271,7 @@ class IDAChatForm(ida_kernwin.PluginForm):
         self.decompiled_code = decompiled_code
         
         # System prompt always reflects the current state of decompilation
-        self.system_prompt = {"role": "system", "content": f"You are a helpful reverse-engineering assistant analyzes `{function_name}`. Source:\n\n```c\n{decompiled_code}\n```"}
+        self.system_prompt = {"role": "system", "content": f"You are a helpful reverse-engineering assistant analyzing `{function_name}`. Source:\n\n```c\n{decompiled_code}\n```"}
         
         # Load messages from IDB
         self.history = []
@@ -302,11 +303,12 @@ class IDAChatForm(ida_kernwin.PluginForm):
         # Header
         header = QtWidgets.QFrame()
         header.setStyleSheet(f"background-color: {colors['alt_base']};")
-        h_layout = QtWidgets.QHBoxLayout(header)
-        h_layout.setContentsMargins(20, 10, 20, 10)
+        header_vbox = QtWidgets.QVBoxLayout(header)
+        header_vbox.setContentsMargins(20, 10, 20, 10)
         
-        title_label = QtWidgets.QLabel(f'<span style="font-size: 13px; color: {colors["window_text"]};">Analyzing: </span><b style="font-size: 14px; color: {colors["highlight"]}; font-family: monospace;">{self.function_name}</b>')
-        h_layout.addWidget(title_label)
+        h_layout = QtWidgets.QHBoxLayout()
+        self.title_label = QtWidgets.QLabel(f'<span style="font-size: 13px; color: {colors["window_text"]};">Analyzing: </span><b style="font-size: 14px; color: {colors["highlight"]}; font-family: monospace;">{self.function_name}</b>')
+        h_layout.addWidget(self.title_label)
         h_layout.addStretch()
         
         clear_btn = QtWidgets.QPushButton("Clear Conversation")
@@ -314,6 +316,13 @@ class IDAChatForm(ida_kernwin.PluginForm):
         clear_btn.setStyleSheet(f"QPushButton {{ color: {colors['mid']}; font-weight: bold; font-size: 14px; }} QPushButton:hover {{ color: {colors['highlight']}; text-decoration: underline; }}")
         clear_btn.clicked.connect(self.clear_chat)
         h_layout.addWidget(clear_btn)
+        
+        header_vbox.addLayout(h_layout)
+
+        self.auto_context_cb = QtWidgets.QCheckBox("Auto-change context when navigating to a new function")
+        self.auto_context_cb.setStyleSheet(f"color: {colors['text']}; font-size: 11px;")
+        self.auto_context_cb.setChecked(True)
+        header_vbox.addWidget(self.auto_context_cb)
         
         layout.addWidget(header)
 
@@ -382,11 +391,17 @@ class IDAChatForm(ida_kernwin.PluginForm):
                 "commenting, or patching code in the IDB.*"
             )
             self.add_message(welcome_msg, is_user=False)
+            self.history.append({"role": "assistant", "content": welcome_msg})
+            self.save_history()
         else:
             for msg in self.history[1:]: # Skip system prompt
                 content = msg.get('content', '')
                 role = msg.get('role', '')
                 self.add_message(content, is_user=(role == 'user'))
+
+        self.context_timer = QtCore.QTimer(self.parent)
+        self.context_timer.timeout.connect(self.check_context_change)
+        self.context_timer.start(500)
 
     def add_message(self, text, is_user=True):
         bubble = ChatBubble(text, is_user)
@@ -395,6 +410,87 @@ class IDAChatForm(ida_kernwin.PluginForm):
 
     def scroll_to_bottom(self):
         self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum())
+
+    def check_context_change(self):
+        if not self.auto_context_cb.isChecked():
+            return
+            
+        ea = idaapi.get_screen_ea()
+        func = idaapi.get_func(ea)
+        if not func:
+            return
+            
+        if func.start_ea != self.address:
+            self.change_context(func.start_ea)
+
+    def change_context(self, new_address):
+        try:
+            cfunc = ida_hexrays.decompile(new_address)
+            if not cfunc:
+                return
+            new_code = str(cfunc)
+        except Exception:
+            return
+            
+        new_name = idc.get_func_name(new_address)
+        if not new_name:
+            return
+
+        old_address = self.address
+        old_name = getattr(self, 'function_name', None)
+        old_code = getattr(self, 'decompiled_code', None)
+
+        self.save_history()
+        
+        self.address = new_address
+        self.function_name = new_name
+        self.decompiled_code = new_code
+        
+        is_called_from_old = False
+        if old_address is not None:
+            for xref in idautils.XrefsTo(new_address):
+                func = idaapi.get_func(xref.frm)
+                if func and func.start_ea == old_address:
+                    is_called_from_old = True
+                    break
+                    
+        caller_context = ""
+        if is_called_from_old and old_code:
+            caller_context = f"\n\nContext - This function is called by `{old_name}`:\n```c\n{old_code}\n```"
+        
+        self.system_prompt = {"role": "system", "content": f"You are a helpful reverse-engineering assistant analyzing `{self.function_name}`. Source:\n\n```c\n{self.decompiled_code}\n```{caller_context}"}
+        
+        colors = get_ida_colors()
+        self.title_label.setText(f'<span style="font-size: 13px; color: {colors["window_text"]};">Analyzing: </span><b style="font-size: 14px; color: {colors["highlight"]}; font-family: monospace;">{self.function_name}</b>')
+        
+        # Removed screen clearing so the conversation seamlessly continues visually
+                
+        self.history = []
+        saved_history = load_from_idb(self.address, tag=CHAT_HISTORY_TAG)
+        if saved_history and saved_history.strip():
+            try:
+                self.history = json.loads(saved_history)
+            except Exception as e:
+                LOGGER.log(f"Failed to load chat history: {e}")
+                
+        if not self.history:
+            self.history = [self.system_prompt]
+        else:
+            self.history[0] = self.system_prompt
+            
+        for msg in self.history[1:]:
+            content = msg.get('content', '')
+            role = msg.get('role', '')
+            self.add_message(content, is_user=(role == 'user'))
+            
+        if len(self.history) <= 1 or "Analyzing... OK, I understand everything." not in self.history[-1].get('content', ''):
+            if is_called_from_old:
+                transition_msg = f"You changed to `{self.function_name}`. I have included `{old_name}` as caller context - Analyzing... OK, I understand everything. Please ask if you have any questions."
+            else:
+                transition_msg = f"You changed to `{self.function_name}` - Analyzing... OK, I understand everything. Please ask if you have any questions."
+            self.add_message(transition_msg, is_user=False)
+            self.history.append({"role": "assistant", "content": transition_msg})
+            self.save_history()
 
     def save_history(self):
         """Persist chat history to IDB."""
@@ -499,7 +595,7 @@ def show_chat(address):
         print("[PseudoNote] Error during decompilation.")
         return
 
-    title = f"PseudoNote Chat: {name}"
+    title = "PseudoNote Chat"
     widget = ida_kernwin.find_widget(title)
     if widget:
         ida_kernwin.activate_widget(widget, True)
