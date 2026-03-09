@@ -411,6 +411,8 @@ You can optionally provide the exact total size of the struct so the AI can calc
 - Copy to Clipboard
 - Apply to IDA — parses and imports it into Local Types (`Shift+F1`), then asks if you want to apply the type to the variable
 
+<img width="1123" height="683" alt="image" src="https://github.com/user-attachments/assets/9826b468-7e78-4e7e-a6eb-d31d468c79f3" />
+
 ---
 
 ### Ask Chat (AI)
