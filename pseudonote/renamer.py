@@ -2449,7 +2449,7 @@ class BulkRenamer(QDialog):
                 self.add_log(f"Collision detected for '{f.suggested}', using '{clean_name}' instead.", 'warn')
 
             if ida_name.set_name(f.ea, clean_name, ida_name.SN_NOWARN | ida_name.SN_FORCE):
-                renamed_count += 1
+                applied += 1
                 f.name = clean_name
                 f.suggested = ''
                 f.status = 'Applied'

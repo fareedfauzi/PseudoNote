@@ -172,6 +172,17 @@ def apply_var_renames(ea, suggestions, log_fn=None):
             else:
                 ok = bool(ida_hexrays.rename_lvar(fe, cur_name, cl))
                 final_name = cl
+                
+                if not ok:
+                    # Fallback: Hex-Rays sometimes returns False (e.g. during stale cache wipes)
+                    # but successfully commits the rename anyway. Verify manually.
+                    cf_check = ida_hexrays.decompile(fe)
+                    if cf_check:
+                        for lv_check in cf_check.get_lvars():
+                            if getattr(lv_check, 'name', '') == cl:
+                                ok = True
+                                break
+
                 if not ok:
                     if log_fn: log_fn(f"  [{hex(ea)}] rename_lvar('{cur_name}', '{cl}') returned False. Trying collisions...", 'warn')
                     for i in range(1, 15):
@@ -181,6 +192,20 @@ def apply_var_renames(ea, suggestions, log_fn=None):
                             ok = True
                             if log_fn: log_fn(f"  [{hex(ea)}] Collision fix: renamed '{cur_name}' -> '{final_name}'", 'info')
                             break
+                        
+                        # Fallback for collision candidates
+                        cf_check = ida_hexrays.decompile(fe)
+                        if cf_check:
+                            found = False
+                            for lv_check in cf_check.get_lvars():
+                                if getattr(lv_check, 'name', '') == cand:
+                                    found = True
+                                    break
+                            if found:
+                                final_name = cand
+                                ok = True
+                                if log_fn: log_fn(f"  [{hex(ea)}] Collision fix (verified): renamed '{cur_name}' -> '{final_name}'", 'info')
+                                break
             
             if ok:
                 st.applied += 1

@@ -43,6 +43,13 @@ def get_ida_colors():
         "light": palette.color(QtGui.QPalette.Light).name(),
         "link": palette.color(QtGui.QPalette.Link).name(),
     }
+def get_chat_font():
+    """Get the preferred aesthetic font for chat interactions."""
+    font = QtGui.QFont("Inter", 10)
+    if QtGui.QFontInfo(font).family().lower() != "inter":
+        font = QtWidgets.QApplication.font()
+        font.setPointSize(10)
+    return font
 
 def markdown_to_html(text):
     """
@@ -54,10 +61,14 @@ def markdown_to_html(text):
     # We use a QTextDocument to convert Markdown to a clean, theme-aware HTML.
     doc = QtGui.QTextDocument()
     
+    font = get_chat_font()
+    
     # 1. Define a CSS stylesheet that matches IDA's theme for the parsed content
     # Note: QTextDocument supports a limited subset of CSS.
     style = f"""
         body {{ 
+            font-family: '{font.family()}';
+            font-size: {font.pointSize()}pt;
             color: {colors['text']}; 
             line-height: 1.4;
         }}
@@ -131,11 +142,8 @@ class ChatBubble(QtWidgets.QWidget):
         self.label = QtWidgets.QLabel()
         self.label.setWordWrap(True)
         
-        # Aesthetic font selection: Try 'Inter', fallback to system default
-        font = QtGui.QFont("Inter", 10)
-        if QtGui.QFontInfo(font).family().lower() != "inter":
-            font = QtWidgets.QApplication.font()
-            font.setPointSize(10)
+        # Aesthetic font selection
+        font = get_chat_font()
         self.label.setFont(font)
 
         # PySide6 bitwise flag handling
