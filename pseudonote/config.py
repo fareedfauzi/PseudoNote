@@ -133,6 +133,7 @@ class Config:
         self.bulk_force_rename_sub = False
         self.auto_apply_bulk = False
         self.show_pro_tip = True
+        self.floss_path = ""
 
         self.load()
 
@@ -236,6 +237,9 @@ class Config:
             self.code_font_size = parser.getint("Fonts", "CODE_SIZE", fallback=10)
             self.markdown_font = parser.get("Fonts", "MD_FONT", fallback="Consolas")
             self.markdown_font_size = parser.getint("Fonts", "MD_SIZE", fallback=10)
+
+        if parser.has_section("ExternalTools"):
+            self.floss_path = parser.get("ExternalTools", "FLOSS_PATH", fallback="")
 
         if parser.has_section("Analysis"):
             self.batch_size = parser.getint("Analysis", "BATCH_SIZE", fallback=10)
@@ -355,6 +359,9 @@ class Config:
         parser.set("OpenAICompatible", "API_KEY", self.custom_key)
         parser.set("OpenAICompatible", "BASE_URL", self.custom_url)
         parser.set("OpenAICompatible", "MODEL_NAME", self.custom_model)
+
+        if not parser.has_section("ExternalTools"): parser.add_section("ExternalTools")
+        parser.set("ExternalTools", "FLOSS_PATH", self.floss_path)
 
         if not parser.has_section("Fonts"): parser.add_section("Fonts")
         parser.set("Fonts", "UI_FONT", self.ui_font)

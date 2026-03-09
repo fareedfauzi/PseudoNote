@@ -33,6 +33,7 @@ from pseudonote.handlers import (
     SearchBytesVTHandler,
     SearchStringHandler,
     SearchBytesCyberChefHandler,
+    FlossStringsHandler,
 )
 from pseudonote.deep_analyzer import DeepAnalyzerHandler
 
@@ -283,6 +284,18 @@ class PseudoNotePlugin(idaapi.plugin_t):
         )
         idaapi.register_action(bulk_var_rename_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename", idaapi.SETMENU_APP)
+        
+        # FLOSS Strings Discovery Action
+        floss_strings_desc = idaapi.action_desc_t(
+            "pseudonote:floss_strings",
+            "FLOSS Strings Discovery",
+            FlossStringsHandler(),
+            "Ctrl+Shift+F",
+            "Discover strings built dynamically (Stack, Tight, Decoded) using FLOSS",
+            183
+        )
+        idaapi.register_action(floss_strings_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/FLOSS Strings Discovery", "pseudonote:floss_strings", idaapi.SETMENU_APP)
 
         ask_chat_desc = idaapi.action_desc_t(
             "pseudonote:ask_chat",
@@ -359,6 +372,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Deep Analyzer", "pseudonote:deep_analyzer")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/FLOSS Strings Discovery", "pseudonote:floss_strings")
 
         # Unregister all actions
         for action_id in [
@@ -371,7 +385,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:analyze_struct", "pseudonote:bulk_rename",
             "pseudonote:bulk_var_rename",
             "pseudonote:toggle_highlight", "pseudonote:toggle_disasm_highlight",
-            "pseudonote:ask_chat", "pseudonote:deep_analyzer",
+            "pseudonote:ask_chat", "pseudonote:deep_analyzer", "pseudonote:floss_strings",
             "pseudonote:search_bytes_vt", "pseudonote:search_str_vt",
             "pseudonote:search_str_google", "pseudonote:search_str_github",
             "pseudonote:search_str_msdn", "pseudonote:search_bytes_cyberchef",

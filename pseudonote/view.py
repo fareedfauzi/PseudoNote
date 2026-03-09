@@ -2569,17 +2569,50 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         if wtype not in [idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE, idaapi.BWN_DISASMS]:
             return
 
+        # GROUP 1: PANES & SETTINGS
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:action", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:list", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
+        
+        # Separator 1
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+        
+        # GROUP 2: RENAMING & COMMENTS
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_variables", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:rename_function_malware", "PseudoNote/")
+        
+        if wtype == idaapi.BWN_PSEUDOCODE:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_comments", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_comments", "PseudoNote/")
+        elif wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_asm_comments", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_asm_comments", "PseudoNote/")
+
+        # Separator 2
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+        
+        # GROUP 3: AI & BULK ACTIONS
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:deep_analyzer", "PseudoNote/")
-        # Search menu actions
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_var_rename", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_analyze", "PseudoNote/")
+        
+        if wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
+            # Shellcode specific to Disasm view
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:shellcode_analyst", "PseudoNote/")
+
+        # Separator 3
+        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+
+        # GROUP 4: DISCOVERY & UTILS
+        if wtype == idaapi.BWN_PSEUDOCODE:
+            # Prototype and Struct editor are specific to Pseudocode
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_prototype", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyze_struct", "PseudoNote/")
+        
+        # Search Submenu (Available in both)
         if wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_bytes_vt", "PseudoNote/Search.../")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_bytes_cyberchef", "PseudoNote/Search.../")
@@ -2588,28 +2621,13 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_github", "PseudoNote/Search.../")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_msdn", "PseudoNote/Search.../")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_cyberchef", "PseudoNote/Search.../")
-        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_var_rename", "PseudoNote/")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_analyze", "PseudoNote/")
-        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_prototype", "PseudoNote/")
 
-        if wtype == idaapi.BWN_PSEUDOCODE:
-            # Pseudocode-specific actions
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyze_struct", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_comments", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_comments", "PseudoNote/")
-        elif wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
-            # IDA View (disassembly) specific actions
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_asm_comments", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_asm_comments", "PseudoNote/")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:shellcode_analyst", "PseudoNote/")
-
-        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+        # Final discovery items
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:floss_strings", "PseudoNote/")
+        
         if wtype == idaapi.BWN_PSEUDOCODE:
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:toggle_highlight", "PseudoNote/")
-        elif wtype in [idaapi.BWN_DISASMS, idaapi.BWN_DISASM]:
+        else:
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:toggle_disasm_highlight", "PseudoNote/")
 
 class ShellcodeAnalystDialog(QtWidgets.QDialog):

@@ -1586,3 +1586,25 @@ class SearchStringHandler(idaapi.action_handler_t):
     def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS
 
+
+class FlossStringsHandler(idaapi.action_handler_t):
+    """Launch the FLOSS string discovery tool."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        try:
+            from pseudonote.floss_strings import show_floss_strings_ui
+            show_floss_strings_ui()
+        except ImportError:
+            # Fallback if the file is in the current directory
+            try:
+                import floss_strings
+                floss_strings.show_floss_strings_ui()
+            except Exception as e:
+                print(f"[PseudoNote] Failed to launch FLOSS Strings Tool: {e}")
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
