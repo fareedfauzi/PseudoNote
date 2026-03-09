@@ -508,7 +508,8 @@ See the [Deep Analyzer Pipeline](#deep-analyzer-pipeline) section below for the 
 
 <img width="1202" height="832" alt="image" src="https://github.com/user-attachments/assets/41756753-5d40-4921-bf2b-b4edefcdd427" />
 
-<img width="1920" height="1032" alt="image" src="https://github.com/user-attachments/assets/e7f387db-f9b5-40ca-82d3-afaca8b263af" />
+<img width="1202" height="832" alt="image" src="https://github.com/user-attachments/assets/e2e0536f-75b5-4912-84fb-fbefcbab4858" />
+
 
 #### HTML Report Example on PhantomNet sample analysis
 
