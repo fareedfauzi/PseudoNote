@@ -4,32 +4,49 @@ Qt compatibility layer for PseudoNote.
 Handles PyQt5 / PySide2 / PySide6 differences.
 """
 
-try:
-    from PyQt5 import QtWidgets, QtCore, QtGui, QtPrintSupport
-except ImportError:
+import importlib
+
+QtWidgets = None
+QtCore = None
+QtGui = None
+QtPrintSupport = None
+
+def _try_import(backend):
+    global QtWidgets, QtCore, QtGui, QtPrintSupport
     try:
-        from PySide2 import QtWidgets, QtCore, QtGui, QtPrintSupport
+        QtWidgets = importlib.import_module(f"{backend}.QtWidgets")
+        QtCore = importlib.import_module(f"{backend}.QtCore")
+        QtGui = importlib.import_module(f"{backend}.QtGui")
     except ImportError:
-        try:
-            from PySide6 import QtWidgets, QtCore, QtGui, QtPrintSupport
-        except ImportError:
-            QtWidgets = None
-            QtCore = None
-            QtGui = None
-            QtPrintSupport = None
-            print("[PseudoNote] Qt not found (PyQt5, PySide2 or PySide6 required).")
+        return False
+        
+    try:
+        QtPrintSupport = importlib.import_module(f"{backend}.QtPrintSupport")
+    except ImportError:
+        QtPrintSupport = None
+        
+    return True
+
+if not _try_import("PyQt5"):
+    if not _try_import("PySide2"):
+        if not _try_import("PySide6"):
+            if not _try_import("PyQt6"):
+                print("[PseudoNote] Qt not found (PyQt5, PySide2, PySide6 or PyQt6 required).")
 
 # Flattening for easier imports
-if QtWidgets:
-    # We use __dict__.update to avoid massive explicit lists
-    # This makes 'from pseudonote.qt_compat import QPushButton' work
-    globals().update({k: v for k, v in QtWidgets.__dict__.items() if not k.startswith('__')})
-if QtGui:
-    globals().update({k: v for k, v in QtGui.__dict__.items() if not k.startswith('__')})
-if QtCore:
-    globals().update({k: v for k, v in QtCore.__dict__.items() if not k.startswith('__')})
-if QtPrintSupport:
-    globals().update({k: v for k, v in QtPrintSupport.__dict__.items() if not k.startswith('__')})
+def _export_module_safe(mod):
+    if mod:
+        for k in dir(mod):
+            if not k.startswith('__'):
+                try:
+                    globals()[k] = getattr(mod, k)
+                except Exception:
+                    pass
+
+_export_module_safe(QtWidgets)
+_export_module_safe(QtGui)
+_export_module_safe(QtCore)
+_export_module_safe(QtPrintSupport)
 
 
 def get_text_width(fm, text):
