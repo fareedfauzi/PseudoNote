@@ -130,7 +130,7 @@ Copy these two items into your IDA `plugins/` directory:
 Run the following in your terminal using the same Python that IDA uses:
 
 ```bash
-pip install openai httpx
+pip install openai httpx PySide6
 ```
 
 Optional, to use Anthropic (Claude) or Google Gemini providers:
