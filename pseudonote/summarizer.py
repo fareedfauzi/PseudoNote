@@ -260,8 +260,8 @@ class SummarizerDialog(QtWidgets.QDialog):
         
         opt_layout.addWidget(QLabel("Max Functions:"))
         self.func_sp = QSpinBox()
-        self.func_sp.setRange(1, 500)
-        self.func_sp.setValue(150)
+        self.func_sp.setRange(1, 1000)
+        self.func_sp.setValue(500)
         opt_layout.addWidget(self.func_sp)
         target_layout.addLayout(opt_layout)
         
@@ -334,7 +334,7 @@ class SummarizerDialog(QtWidgets.QDialog):
             self.entry_edit.setText(f"0x{self.entry_ea:X} - {name}")
             self.append_log(f"Target locked onto {name}", "ok")
             
-            existing_summary = load_from_idb(self.entry_ea, tag=90)
+            existing_summary = load_from_idb(self.entry_ea, tag=91)
             if existing_summary:
                 self.result_viewer.setMarkdown(existing_summary)
                 self.append_log("Loaded previously saved summary from IDB.", "ok")
@@ -401,7 +401,7 @@ class SummarizerDialog(QtWidgets.QDialog):
         self.stop_btn.setEnabled(False)
         if response:
             self.result_viewer.setMarkdown(response)
-            save_to_idb(self.entry_ea, response, tag=90)
+            save_to_idb(self.entry_ea, response, tag=91)
             self.append_log("Summary saved to IDB permanently.", "ok")
         self.status_label.setText("Analysis Complete.")
 

@@ -1687,7 +1687,66 @@ if QtWidgets:
 
         def render_markdown_preview(self):
             text = self.note_editor.toPlainText()
-            self.note_previewer.setMarkdown(text)
+            self.display_markdown(self.note_previewer, text)
+
+        def display_markdown(self, viewer, text, prompt_text=None):
+            if not viewer: return
+            
+            # Clean AI response from ```markdown wrappers if present
+            clean_text = text.strip()
+            if clean_text.startswith("```"):
+                lines = clean_text.splitlines()
+                if lines and lines[0].startswith("```"):
+                    if lines[-1].startswith("```"):
+                        clean_text = "\n".join(lines[1:-1]).strip()
+                    else:
+                        clean_text = "\n".join(lines[1:]).strip()
+            
+            # Robust paragraph normalization for better list/header parsing in Qt
+            clean_text = clean_text.replace("\n- ", "\n\n- ").replace("\n* ", "\n\n* ").replace("\n#", "\n\n#")
+            
+            doc = QtGui.QTextDocument()
+            doc.setMarkdown(clean_text)
+            
+            # THEME TOKENS
+            is_light = self.notes_light_mode
+            bg = "#FFFFFF" if is_light else "#1E1E1E"
+            fg = "#222222" if is_light else "#D4D4D4"
+            code_bg = "#F5F5F7" if is_light else "#2D2D2D"
+            code_border = "#E1E4E8" if is_light else "#3E3E42"
+            accent = "#0078D4" if is_light else "#569CD6"
+            header_fg = "#000000" if is_light else "#FFFFFF"
+            hr_color = "#EEEEEE" if is_light else "#333333"
+            
+            css = f"""
+                body {{ background-color: {bg}; color: {fg}; font-family: '{self.config.markdown_font}'; font-size: {self.config.markdown_font_size}pt; line-height: 155%; }}
+                h1, h2, h3 {{ color: {header_fg}; margin-top: 20px; margin-bottom: 8px; font-weight: bold; }}
+                h1 {{ font-size: 1.4em; border-bottom: 1px solid {hr_color}; padding-bottom: 4px; }}
+                h2 {{ font-size: 1.25em; color: {accent}; }}
+                h3 {{ font-size: 1.1em; }}
+                code {{ background-color: {code_bg}; font-family: 'Consolas', 'Courier New', monospace; padding: 2px 5px; border-radius: 4px; font-size: 0.95em; }}
+                pre {{ background-color: {code_bg}; border: 1px solid {code_border}; padding: 12px; border-radius: 6px; margin: 12px 0; font-family: 'Consolas', 'Fira Code', monospace; font-size: 0.95em; }}
+                a {{ color: {accent}; text-decoration: none; }}
+                hr {{ height: 1px; border: none; background-color: {hr_color}; margin: 20px 0; }}
+                li {{ margin-top: 4px; margin-bottom: 4px; }}
+                p {{ margin-bottom: 10px; }}
+            """
+            doc.setDefaultStyleSheet(css)
+            
+            final_html = doc.toHtml()
+            
+            if prompt_text:
+                # Manually inject the prompt header box at the top of the body
+                prompt_style = f"background-color: {code_bg}; border-left: 5px solid {accent}; border-radius: 4px; padding: 12px; margin-bottom: 25px; color: {fg}; font-style: italic;"
+                header_html = f'<div style="{prompt_style}"><b>Prompt:</b> {prompt_text}</div>'
+                
+                # Insert inside <body>
+                if "<body>" in final_html:
+                    final_html = final_html.replace("<body>", f"<body>{header_html}")
+                else:
+                    final_html = header_html + final_html
+                    
+            viewer.setHtml(final_html)
 
         def set_loading(self, active, btn=None, loading_text="Processing..."):
             buttons = [self.asm_convert_btn, self.c_convert_btn, self.explain_code_btn,
@@ -2178,7 +2237,7 @@ if QtWidgets:
             try:
                 if func_ea == self.last_func_ea and response:
                     full_content = response.strip()
-                    self.explanation_viewer.setMarkdown(full_content)
+                    self.display_markdown(self.explanation_viewer, full_content)
                     save_to_idb(func_ea, full_content, tag=79)
             finally: hide_ai_progress()
 
@@ -2265,8 +2324,8 @@ if QtWidgets:
                 if func_ea == self.last_func_ea and response:
                     full_content = response.strip()
                     if context_text:
-                        full_content = context_text + "\n\n---\n\n" + full_content
-                    self.suggestion_viewer.setMarkdown(full_content)
+                        full_content = context_text + "\n\n<hr>\n\n" + full_content
+                    self.display_markdown(self.suggestion_viewer, full_content)
                     save_to_idb(func_ea, full_content, tag=80)
             finally: hide_ai_progress()
 
@@ -2314,9 +2373,9 @@ if QtWidgets:
         def handle_custom_prompt_callback(self, response, func_ea, prompt_text="", **kwargs):
             try:
                 if func_ea == self.last_func_ea and response:
-                    full_content = f"**Prompt:** {prompt_text}\n\n---\n\n" + response.strip()
-                    self.custom_prompt_viewer.setMarkdown(full_content)
-                    save_to_idb(func_ea, full_content, tag=84)
+                    # Pass prompt_text to display_markdown for automatic injection
+                    self.display_markdown(self.custom_prompt_viewer, response.strip(), prompt_text=prompt_text)
+                    save_to_idb(func_ea, f"**Prompt:** {prompt_text}\n\n{response.strip()}", tag=97)
             finally: hide_ai_progress()
 
         def on_get_gflow(self):
@@ -2366,7 +2425,7 @@ if QtWidgets:
             try:
                 if func_ea == self.last_func_ea and response:
                     self.gflow_viewer.setMarkdown(response.strip())
-                    save_to_idb(func_ea, response.strip(), tag=82)
+                    save_to_idb(func_ea, response.strip(), tag=88)
             finally: hide_ai_progress()
 
         def on_get_comments_ai(self):
@@ -2475,7 +2534,7 @@ if QtWidgets:
                 if len(code) < 10 and len(response.strip()) > 50:
                     code = response.strip()
                 
-                save_to_idb(func_ea, code.strip(), tag=83)
+                save_to_idb(func_ea, code.strip(), tag=87)
                 if func_ea == self.last_func_ea:
                     self.comments_ai_editor.setPlainText(code.strip())
                     self.update_save_btn_state(self.code_save_btn, saved=True)
@@ -2594,7 +2653,7 @@ if QtWidgets:
                     self.explanation_viewer.setPlaceholderText("Click 'Explain (AI)' to generate an explanation for the current function.")
                     self.explanation_viewer.setText("")
 
-            gflow = load_from_idb(func_ea, tag=82)
+            gflow = load_from_idb(func_ea, tag=88)
             if self.gflow_viewer:
                 if gflow: self.gflow_viewer.setMarkdown(gflow)
                 else:
@@ -2608,14 +2667,14 @@ if QtWidgets:
                     self.suggestion_viewer.setPlaceholderText("Click 'Function Details (AI)' to generate details.")
                     self.suggestion_viewer.setText("")
 
-            cp_res = load_from_idb(func_ea, tag=84)
+            cp_res = load_from_idb(func_ea, tag=97)
             if getattr(self, 'custom_prompt_viewer', None):
                 if cp_res: self.custom_prompt_viewer.setMarkdown(cp_res)
                 else:
                     self.custom_prompt_viewer.setPlaceholderText("Result will appear here.")
                     self.custom_prompt_viewer.setText("")
 
-            comments = load_from_idb(func_ea, tag=83)
+            comments = load_from_idb(func_ea, tag=87)
             if self.comments_ai_editor:
                 if comments:
                     code = comments.strip()

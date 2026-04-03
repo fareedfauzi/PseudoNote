@@ -21,7 +21,7 @@ from pseudonote.config import CONFIG, LOGGER
 import pseudonote.ai_client as _ai_mod
 from pseudonote.idb_storage import save_to_idb, load_from_idb
 
-CHAT_HISTORY_TAG = 90
+CHAT_HISTORY_TAG = 96
 
 def get_ida_colors():
     """Get theme-aware colors from IDA's palette."""
