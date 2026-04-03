@@ -14,6 +14,7 @@ from pseudonote.highlight import (
     toggle_highlight_handler,
     toggle_disasm_highlight_handler,
 )
+from pseudonote.xrefs import DnspyXrefsHandler
 from pseudonote.handlers import (
     RenameVariablesHandler,
     RenameFunctionHandler,
@@ -36,6 +37,7 @@ from pseudonote.handlers import (
     FlossStringsHandler,
 )
 from pseudonote.deep_analyzer import DeepAnalyzerHandler
+from pseudonote.summarizer import SummarizerHandler
 
 # These will be imported lazily to avoid circular imports
 _view_module = None
@@ -73,9 +75,10 @@ class PseudoNotePlugin(idaapi.plugin_t):
         _ai_mod.AI_CLIENT = SimpleAI(self.config)
 
         # Register Highlighter Actions (Pseudocode)
+        # Register Highlighter Actions (Pseudocode)
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:toggle_highlight", "Toggle Call Highlight (Pseudocode)",
-            toggle_highlight_handler(), "",
+            toggle_highlight_handler(), "Ctrl+Alt+H",
             "Toggle function call highlighting in pseudocode", 48
         ))
         # Register Highlighter Actions (Disasm)
@@ -123,7 +126,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:settings",
             "Configure Settings...",
             SettingsHandler(),
-            "",
+            "Ctrl+Alt+P",
             "Configure AI Provider and Performance settings",
             147
         ))
@@ -230,10 +233,21 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(delete_comments_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments", idaapi.SETMENU_APP)
 
+        xrefs_desc = idaapi.action_desc_t(
+            "pseudonote:dnspy_xrefs",
+            "Interactive Call Hierarchy...",
+            DnspyXrefsHandler(),
+            "Ctrl+Alt+X",
+            "View interactive dnSpy style call hierarchy",
+            73
+        )
+        idaapi.register_action(xrefs_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Interactive Call Hierarchy...", "pseudonote:dnspy_xrefs", idaapi.SETMENU_APP)
+
         # Structure Analysis Action
         struct_action_desc = idaapi.action_desc_t(
             "pseudonote:analyze_struct", "Struct editor",
-            StructAnalysisHandler(), "",
+            StructAnalysisHandler(), "Ctrl+Alt+E",
             "Analyze variable usage to infer structure", 101
         )
         idaapi.register_action(struct_action_desc)
@@ -264,7 +278,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         # Deep Analyzer Action
         deep_analyzer_desc = idaapi.action_desc_t(
             "pseudonote:deep_analyzer",
-            "Deep Analyzer",
+            "Bulk Deep Analyzer",
             DeepAnalyzerHandler(),
             "Ctrl+Shift+S",
             "Automated bottom-up recursive function analysis and summarization",
@@ -272,6 +286,18 @@ class PseudoNotePlugin(idaapi.plugin_t):
         )
         idaapi.register_action(deep_analyzer_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Deep Analyzer", "pseudonote:deep_analyzer", idaapi.SETMENU_APP)
+
+        # Summarizer Action
+        summarizer_desc = idaapi.action_desc_t(
+            "pseudonote:summarizer",
+            "Summarizer",
+            SummarizerHandler(),
+            "Ctrl+Alt+Z",
+            "A light version of Deep Analyzer to summarize the entire function chain",
+            122
+        )
+        idaapi.register_action(summarizer_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Summarizer", "pseudonote:summarizer", idaapi.SETMENU_APP)
 
         # Bulk Variable Renamer Action
         bulk_var_rename_desc = idaapi.action_desc_t(
@@ -372,6 +398,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Deep Analyzer", "pseudonote:deep_analyzer")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Summarizer", "pseudonote:summarizer")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/FLOSS Strings Discovery", "pseudonote:floss_strings")
 
         # Unregister all actions
@@ -385,7 +412,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:analyze_struct", "pseudonote:bulk_rename",
             "pseudonote:bulk_var_rename",
             "pseudonote:toggle_highlight", "pseudonote:toggle_disasm_highlight",
-            "pseudonote:ask_chat", "pseudonote:deep_analyzer", "pseudonote:floss_strings",
+            "pseudonote:ask_chat", "pseudonote:deep_analyzer", "pseudonote:summarizer", "pseudonote:floss_strings",
             "pseudonote:search_bytes_vt", "pseudonote:search_str_vt",
             "pseudonote:search_str_google", "pseudonote:search_str_github",
             "pseudonote:search_str_msdn", "pseudonote:search_bytes_cyberchef",
@@ -393,11 +420,14 @@ class PseudoNotePlugin(idaapi.plugin_t):
         ]:
             idaapi.unregister_action(action_id)
 
-    def open_view(self):
+    def open_view(self, ea=idaapi.BADADDR):
         vm = _get_view_module()
         if not self.view:
             self.view = vm.PseudoNoteView(self.config)
+        self.view._target_ea = ea if ea != idaapi.BADADDR else idaapi.get_screen_ea()
         self.view.Show("PseudoNote")
+        if ea != idaapi.BADADDR:
+            self.view.refresh_ui(force=True, target_ea=ea)
 
     def Unregister(self):
         if self.view:

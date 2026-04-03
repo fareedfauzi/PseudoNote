@@ -327,30 +327,31 @@ if QtWidgets:
 
         def init_ui(self):
             # Application-wide styling for this dialog to match Deep Analyzer aesthetic
-            self.setStyleSheet("""
-                QTabWidget::tab-bar {
-                    alignment: left;
-                }
-                QTabWidget::pane {
-                    border: 1px solid #D1D1D6;
-                    border-radius: 8px;
-                    background: #FFFFFF;
-                }
-                QTabBar::tab {
-                    background: #F2F2F7;
-                    border: 1px solid #D1D1D6;
-                    border-bottom: none;
-                    padding: 8px 16px;
-                    border-radius: 6px 6px 0 0;
-                    font-weight: bold;
-                    color: #636366;
-                }
-                QTabBar::tab:selected {
-                    background: #FFFFFF;
-                    color: #1C1C1E;
-                    border-top: 2px solid #007AFF;
-                }
-            """)
+            pass
+            #self.setStyleSheet("""
+            #    QTabWidget::tab-bar {
+            #        alignment: left;
+            #    }
+            #    QTabWidget::pane {
+            #        border: 1px solid #D1D1D6;
+            #        border-radius: 8px;
+            #        background: #FFFFFF;
+            #    }
+            #    QTabBar::tab {
+            #        background: #F2F2F7;
+            #        border: 1px solid #D1D1D6;
+            #        border-bottom: none;
+            #        padding: 8px 16px;
+            #        border-radius: 6px 6px 0 0;
+            #        font-weight: bold;
+            #        color: #636366;
+            #    }
+            #    QTabBar::tab:selected {
+            #        background: #FFFFFF;
+            #        color: #1C1C1E;
+            #        border-top: 2px solid #007AFF;
+            #    }
+            #""")
             main_layout = QtWidgets.QVBoxLayout()
             self.tabs = QtWidgets.QTabWidget()
             self.provider_tab = QtWidgets.QWidget()
@@ -447,7 +448,7 @@ if QtWidgets:
         def on_test_connection(self):
             self.test_conn_btn.setEnabled(False)
             self.test_result_label.setText("Testing... please wait.")
-            self.test_result_label.setStyleSheet("color: black; font-size: 11px;")
+            self.test_result_label.setStyleSheet("font-size: 11px;")
             
             # Temporary save fields to config for testing
             self.save_fields_to_temp(self.current_provider)
@@ -1352,6 +1353,42 @@ if QtWidgets:
             sg_widget.setLayout(sg_layout)
             self.note_tab_widget.addTab(sg_widget, "Function Details (AI)")
 
+            # Custom Prompt tab
+            cp_widget = QtWidgets.QWidget()
+            cp_layout = QtWidgets.QVBoxLayout()
+            cp_layout.setContentsMargins(0, 5, 0, 0)
+            
+            cp_input_layout = QtWidgets.QHBoxLayout()
+            self.custom_prompt_input = QtWidgets.QLineEdit()
+            self.custom_prompt_input.setPlaceholderText("Enter custom AI prompt...")
+            self.custom_prompt_input.setStyleSheet("QLineEdit { background-color: #1E1E1E; color: #D4D4D4; border: 1px solid #3E3E42; padding: 5px; font-family: 'Inter', 'Segoe UI', sans-serif; }")
+            
+            self.cp_submit_btn = QtWidgets.QPushButton("Ask AI")
+            self.cp_submit_btn.setStyleSheet(self.get_btn_style(blue=True))
+            self.cp_submit_btn.clicked.connect(self.on_custom_prompt)
+            
+            cp_input_layout.addWidget(self.custom_prompt_input)
+            cp_input_layout.addWidget(self.cp_submit_btn)
+            
+            cp_options_layout = QtWidgets.QHBoxLayout()
+            self.cp_include_c_cb = QtWidgets.QCheckBox("Include Pseudocode")
+            self.cp_include_c_cb.setChecked(True)
+            self.cp_include_asm_cb = QtWidgets.QCheckBox("Include Assembly")
+            cp_options_layout.addWidget(self.cp_include_c_cb)
+            cp_options_layout.addWidget(self.cp_include_asm_cb)
+            cp_options_layout.addStretch()
+            
+            self.custom_prompt_viewer = QtWidgets.QTextBrowser()
+            self.custom_prompt_viewer.setOpenExternalLinks(True)
+            self.custom_prompt_viewer.setStyleSheet("QTextBrowser { background-color: #1E1E1E; color: #D4D4D4; border: none; padding: 10px; font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 11pt; }")
+            self.custom_prompt_viewer.setPlaceholderText("Result will appear here.")
+            
+            cp_layout.addLayout(cp_input_layout)
+            cp_layout.addLayout(cp_options_layout)
+            cp_layout.addWidget(self.custom_prompt_viewer)
+            cp_widget.setLayout(cp_layout)
+            self.note_tab_widget.addTab(cp_widget, "Custom prompt")
+
             note_layout.addWidget(self.note_tab_widget)
             self.note_widget.setLayout(note_layout)
             self.splitter.addWidget(self.note_widget)
@@ -1654,7 +1691,7 @@ if QtWidgets:
 
         def set_loading(self, active, btn=None, loading_text="Processing..."):
             buttons = [self.asm_convert_btn, self.c_convert_btn, self.explain_code_btn,
-                       self.explain_malware_btn, self.suggest_name_btn, self.gflow_btn, self.get_comments_ai_btn]
+                       self.explain_malware_btn, self.suggest_name_btn, self.gflow_btn, self.get_comments_ai_btn, getattr(self, 'cp_submit_btn', None)]
             if active:
                 for b in buttons: 
                     if b: b.setEnabled(False)
@@ -1802,6 +1839,13 @@ if QtWidgets:
              safe_set_ss(getattr(self, 'explanation_viewer', None), note_viewer_style)
              safe_set_ss(getattr(self, 'suggestion_viewer', None), note_viewer_style)
              safe_set_ss(getattr(self, 'gflow_viewer', None), note_viewer_style)
+             safe_set_ss(getattr(self, 'custom_prompt_viewer', None), note_viewer_style)
+             
+             if getattr(self, 'cp_include_c_cb', None):
+                 self.cp_include_c_cb.setStyleSheet(f"color: {n_fg};")
+             if getattr(self, 'cp_include_asm_cb', None):
+                 self.cp_include_asm_cb.setStyleSheet(f"color: {n_fg};")
+
              ui_fam = self.config.ui_font
              ui_size = self.config.ui_font_size
              if hasattr(self, 'title_label') and self.title_label:
@@ -1833,7 +1877,7 @@ if QtWidgets:
              primary_btns = [
                  self.show_code_btn, self.manual_edit_btn, self.asm_convert_btn, self.c_convert_btn,
                  self.show_notes_btn, self.explain_code_btn, self.explain_malware_btn, self.suggest_name_btn,
-                 self.gflow_btn, self.note_edit_btn
+                 self.gflow_btn, self.note_edit_btn, getattr(self, 'cp_submit_btn', None)
              ]
              success_btns = [self.code_save_btn, self.note_save_btn]
              danger_btns = [self.note_view_btn]
@@ -2226,6 +2270,55 @@ if QtWidgets:
                     save_to_idb(func_ea, full_content, tag=80)
             finally: hide_ai_progress()
 
+        def on_custom_prompt(self):
+            AI_CLIENT = _get_ai()
+            if not AI_CLIENT or _ai_mod.AI_BUSY: return
+            ea = self.current_ea or idaapi.get_screen_ea()
+            func = idaapi.get_func(ea)
+            if not func: return
+            
+            prompt_text = self.custom_prompt_input.text().strip()
+            if not prompt_text:
+                QtWidgets.QMessageBox.warning(self.parent, "PseudoNote", "Please enter a custom prompt.")
+                return
+
+            show_ai_progress("Analyzing Custom Prompt...")
+            update_ai_progress_details(0, "Gathering context...")
+            
+            code_context = ""
+            if self.cp_include_c_cb.isChecked():
+                try:
+                    cfunc = ida_hexrays.decompile(func.start_ea)
+                    if cfunc: code_context += "## Pseudocode\n```c\n" + str(cfunc) + "\n```\n\n"
+                except: pass
+            
+            if self.cp_include_asm_cb.isChecked():
+                items = list(idautils.FuncItems(func.start_ea))
+                asm = "\n".join([f"{item_ea:X}: {idc.generate_disasm_line(item_ea, 0)}" for item_ea in items[:500]])
+                if asm: code_context += "## Assembly\n```asm\n" + asm + "\n```\n\n"
+
+            update_ai_progress_details(0, "Sending request to AI...")
+            prompt = (
+                f"{prompt_text}\n\n"
+                f"{code_context}\n"
+                "Return the output in Markdown format."
+            )
+            
+            total_chars = [0]
+            def chunk_cb(t):
+                total_chars[0] += len(t)
+                update_ai_progress_details(total_chars[0])
+
+            AI_CLIENT.query_model_async(prompt, functools.partial(self.handle_custom_prompt_callback, func_ea=func.start_ea, prompt_text=prompt_text), on_chunk=chunk_cb, on_status=update_ai_progress_details)
+
+        def handle_custom_prompt_callback(self, response, func_ea, prompt_text="", **kwargs):
+            try:
+                if func_ea == self.last_func_ea and response:
+                    full_content = f"**Prompt:** {prompt_text}\n\n---\n\n" + response.strip()
+                    self.custom_prompt_viewer.setMarkdown(full_content)
+                    save_to_idb(func_ea, full_content, tag=84)
+            finally: hide_ai_progress()
+
         def on_get_gflow(self):
             AI_CLIENT = _get_ai()
             if not AI_CLIENT or _ai_mod.AI_BUSY: return
@@ -2394,10 +2487,16 @@ if QtWidgets:
         def update_ai_progress_details(self, tokens):
             update_ai_progress_details(tokens)
 
-        def refresh_ui(self, force=False):
+        def refresh_ui(self, force=False, target_ea=idaapi.BADADDR):
             if not QtWidgets: return
-            try: ea = idaapi.get_screen_ea()
-            except: ea = idaapi.BADADDR
+            ea = target_ea
+            if ea == idaapi.BADADDR:
+                if hasattr(self, '_target_ea') and self._target_ea != idaapi.BADADDR:
+                    ea = self._target_ea
+                    self._target_ea = idaapi.BADADDR
+                else:
+                    try: ea = idaapi.get_screen_ea()
+                    except: ea = idaapi.BADADDR
             if ea == idaapi.BADADDR: return
             func = idaapi.get_func(ea)
             if not func:
@@ -2509,6 +2608,13 @@ if QtWidgets:
                     self.suggestion_viewer.setPlaceholderText("Click 'Function Details (AI)' to generate details.")
                     self.suggestion_viewer.setText("")
 
+            cp_res = load_from_idb(func_ea, tag=84)
+            if getattr(self, 'custom_prompt_viewer', None):
+                if cp_res: self.custom_prompt_viewer.setMarkdown(cp_res)
+                else:
+                    self.custom_prompt_viewer.setPlaceholderText("Result will appear here.")
+                    self.custom_prompt_viewer.setText("")
+
             comments = load_from_idb(func_ea, tag=83)
             if self.comments_ai_editor:
                 if comments:
@@ -2555,7 +2661,8 @@ class PseudoNoteHandler(idaapi.action_handler_t):
         idaapi.action_handler_t.__init__(self)
     def activate(self, ctx):
         if plugin_instance:
-            plugin_instance.open_view()
+            ea = ctx.cur_ea if hasattr(ctx, 'cur_ea') and ctx.cur_ea != idaapi.BADADDR else idaapi.get_screen_ea()
+            plugin_instance.open_view(ea)
         else:
             print("PseudoNote plugin instance not found.")
         return 1
@@ -2585,9 +2692,11 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         if wtype == idaapi.BWN_PSEUDOCODE:
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_comments", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_comments", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:dnspy_xrefs", "PseudoNote/")
         elif wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:add_asm_comments", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:delete_asm_comments", "PseudoNote/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:dnspy_xrefs", "PseudoNote/")
 
         # Separator 2
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
@@ -2595,6 +2704,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         # GROUP 3: AI & BULK ACTIONS
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:deep_analyzer", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:summarizer", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_var_rename", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_analyze", "PseudoNote/")

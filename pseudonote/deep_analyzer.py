@@ -5545,9 +5545,12 @@ class DeepAnalyzerDialog(QDialog):
             "error":       "",
             "skipped":     "",
         }
-        for ea, node in self.graph.items():
-            item = self._all_tree_items.get(ea)
-            if not item: continue
+        
+        self.tree.setSortingEnabled(False)
+        try:
+            for ea, node in self.graph.items():
+                item = self._all_tree_items.get(ea)
+                if not item: continue
             
             s4 = getattr(node, 'stage4_status', 'PENDING')
             s5 = getattr(node, 'stage5_status', 'PENDING')
@@ -5612,6 +5615,9 @@ class DeepAnalyzerDialog(QDialog):
 
             for col in range(1, self.tree.columnCount()):
                 item.setForeground(col, QtGui.QBrush(QtGui.QColor(color)))
+
+        finally:
+            self.tree.setSortingEnabled(True)
 
     def _schedule_graph_refresh(self, output_dir=None):
         """Debounce render_graph_tab calls — only re-render at most every 500ms."""
