@@ -139,6 +139,64 @@ Optional, to use Anthropic (Claude) or Google Gemini providers:
 pip install anthropic google-generativeai
 ```
 
+Here is the complete section with detailed commands for both the apt method and setting up a local virtual environment (.venv), formatted inside a Markdown block so you can directly copy and paste it into your README.md.
+
+### 2. Install Python Dependencies
+
+Run the following in your terminal using the same Python that IDA uses:
+
+```bash
+pip install openai httpx PySide6
+```
+
+### Linux installation
+Note for Linux Users: On newer Linux distributions (like Ubuntu 23.04+ or Debian 12+), running `pip install` system-wide may fail with an `externally-managed-environment` error. You have three ways to work around this:
+
+---
+
+#### Option 1: Install system-wide via APT (Recommended for simplicity)
+
+```bash
+sudo apt update
+sudo apt install python3-httpx python3-openai python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets
+```
+
+---
+
+#### Option 2: Create a local virtual environment (.venv)
+
+```bash
+# Navigate to the directory where you want the environment
+cd /path/to/ida/plugins
+
+# Create the virtual environment named '.venv'
+python3 -m venv .venv
+
+# Activate it
+source .venv/bin/activate
+
+# Install the dependencies safely inside the virtual environment
+pip install openai httpx PySide6
+```
+
+Note: If you use this method, you may need to configure IDA to use the Python interpreter located inside `./.venv/bin/python`.
+
+---
+
+#### Option 3: Override the restriction (Quickest but not recommended by OS)
+
+```bash
+pip install openai httpx PySide6 --break-system-packages
+```
+
+---
+
+#### Optional: Install additional providers (Anthropic / Google Gemini)
+
+```bash
+pip install anthropic google-generativeai
+```
+
 ### 3. Configure your AI Provider
 
 Open the settings dialog:
