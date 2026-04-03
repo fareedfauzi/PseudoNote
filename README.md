@@ -33,6 +33,7 @@
     - [FLOSS Strings Discovery](#floss-strings-discovery)
     - [Shellcode Analysis (Static)](#shellcode-analysis-static)
     - [Call Highlighter](#call-highlighter)
+    - [Interactive Call Hierarchy](#interactive-call-hierarchy)
     - [Search Utilities](#search-utilities)
   - [Bulk Analyzer vs Deep Analyzer](#bulk-analyzer-vs-deep-analyzer)
   - [Deep Analyzer Pipeline](#deep-analyzer-pipeline)
@@ -90,6 +91,7 @@ Everything PseudoNote generates like notes, renamed symbols, AI analysis, chat h
 | Struct Editor | AI infers struct layout from variable field access patterns |
 | **Utilities** | |
 | Call Highlighter | Highlight function calls in pseudocode and disassembly views |
+| Interactive Call Hierarchy | Interactive dnSpy-style lazy-loaded tree viewer for recursive code references and API tracking |
 | Search Utilities | Search bytes/strings in VirusTotal, Google, GitHub, MSDN, CyberChef |
 
 ---
@@ -271,9 +273,10 @@ PseudoNote supports six AI providers:
 | Function Chain Summarizer | menu only | Both |
 | FLOSS Strings Discovery | `Ctrl+Shift+F` | Both |
 | Shellcode Analysis (Static) | menu only | Disassembly |
-| Toggle Call Highlight (Pseudocode) | menu only | Pseudocode |
+| Toggle Call Highlight (Pseudocode) | `Ctrl+Alt+H` | Pseudocode |
 | Toggle Call Highlight (Graph/Linear) | menu only | Disassembly |
-| Struct Editor | right-click on variable | Pseudocode |
+| Interactive Call Hierarchy | `Ctrl+Alt+X` | Both |
+| Struct Editor | `Ctrl+Alt+E` | Pseudocode |
 | Search Bytes in VirusTotal | right-click, select bytes | Disassembly |
 | Add Bytes to CyberChef | right-click, select bytes | Disassembly |
 | Search String in VirusTotal | right-click, highlight text | Both |
@@ -566,7 +569,7 @@ Results are displayed in a sortable, filterable table. You can filter by tag or 
 
 ### Function Chain Summarizer
 
-**Menu:** Right-click in Disassembly/Pseudocode > `PseudoNote > Summarizer`
+**Menu:** Right-click in Disassembly/Pseudocode > `PseudoNote > Function Chain Summarizer`
 
 A specialized, lightweight alternative to to the Deep Analyzer. Instead of renaming symbols and outputting massive HTML reports, this tool builds a functional Map-Reduce text summary of exactly what an execution chain does.
 
@@ -670,6 +673,20 @@ Highlights function calls visually:
 Also highlights any function with a `fn_`, `wrap_`, or `sub_` prefix, making it easy to identify which calls have already been renamed versus which are still unknown.
 
 <img width="1690" height="816" alt="image" src="https://github.com/user-attachments/assets/0b39f11b-453d-4bc4-8bff-fbb3e9fafe83" />
+
+---
+
+### Interactive Call Hierarchy
+
+**Hotkey:** `Ctrl+Alt+X`
+
+A dedicated, floating interactive tree viewer (inspired by tools like dnSpy) for browsing function cross-references (`Used By`) and dependencies (`Uses`). 
+
+This acts as a massively upgraded replacement for IDA's native `Alt+X` cross-references window:
+- **Recursive Expansion:** Lazily load sub-functions infinitely by expanding graph leaf nodes, letting you visually trace execution pathways without losing your UI context.
+- **API Highlighting:** Optionally resolve `.idata` thunks and `extern` pointers to their visible API string names natively inline (e.g., `__imp_LoadLibraryA`).
+- **Live Search Filtering:** Includes a top-docked text filter that dynamically prunes the hierarchy down to exactly the functions or APIs you are searching for.
+- **Navigation:** Double-click on any element in the tree to automatically snap your IDB to the calling instruction.
 
 ---
 
