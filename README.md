@@ -29,6 +29,7 @@
     - [Bulk Variable Renamer](#bulk-variable-renamer)
     - [Bulk Function Analyzer](#bulk-function-analyzer)
     - [Deep Analyzer](#deep-analyzer)
+    - [Function Chain Summarizer](#function-chain-summarizer)
     - [FLOSS Strings Discovery](#floss-strings-discovery)
     - [Shellcode Analysis (Static)](#shellcode-analysis-static)
     - [Call Highlighter](#call-highlighter)
@@ -68,6 +69,7 @@ Everything PseudoNote generates like notes, renamed symbols, AI analysis, chat h
 | Readable C | Generate AI-rewritten, human-readable C code for the current function; saved to IDB |
 | Function Details | View callers, callees, API references, and string references for the current function |
 | Analyst Notes | Integrated Markdown editor with live preview and formatting toolbar; saved to IDB |
+| Custom Prompt | Interactively define per-function AI prompts with assembly/pseudocode context |
 | Execution Flow | AI-generated plain-English execution flow graph showing branches and intent |
 | **Renaming** | |
 | Rename Function | AI-powered rename of the current function (Code or Malware mode) |
@@ -81,6 +83,7 @@ Everything PseudoNote generates like notes, renamed symbols, AI analysis, chat h
 | Ask Chat (AI) | Persistent dockable chat about the currently open function |
 | Bulk Function Analyzer | Tag and classify functions by malware behavior categories |
 | Deep Analyzer | Full recursive bottom-up analysis pipeline with HTML forensic report |
+| Function Chain Summarizer | Map-Reduce style AI execution flow summaries across a call graph |
 | FLOSS Strings Discovery | Discover stack strings, tight strings, and decoded strings |
 | Shellcode Analysis | Static analysis of selected shellcode bytes/disassembly |
 | Function Prototype | AI infers and applies C calling conventions and prototypes |
@@ -265,6 +268,7 @@ PseudoNote supports six AI providers:
 | Bulk Variable Renamer | `Ctrl+Shift+V` | Both |
 | Bulk Function Analyzer | `Ctrl+Shift+A` | Both |
 | Deep Analyzer | `Ctrl+Shift+S` | Both |
+| Function Chain Summarizer | menu only | Both |
 | FLOSS Strings Discovery | `Ctrl+Shift+F` | Both |
 | Shellcode Analysis (Static) | menu only | Disassembly |
 | Toggle Call Highlight (Pseudocode) | menu only | Pseudocode |
@@ -323,6 +327,16 @@ Key features:
 Typical use cases: documenting what a function does, logging IOCs found, noting questions for later, tracking renamed items.
 
 ![ida_2kEzCpNSsB](https://github.com/user-attachments/assets/a4c58be1-c4a5-4b9c-9833-5cc58319f9d4)
+
+---
+
+#### Custom Prompt
+
+Located within the Analyst Notes section, the **Custom Prompt** sub-tab allows you to query the AI with entirely custom, ad-hoc instructions for the selected function.
+
+Key features:
+- Toggle switches to automatically include **Pseudocode** and/or raw **Assembly** Context alongside your query.
+- Responses and prompts are automatically persisted per-function within the IDB so you can revisit your custom analysis.
 
 ---
 
@@ -547,6 +561,20 @@ Results are displayed in a sortable, filterable table. You can filter by tag or 
 
 ![ida_8MKhw3CUJs](https://github.com/user-attachments/assets/d2e6e19b-f559-48c5-98fc-9b8d4e0fcdc0)
 
+
+---
+
+### Function Chain Summarizer
+
+**Menu:** Right-click in Disassembly/Pseudocode > `PseudoNote > Summarizer`
+
+A specialized, lightweight alternative to to the Deep Analyzer. Instead of renaming symbols and outputting massive HTML reports, this tool builds a functional Map-Reduce text summary of exactly what an execution chain does.
+
+Key Features:
+- **Call Graph Mapping:** Discovers up to your configured node limit (e.g. 150 functions) natively without polluting the IDB with premature renames.
+- **Smart Filtering:** Bypasses libraries, API thunks, and trivially small noise/padding functions automatically.
+- **Map-Reduce Architecture:** Breaks the massive graph of targeted functions into safe chunks, asks the AI to analyze them securely without token overflow, and synthesizes a final cohesive Markdown report representing the top-down logic.
+- **Persistence:** Generated summaries are persistently stored in the IDB `netnode`. Opening the Summarizer on a previously analyzed chain instantly loads the saved Map-Reduced report!
 
 ---
 
@@ -801,6 +829,8 @@ PseudoNote stores everything inside the IDA database (IDB file) using IDA's nati
 | Analyzer results (tag/confidence) | IDB NetNode (same node) | tag 90 |
 | FLOSS string results | IDB NetNode `$ pseudonote:floss_results` | — |
 | Analyst notes (Markdown) | IDB NetNode | — |
+| Function Chain Summary | IDB NetNode (same node) | tag 90 |
+| Custom Prompts | IDB NetNode (same node) | tag 92 |
 
 Deep Analyzer disk artifacts are saved alongside the IDB:
 
