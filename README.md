@@ -177,21 +177,6 @@ sudo apt install python3-httpx python3-openai python3-pyside6.qtcore python3-pys
 ```
 > *(If `apt` says "Unable to locate package", your OS repository does not carry them. You must fall back to Method A).*
 
----
-<<<<<<< Updated upstream
-=======
-
-**Method C: Isolated Virtual Environment**  
-If you prefer strict system isolation:
-```bash
-cd /path/to/ida/plugins
-python3 -m venv .venv
-source .venv/bin/activate
-pip install openai httpx PySide6
-```
-> *(If you use this method, you must manually point IDA to this isolated Python environment using `idapyswitch` or by editing `idapython.cfg`).*
-
->>>>>>> Stashed changes
 #### Optional: Install additional providers (Anthropic / Google Gemini)
 
 ```bash
