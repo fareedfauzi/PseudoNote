@@ -98,79 +98,7 @@ def truncate_code_lines(code, max_lines=750):
     return "\n".join(lines[:max_lines]) + "\n... [TRUNCATED: %d lines omitted]" % (len(lines) - max_lines)
 
 # Styles matching renamer's aesthetic
-STYLES_ANALYZER = STYLES + """
-    QGroupBox {
-        border: 1px solid #D1D1D6;
-        border-radius: 8px;
-        margin-top: 20px;
-        background-color: transparent;
-        font-weight: bold;
-    }
-    QGroupBox::title {
-        subcontrol-origin: margin;
-        subcontrol-position: top left;
-        left: 15px;
-        padding: 0 5px;
-        color: #007AFF;
-        background-color: transparent;
-    }
-    QTabWidget::pane {
-        border: 1px solid #D1D1D6;
-        border-radius: 8px;
-        background: #FFFFFF;
-    }
-    QTabBar::tab {
-        background: #F2F2F7;
-        border: 1px solid #D1D1D6;
-        border-bottom: none;
-        padding: 8px 16px;
-        border-radius: 6px 6px 0 0;
-        font-weight: bold;
-        color: #636366;
-    }
-    QTabBar::tab:selected {
-        background: #FFFFFF;
-        color: #1C1C1E;
-        border-top: 2px solid #007AFF;
-    }
-    QTreeWidget {
-        background-color: #FFFFFF;
-        border: 1px solid #D1D1D6;
-        border-radius: 4px;
-        outline: none;
-    }
-    QTreeWidget::item {
-        padding: 6px;
-    }
-    QHeaderView::section {
-        background-color: #F2F2F7;
-        color: #3A3A3C;
-        padding: 8px;
-        border: none;
-        border-right: 1px solid #D1D1D6;
-        border-bottom: 1px solid #D1D1D6;
-        font-weight: bold;
-    }
-    QProgressBar {
-        background-color: #E5E5EA;
-        border: none;
-        border-radius: 6px;
-        color: #000000;
-        text-align: center;
-        height: 22px;
-    }
-    QProgressBar::chunk {
-        background-color: #007AFF;
-        border-radius: 6px;
-    }
-    QPushButton#secondary { 
-        background-color: #5856D6; 
-        color: #FFFFFF; 
-        border: 1px solid #5856D6; 
-    }
-    QPushButton#secondary:hover { background-color: #4845B2; }
-    QLabel#status_msg { color: #636366; font-style: italic; font-size: 9pt; }
-"""
+STYLES_ANALYZER = ""
 # --- MALWARE API TAXONOMY (Imported) -----------------------------------------
 from pseudonote.api_taxonomy import (
     derive_risk_from_api_tags as _derive_risk_from_api_tags,
@@ -5135,7 +5063,7 @@ class DeepAnalyzerDialog(QDialog):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         # Match renamer's white background for logs
-        self.log_view.setStyleSheet("background: #FFFFFF; color: #1C1C1E; font-size: 10pt; border: none;")
+        self.log_view.setStyleSheet("font-size: 10pt; border: none;")
         self.tabs.addTab(self.log_view, "Log")
         
         # Graph

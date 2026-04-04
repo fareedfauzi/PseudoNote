@@ -55,12 +55,15 @@ class Config:
         self.gemini_model = "gemini-1.5-pro"
         self.lmstudio_model = "local-model"
 
-        self.ui_font = "'Inter', 'Segoe UI'"
+        self.ui_font = "'Inter', 'Ubuntu', 'Cantarell', 'DejaVu Sans', 'Liberation Sans', 'Arial', 'Segoe UI'"
         self.ui_font_size = 9
-        self.code_font = "Consolas"
+        self.code_font = "'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', 'Liberation Mono', 'Consolas', 'Courier New', monospace"
         self.code_font_size = 10
-        self.markdown_font = "Consolas"
+        self.markdown_font = "'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', 'Liberation Mono', 'Consolas', 'Courier New', monospace"
         self.markdown_font_size = 10
+        
+        # UI Appearance
+        self.highlight_color = "#325A32"
 
         # Analysis Defaults (Shared/Fallback)
         self.batch_size = 10
@@ -237,6 +240,7 @@ class Config:
             self.code_font_size = parser.getint("Fonts", "CODE_SIZE", fallback=10)
             self.markdown_font = parser.get("Fonts", "MD_FONT", fallback="Consolas")
             self.markdown_font_size = parser.getint("Fonts", "MD_SIZE", fallback=10)
+            self.highlight_color = parser.get("Fonts", "HIGHLIGHT_COLOR", fallback="#325A32")
 
         if parser.has_section("ExternalTools"):
             self.floss_path = parser.get("ExternalTools", "FLOSS_PATH", fallback="")
@@ -370,6 +374,7 @@ class Config:
         parser.set("Fonts", "CODE_SIZE", str(self.code_font_size))
         parser.set("Fonts", "MD_FONT", self.markdown_font)
         parser.set("Fonts", "MD_SIZE", str(self.markdown_font_size))
+        parser.set("Fonts", "HIGHLIGHT_COLOR", self.highlight_color)
 
         if not parser.has_section("Analysis"): parser.add_section("Analysis")
         parser.set("Analysis", "BATCH_SIZE", str(self.batch_size))

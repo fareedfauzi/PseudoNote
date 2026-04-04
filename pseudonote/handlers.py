@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 IDA action handlers for PseudoNote (rename, comment, signature, struct, bulk rename).
 """
@@ -1474,7 +1474,7 @@ class SearchBytesVTHandler(idaapi.action_handler_t):
     def activate(self, ctx):
         import binascii
         import urllib.parse
-        import webbrowser
+        from pseudonote.qt_compat import QtGui, QtCore
         import ida_bytes
         
         ok, start_ea, end_ea = idaapi.read_range_selection(ctx.widget)
@@ -1491,7 +1491,7 @@ class SearchBytesVTHandler(idaapi.action_handler_t):
                     hex_str = binascii.hexlify(blob).decode("utf-8").upper()
                     query = urllib.parse.quote("content: {" + hex_str + "}")
                     url = f"https://www.virustotal.com/gui/search?query={query}&type=files"
-                    webbrowser.open_new_tab(url)
+                    QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
                     return 1
         print("[PseudoNote] Please highlight assembly bytes to search.")
         return 1
@@ -1509,7 +1509,7 @@ class SearchBytesCyberChefHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         import base64
-        import webbrowser
+        from pseudonote.qt_compat import QtGui, QtCore
         import ida_bytes
         
         ok, start_ea, end_ea = idaapi.read_range_selection(ctx.widget)
@@ -1524,7 +1524,7 @@ class SearchBytesCyberChefHandler(idaapi.action_handler_t):
                 if blob:
                     encoded = base64.b64encode(blob).decode('utf-8')
                     url = f"https://gchq.github.io/CyberChef/#input={encoded}"
-                    webbrowser.open_new_tab(url)
+                    QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
                     return 1
         print("[PseudoNote] Please highlight assembly bytes to send.")
         return 1
@@ -1543,7 +1543,7 @@ class SearchStringHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         import urllib.parse
-        import webbrowser
+        from pseudonote.qt_compat import QtGui, QtCore
         import ida_kernwin
         
         text = ""
@@ -1580,7 +1580,7 @@ class SearchStringHandler(idaapi.action_handler_t):
                 encoded = base64.b64encode(text.encode('utf-8')).decode('utf-8')
                 url = f"https://gchq.github.io/CyberChef/#input={encoded}"
             
-            webbrowser.open_new_tab(url)
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
         return 1
 
     def update(self, ctx):
@@ -1605,6 +1605,129 @@ class FlossStringsHandler(idaapi.action_handler_t):
                 print(f"[PseudoNote] Failed to launch FLOSS Strings Tool: {e}")
         return 1
 
-    def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS
 
+
+# ---------------------------------------------------------------------------
+# IDA-View Advanced Copy handlers
+# ---------------------------------------------------------------------------
+
+def _get_selected_instructions():
+    import ida_kernwin
+    import ida_bytes
+    selection, start_ea, end_ea = ida_kernwin.read_range_selection(None)
+    if not selection:
+        start_ea = ida_kernwin.get_screen_ea()
+        end_ea = ida_bytes.next_head(start_ea, idaapi.BADADDR)
+    
+    ea = start_ea
+    while ea < end_ea and ea != idaapi.BADADDR:
+        if ida_bytes.is_code(ida_bytes.get_full_flags(ea)):
+            yield ea
+        ea = ida_bytes.next_head(ea, end_ea)
+
+def _extract_bytes_for_copy(ea, mask_mode=None):
+    import ida_ua, idc, ida_bytes
+    insn = ida_ua.insn_t()
+    ida_ua.decode_insn(insn, ea)
+    
+    if insn.size == 0:
+        return []
+    
+    raw = ida_bytes.get_bytes(ea, insn.size)
+    if not raw:
+        return []
+        
+    mask = [False] * insn.size
+    
+    if mask_mode == "yara_mask":
+        mnem = idc.print_insn_mnem(ea).lower()
+        if mnem == "call" or mnem.startswith("j"):
+            off = insn.ops[0].offb if insn.ops[0].offb != 0 else 1
+            for i in range(off, insn.size):
+                mask[i] = True
+        else:
+            for op in insn.ops:
+                if op.type != ida_ua.o_void and op.offb != 0:
+                    if op.type in (ida_ua.o_mem, ida_ua.o_far, ida_ua.o_near):
+                        # Mask addresses
+                        for i in range(op.offb, insn.size):
+                            mask[i] = True
+    elif mask_mode == "yara_no_imm":
+        for op in insn.ops:
+            if op.type != ida_ua.o_void and op.offb != 0:
+                if op.type in (ida_ua.o_imm, ida_ua.o_mem, ida_ua.o_far, ida_ua.o_near, ida_ua.o_displ):
+                    for i in range(op.offb, insn.size):
+                        mask[i] = True
+    elif mask_mode == "yara_opcodes":
+        first_offb = insn.size
+        for op in insn.ops:
+            if op.type != ida_ua.o_void and op.offb != 0 and op.offb < first_offb:
+                first_offb = op.offb
+        for i in range(1, insn.size):
+            if i >= first_offb: mask[i] = True
+        if first_offb > 2:
+            for i in range(2, first_offb): mask[i] = True
+    
+    res = []
+    for i in range(insn.size):
+        if mask[i]:
+            res.append(None) # '??'
+        else:
+            res.append(raw[i])
+    return res
+
+class AdvancedCopyHandler(idaapi.action_handler_t):
+    """Handler for copying instruction bytes into various formats."""
+    def __init__(self, mode):
+        idaapi.action_handler_t.__init__(self)
+        self.mode = mode
+    
+    def activate(self, ctx):
+        from pseudonote.qt_compat import QtWidgets
+        if self.mode == "disasm":
+            import idc
+            lines = []
+            for ea in _get_selected_instructions():
+                l = idc.generate_disasm_line(ea, 0)
+                if l: lines.append(idaapi.tag_remove(l))
+            output = "\n".join(lines)
+            QtWidgets.QApplication.clipboard().setText(output)
+            print("[PseudoNote] Copied disassembly to clipboard.")
+            return 1
+
+        all_bytes = []
+        for ea in _get_selected_instructions():
+            all_bytes.append(_extract_bytes_for_copy(ea, mask_mode=self.mode))
+            
+        if not all_bytes:
+            print("[PseudoNote] No instructions selected for advanced copy.")
+            return 0
+            
+        flat_bytes = []
+        for b_arr in all_bytes:
+            flat_bytes.extend(b_arr)
+            
+        output = ""
+        if self.mode in ("yara_raw", "yara_mask", "yara_no_imm", "yara_opcodes"):
+            hex_parts = ["??" if b is None else f"{b:02X}" for b in flat_bytes]
+            output = " ".join(hex_parts)
+        elif self.mode == "yara_rule":
+            hex_parts = [f"{b:02X}" for b in flat_bytes]
+            val = " ".join(hex_parts)
+            output = f"rule auto_gen_rule {{\n    strings:\n        $seq1 = {{ {val} }}\n    condition:\n        $seq1\n}}"
+        elif self.mode == "python":
+            hex_parts = [f"\\x{b:02X}" if b is not None else "\\x00" for b in flat_bytes]
+            output = 'b"' + "".join(hex_parts) + '"'
+        elif self.mode == "c_array":
+            hex_parts = [f"0x{b:02X}" if b is not None else "0x00" for b in flat_bytes]
+            output = "unsigned char seq[] = { " + ", ".join(hex_parts) + " };"
+            
+        QtWidgets.QApplication.clipboard().setText(output)
+        preview = output.replace('\n', ' ')
+        if len(preview) > 60: preview = preview[:57] + "..."
+        print(f"[PseudoNote] Copied: {preview}")
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS

@@ -74,6 +74,38 @@ def hide_ai_progress():
             except RuntimeError:
                 pass # C++ object deleted
 
+def get_safe_font(fam, fallback="sans-serif"):
+    import platform
+    is_linux = platform.system() == "Linux"
+    
+    # 1. Clean the input list
+    if not fam: 
+        raw_fonts = []
+    else:
+        raw_fonts = [f.strip(" '\"") for f in fam.split(",") if f.strip(" '\"")]
+    
+    # 2. Define robust stacks
+    ui_stack = ["Inter", "Ubuntu", "Cantarell", "DejaVu Sans", "Liberation Sans", "Arial", "Segoe UI"]
+    mono_stack = ["JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "Liberation Mono", "Consolas", "Courier New", "monospace"]
+    
+    # 3. Determine base stack
+    is_mono = (fallback == "monospace" or any(m in [f.lower() for f in raw_fonts] for m in ["consolas", "monospace", "courier"]))
+    base_stack = mono_stack if is_mono else ui_stack
+    
+    # 4. Filter and reorder: keep user preferences first, then fallbacks
+    final_fonts = []
+    for f in raw_fonts:
+        if f not in final_fonts: final_fonts.append(f)
+    
+    for f in base_stack:
+        if f not in final_fonts: final_fonts.append(f)
+        
+    if fallback not in final_fonts:
+        final_fonts.append(fallback)
+        
+    # On Linux, often 'sans-serif' or 'monospace' alone is better than any specific font if unsure
+    return ", ".join([f"'{f}'" for f in final_fonts if f])
+
 
 class ProgressOverlay(QtWidgets.QDialog):
     """A standalone floating progress dialog for AI tasks."""
@@ -657,10 +689,37 @@ if QtWidgets:
                 gl = QtWidgets.QGridLayout()
                 font_combo = QtWidgets.QComboBox()
                 font_combo.addItems(families)
-                current_fam = self.font_settings[f"{key}_font"]
-                idx = font_combo.findText(current_fam)
-                if idx >= 0: font_combo.setCurrentIndex(idx)
-                else: font_combo.setCurrentText("Inter" if key=="ui" else "Consolas")
+                current_stack = self.font_settings[f"{key}_font"]
+                
+                # Parse stack (e.g. "'Inter', 'Segoe UI'") into clean names
+                stack_names = [f.strip(" '\"") for f in current_stack.split(",") if f.strip(" '\"")]
+                
+                found_idx = -1
+                for f_name in stack_names:
+                    idx = font_combo.findText(f_name, QtCore.Qt.MatchExactly)
+                    if idx >= 0:
+                        found_idx = idx
+                        break
+                
+                if found_idx >= 0:
+                    font_combo.setCurrentIndex(found_idx)
+                else:
+                    # Linux-friendly fallbacks if nothing in the stack matches
+                    fallbacks = ["Ubuntu", "Cantarell", "DejaVu Sans", "Inter", "Segoe UI", "Consolas"]
+                    if key != "ui":
+                        fallbacks = ["JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "Consolas", "monospace"]
+                    
+                    found_fallback = False
+                    for fb in fallbacks:
+                        idx = font_combo.findText(fb, QtCore.Qt.MatchExactly)
+                        if idx >= 0:
+                            font_combo.setCurrentIndex(idx)
+                            found_fallback = True
+                            break
+                    if not found_fallback:
+                        # Final resort: system default
+                        font_combo.setCurrentIndex(0)
+
                 size_spin = QtWidgets.QSpinBox()
                 size_spin.setRange(6, 72)
                 size_spin.setValue(self.font_settings[f"{key}_size"])
@@ -672,8 +731,35 @@ if QtWidgets:
                 grp.setLayout(gl)
                 layout.addWidget(grp)
                 self.font_widgets[key] = (font_combo, size_spin)
+                
+            hl_grp = QtWidgets.QGroupBox("Highlighter Color")
+            hl_layout = QtWidgets.QFormLayout()
+            
+            self.hl_btn = QtWidgets.QPushButton("Choose Color")
+            self.hl_color = getattr(self.config, 'highlight_color', '#325A32')
+            if int(self.hl_color[1:3], 16) + int(self.hl_color[3:5], 16) + int(self.hl_color[5:7], 16) > 382:
+                txt_col = "#000"
+            else:
+                txt_col = "#FFF"
+            self.hl_btn.setStyleSheet(f"background-color: {self.hl_color}; color: {txt_col}; font-weight: bold; border: 1px solid #AAA; padding: 3px;")
+            self.hl_btn.clicked.connect(self.pick_hl_color)
+            
+            hl_layout.addRow("Highlight Background:", self.hl_btn)
+            hl_grp.setLayout(hl_layout)
+            layout.addWidget(hl_grp)
+            
             layout.addStretch()
             self.appearance_tab.setLayout(layout)
+
+        def pick_hl_color(self):
+            initial_color = QtGui.QColor(self.hl_color)
+            color = QtWidgets.QColorDialog.getColor(initial_color, self, "Pick Highlight Color")
+            if color.isValid():
+                hex_color = color.name().upper()
+                c_sum = int(hex_color[1:3], 16) + int(hex_color[3:5], 16) + int(hex_color[5:7], 16)
+                txt_col = "#000" if c_sum > 382 else "#FFF"
+                self.hl_color = hex_color
+                self.hl_btn.setStyleSheet(f"background-color: {hex_color}; color: {txt_col}; font-weight: bold; border: 1px solid #AAA; padding: 3px;")
 
         def init_analyzer_tab(self):
             layout = QtWidgets.QVBoxLayout()
@@ -825,7 +911,7 @@ if QtWidgets:
             layout = QtWidgets.QVBoxLayout()
             self.log_view = QtWidgets.QPlainTextEdit()
             self.log_view.setReadOnly(True)
-            self.log_view.setStyleSheet("background-color: #1E1E1E; color: #D4D4D4; font-family: Consolas;")
+            self.log_view.setStyleSheet("background-color: #1E1E1E; color: #D4D4D4; font-family: Consolas, monospace;")
             self.log_view.setPlainText("\n".join(LOGGER.logs))
             layout.addWidget(self.log_view)
             self.log_tab.setLayout(layout)
@@ -868,6 +954,8 @@ if QtWidgets:
                 c.ui_font = fw["ui"][0].currentText(); c.ui_font_size = fw["ui"][1].value()
                 c.code_font = fw["code"][0].currentText(); c.code_font_size = fw["code"][1].value()
                 c.markdown_font = fw["md"][0].currentText(); c.markdown_font_size = fw["md"][1].value()
+                
+                c.highlight_color = self.hl_color
 
             # Bulk Renamer tab settings
             if hasattr(self, 'force_rename_cb'):
@@ -941,6 +1029,18 @@ if QtWidgets:
                 c.deep_use_0x = self.deep_use_0x_cb.isChecked()
 
             c.save()
+            
+            # Immediately trigger a refresh so the new highlight colors take effect
+            idaapi.request_refresh(idaapi.IWID_DISASM)
+            idaapi.request_refresh(idaapi.IWID_PSEUDOCODE)
+            try:
+                import pseudonote.highlight as _hl
+                if getattr(_hl, 'highlight_plugin_enabled', False):
+                    if hasattr(_hl, '_graph_hooks_instance') and _hl._graph_hooks_instance:
+                        _hl._graph_hooks_instance.refresh_view()
+            except Exception:
+                pass
+            
             self.accept()
 
     class PseudoNoteView(idaapi.PluginForm):
@@ -1533,7 +1633,8 @@ if QtWidgets:
                  variant = "primary" if blue else "danger"
              fam = self.config.ui_font
              size = self.config.ui_font_size
-             base = f"QPushButton {{ color: #FFFFFF; border-radius: 4px; font-weight: bold; padding: 6px 12px; font-family: '{fam}'; font-size: {size}pt; outline: none; }}"
+             fam_safe = get_safe_font(fam, "sans-serif")
+             base = f"QPushButton {{ color: #FFFFFF; border-radius: 4px; font-weight: bold; padding: 6px 12px; font-family: {fam_safe}; font-size: {size}pt; outline: none; }}"
              if variant == "success":
                  return base + "QPushButton { background-color: #238636; border: 1px solid rgba(255,255,255,0.1); } QPushButton:hover { background-color: #2EA043; } QPushButton:pressed { background-color: #1B5E20; } QPushButton:disabled { background-color: #3E3E42; color: #888888; border: 1px solid #3E3E42; }"
              elif variant == "danger":
@@ -1575,10 +1676,10 @@ if QtWidgets:
                 btn.setToolTip(tooltip)
                 width = 40 if len(label) > 2 else 30
                 btn.setFixedWidth(width); btn.setFixedHeight(24)
-                btn.setStyleSheet("""
-                    QPushButton { background-color: #3E3E42; color: #E0E0E0; border: none; border-radius: 3px; font-family: 'Inter', 'Segoe UI'; font-weight: bold; }
-                    QPushButton:hover { background-color: #4E4E52; }
-                    QPushButton:pressed { background-color: #007ACC; color: white; }
+                btn.setStyleSheet(f"""
+                    QPushButton {{ background-color: #3E3E42; color: #E0E0E0; border: none; border-radius: 3px; font-family: {get_safe_font('Inter, Segoe UI', 'sans-serif')}; font-size: 11px; font-weight: bold; }}
+                    QPushButton:hover {{ background-color: #4E4E52; }}
+                    QPushButton:pressed {{ background-color: #007ACC; color: white; }}
                 """)
                 btn.clicked.connect(functools.partial(self.insert_markdown, editor, start, end))
                 layout.addWidget(btn)
@@ -1718,8 +1819,9 @@ if QtWidgets:
             header_fg = "#000000" if is_light else "#FFFFFF"
             hr_color = "#EEEEEE" if is_light else "#333333"
             
+            m_fam_safe = get_safe_font(self.config.markdown_font, "sans-serif")
             css = f"""
-                body {{ background-color: {bg}; color: {fg}; font-family: '{self.config.markdown_font}'; font-size: {self.config.markdown_font_size}pt; line-height: 155%; }}
+                body {{ background-color: {bg}; color: {fg}; font-family: {m_fam_safe}; font-size: {self.config.markdown_font_size}pt; line-height: 155%; }}
                 h1, h2, h3 {{ color: {header_fg}; margin-top: 20px; margin-bottom: 8px; font-weight: bold; }}
                 h1 {{ font-size: 1.4em; border-bottom: 1px solid {hr_color}; padding-bottom: 4px; }}
                 h2 {{ font-size: 1.25em; color: {accent}; }}
@@ -1805,10 +1907,11 @@ if QtWidgets:
 
         def get_tab_style(self):
             fam = self.config.ui_font; size = self.config.ui_font_size
+            fam_safe = get_safe_font(fam, "sans-serif")
             return f"""
                 QTabWidget::tab-bar {{ alignment: left; }}
                 QTabWidget::pane {{ border: 0; }}
-                QTabBar::tab {{ background: #2D2D2D; color: #CCCCCC; min-width: 160px; padding: 8px 12px; margin-right: 2px; outline: 0; font-family: '{fam}'; font-size: {size}pt; }}
+                QTabBar::tab {{ background: #2D2D2D; color: #CCCCCC; min-width: 160px; padding: 8px 12px; margin-right: 2px; outline: 0; font-family: {fam_safe}; font-size: {size}pt; }}
                 QTabBar::tab:selected {{ background: #1E1E1E; color: #FFFFFF; font-weight: bold; border-top: 2px solid #007ACC; }}
                 QTabBar::tab:hover {{ background: #3E3E42; }}
                 QTabBar::tab:focus {{ outline: none; border: none; }}
@@ -1845,7 +1948,11 @@ if QtWidgets:
              m_fam = self.config.markdown_font
              m_size = self.config.markdown_font_size
 
-             code_style = f"QPlainTextEdit {{ background-color: {c_bg}; color: {c_fg}; border: {c_border}; font-family: '{c_fam}'; font-size: {c_size}pt; }}"
+             c_fam_safe = get_safe_font(c_fam, "monospace")
+             m_fam_safe = get_safe_font(m_fam, "monospace")
+             ui_fam_safe = get_safe_font(self.config.ui_font, "sans-serif")
+
+             code_style = f"QPlainTextEdit {{ background-color: {c_bg}; color: {c_fg}; border: {c_border}; font-family: {c_fam_safe}; font-size: {c_size}pt; }}"
 
              def safe_set_light_mode(w, mode):
                  if not w: return
@@ -1881,13 +1988,13 @@ if QtWidgets:
                      continue
              self.highlighters = valid_hls
 
-             note_style = f"QPlainTextEdit {{ background-color: {n_bg}; color: {n_fg}; border: {n_border}; font-family: '{m_fam}'; font-size: {m_size}pt; }}"
+             note_style = f"QPlainTextEdit {{ background-color: {n_bg}; color: {n_fg}; border: {n_border}; font-family: {m_fam_safe}; font-size: {m_size}pt; }}"
              if hasattr(self, 'note_editor'):
                  try: self.note_editor.setStyleSheet(note_style)
                  except RuntimeError: pass
                  safe_set_light_mode(getattr(self, 'note_editor', None), self.notes_light_mode)
 
-             note_viewer_style = f"QTextBrowser {{ border: {n_border}; background-color: {n_bg}; color: {n_fg}; padding: 10px; font-family: '{m_fam}'; font-size: {m_size}pt; }}"
+             note_viewer_style = f"QTextBrowser {{ border: {n_border}; background-color: {n_bg}; color: {n_fg}; padding: 10px; font-family: {m_fam_safe}; font-size: {m_size}pt; }}"
              def safe_set_ss(obj, style):
                  if not obj: return
                  try: obj.setStyleSheet(style)
@@ -1908,15 +2015,15 @@ if QtWidgets:
              ui_fam = self.config.ui_font
              ui_size = self.config.ui_font_size
              if hasattr(self, 'title_label') and self.title_label:
-                  self.title_label.setStyleSheet(f"color: #CCCCCC; font-weight: bold; font-family: '{ui_fam}'; font-size: {ui_size}pt; margin-left: 5px;")
+                  self.title_label.setStyleSheet(f"color: #CCCCCC; font-weight: bold; font-family: {ui_fam_safe}; font-size: {ui_size}pt; margin-left: 5px;")
              if hasattr(self, 'func_name_label') and self.func_name_label:
-                  self.func_name_label.setStyleSheet(f"color: #CCCCCC; font-weight: bold; font-family: '{ui_fam}'; font-size: {ui_size}pt; margin-left: 5px;")
+                  self.func_name_label.setStyleSheet(f"color: #CCCCCC; font-weight: bold; font-family: {ui_fam_safe}; font-size: {ui_size}pt; margin-left: 5px;")
              if hasattr(self, 'c_status_label') and self.c_status_label:
-                  self.c_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: '{ui_fam}'; font-size: {ui_size}pt;")
+                  self.c_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: {ui_fam_safe}; font-size: {ui_size}pt;")
              if hasattr(self, 'asm_status_label') and self.asm_status_label:
-                  self.asm_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: '{ui_fam}'; font-size: {ui_size}pt;")
+                  self.asm_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: {ui_fam_safe}; font-size: {ui_size}pt;")
              if hasattr(self, 'comments_ai_status_label') and self.comments_ai_status_label:
-                  self.comments_ai_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: '{ui_fam}'; font-size: {ui_size}pt;")
+                  self.comments_ai_status_label.setStyleSheet(f"color: #888888; font-style: italic; background-color: transparent; font-family: {ui_fam_safe}; font-size: {ui_size}pt;")
 
              # Update page backgrounds
              for p in self.code_pages:
@@ -2776,20 +2883,39 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
 
         # GROUP 4: DISCOVERY & UTILS
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:floss_strings", "PseudoNote/")
+        
         if wtype == idaapi.BWN_PSEUDOCODE:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:toggle_highlight", "PseudoNote/")
             # Prototype and Struct editor are specific to Pseudocode
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:suggest_function_prototype", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyze_struct", "PseudoNote/")
+        elif wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:toggle_disasm_highlight", "PseudoNote/")
         
-        # Search Submenu (Available in both)
+        # Separator 4
+        idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
+        
+        # Search Items (Available in both)
         if wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_bytes_vt", "PseudoNote/Search.../")
-            idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_bytes_cyberchef", "PseudoNote/Search.../")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_vt", "PseudoNote/Search.../")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_google", "PseudoNote/Search.../")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_github", "PseudoNote/Search.../")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_msdn", "PseudoNote/Search.../")
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_cyberchef", "PseudoNote/Search.../")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_bytes_vt", "PseudoNote/Search or Add strings.../")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_bytes_cyberchef", "PseudoNote/Search or Add strings.../")
+            
+            # Advanced Copy Submenu
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_yara_raw", "PseudoNote/IDA View Advance copy/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_yara_mask", "PseudoNote/IDA View Advance copy/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_yara_no_imm", "PseudoNote/IDA View Advance copy/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_yara_opcodes", "PseudoNote/IDA View Advance copy/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_yara_rule", "PseudoNote/IDA View Advance copy/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_python", "PseudoNote/IDA View Advance copy/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_c_array", "PseudoNote/IDA View Advance copy/")
+            idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/IDA View Advance copy/")
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_disasm", "PseudoNote/IDA View Advance copy/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_vt", "PseudoNote/Search or Add strings.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_google", "PseudoNote/Search or Add strings.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_github", "PseudoNote/Search or Add strings.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_msdn", "PseudoNote/Search or Add strings.../")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:search_str_cyberchef", "PseudoNote/Search or Add strings.../")
 
         # Final discovery items
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:floss_strings", "PseudoNote/")

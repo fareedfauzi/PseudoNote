@@ -316,11 +316,11 @@ class SummarizerDialog(QtWidgets.QDialog):
         
         self.result_viewer = QTextBrowser()
         self.result_viewer.setOpenExternalLinks(True)
-        self.result_viewer.setStyleSheet("background: #FAF9F6; color: #1C1C1E; border: none; font-size: 11pt;")
+        self.result_viewer.setStyleSheet("border: none; font-size: 11pt;")
         self.tabs.addTab(self.result_viewer, "Summarizer Report")
 
         self.log_viewer = QTextBrowser()
-        self.log_viewer.setStyleSheet("background: #FFFFFF; color: #1C1C1E; font-size: 10pt; border: none;")
+        self.log_viewer.setStyleSheet("font-size: 10pt; border: none;")
         self.tabs.addTab(self.log_viewer, "Execution Log")
 
         layout.addWidget(self.tabs, 1)

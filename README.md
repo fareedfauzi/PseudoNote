@@ -33,8 +33,9 @@
     - [FLOSS Strings Discovery](#floss-strings-discovery)
     - [Shellcode Analysis (Static)](#shellcode-analysis-static)
     - [Call Highlighter](#call-highlighter)
-    - [Interactive Call Hierarchy](#interactive-call-hierarchy)
+    - [Call Tree](#call-tree)
     - [Search Utilities](#search-utilities)
+    - [IDA View Advance Copy](#ida-view-advance-copy)
   - [Bulk Analyzer vs Deep Analyzer](#bulk-analyzer-vs-deep-analyzer)
   - [Deep Analyzer Pipeline](#deep-analyzer-pipeline)
     - [PHASE 1: Discovery \& Preparation](#phase-1-discovery--preparation)
@@ -91,7 +92,7 @@ Everything PseudoNote generates like notes, renamed symbols, AI analysis, chat h
 | Struct Editor | AI infers struct layout from variable field access patterns |
 | **Utilities** | |
 | Call Highlighter | Highlight function calls in pseudocode and disassembly views |
-| Interactive Call Hierarchy | Interactive dnSpy-style lazy-loaded tree viewer for recursive code references and API tracking |
+| Call Tree | Interactive dnSpy-style lazy-loaded tree viewer for recursive code references and API tracking |
 | Search Utilities | Search bytes/strings in VirusTotal, Google, GitHub, MSDN, CyberChef |
 
 ---
@@ -177,6 +178,20 @@ sudo apt install python3-httpx python3-openai python3-pyside6.qtcore python3-pys
 > *(If `apt` says "Unable to locate package", your OS repository does not carry them. You must fall back to Method A).*
 
 ---
+<<<<<<< Updated upstream
+=======
+
+**Method C: Isolated Virtual Environment**  
+If you prefer strict system isolation:
+```bash
+cd /path/to/ida/plugins
+python3 -m venv .venv
+source .venv/bin/activate
+pip install openai httpx PySide6
+```
+> *(If you use this method, you must manually point IDA to this isolated Python environment using `idapyswitch` or by editing `idapython.cfg`).*
+
+>>>>>>> Stashed changes
 #### Optional: Install additional providers (Anthropic / Google Gemini)
 
 ```bash
@@ -657,7 +672,7 @@ Also highlights any function with a `fn_`, `wrap_`, or `sub_` prefix, making it 
 
 ---
 
-### Interactive Call Hierarchy
+### Call Tree
 
 **Hotkey:** `Ctrl+Alt+X`
 
@@ -690,6 +705,28 @@ Available from the right-click context menu in Disassembly or Pseudocode views.
 > If no text is highlighted when triggering a string search, a prompt dialog appears asking you to type the search term manually.
 
 <img width="725" height="102" alt="image" src="https://github.com/user-attachments/assets/d5568c63-6f5f-4d73-b35d-e4ccda44d6a4" />
+
+---
+
+
+### IDA View Advance Copy
+
+**Menu:** Right-click in IDA-View (Disassembly) > `PseudoNote > IDA View Advance copy`
+
+Highly optimized copy formats designed for malware reporting and signature development. This utility extracts raw bytes and opcodes directly from the current selection and converts them into various ready-to-use formats.
+
+| Format | Description |
+|---|---|
+| **YARA Raw** | Raw hex bytes formatted for YARA rules (e.g., `{ 55 8B EC 83 EC 10 }`) |
+| **YARA Mask** | Auto-generates wildcards (`??`) for immediate offsets and relative jumps |
+| **YARA No Imm** | Masks all immediate values, useful for finding similar functions with different constants |
+| **YARA Opcodes** | Extracts only the opcodes and prefixes, ignoring operands entirely |
+| **YARA Rule** | Generates a complete, valid YARA rule template for the selected code |
+| **Python** | Formats bytes as a Python byte string: `b"\x55\x8b\xec..."` |
+| **C Array** | Formats bytes as a C hex array: `unsigned char data[] = { 0x55, 0x8B, ... };` |
+| **Disassembly** | Copies the clean disassembly text without the address/offset prefixes |
+
+Typical use cases: Creating YARA signatures for malicious functions, extracting shellcode for a Python emulator, or copying clean code logic into a technical report.
 
 ---
 

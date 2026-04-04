@@ -12,7 +12,31 @@ import ida_lines
 import ida_segment
 
 
-HIGHLIGHT_COLOR = 0xE0D8FF  # Light Pink
+HIGHLIGHT_COLOR_LIGHT = 0xE0D8FF  # Light Pink (BGR for #FFD8E0)
+HIGHLIGHT_COLOR_DARK = 0x325A32   # Muted Dark Green (BGR for #325A32)
+
+def get_highlight_color():
+    color = HIGHLIGHT_COLOR_DARK
+
+    try:
+        from pseudonote.plugin import CONFIG
+        
+        def parse_rgb(s, fallback):
+            if not s or not s.startswith('#'): return fallback
+            try:
+                r = int(s[1:3], 16)
+                g = int(s[3:5], 16)
+                b = int(s[5:7], 16)
+                return (b << 16) | (g << 8) | r
+            except Exception:
+                return fallback
+
+        color = parse_rgb(getattr(CONFIG, 'highlight_color', '#325A32'), color)
+    except Exception:
+        pass
+
+    return color
+
 highlight_plugin_enabled = False
 
 # The Hexrays_Hooks subclass is created lazily via _create_highlight_hooks()
@@ -48,12 +72,13 @@ def _create_highlight_hooks():
 
         def _apply_highlight(self, vu, pc):
             if pc and highlight_plugin_enabled and len(pc) < 5000:
+                color = get_highlight_color()
                 for sl in pc:
                     line = sl.line
                     clean_line = ida_lines.tag_remove(line).strip()
                     if _highlight_func_call_pattern.search(clean_line) or \
                        _highlight_prefix_pattern.search(clean_line):
-                        sl.bgcolor = HIGHLIGHT_COLOR
+                        sl.bgcolor = color
             return
 
         def text_ready(self, vu):
@@ -78,7 +103,7 @@ class GraphLinearHighlightHooks(idaapi.IDB_Hooks):
         disasm_line = ida_lines.generate_disasm_line(ea, 0)
         lower_line = disasm_line.lower()
         if "call" in lower_line or "jmp" in lower_line or _highlight_prefix_pattern.search(disasm_line):
-            idaapi.set_item_color(ea, HIGHLIGHT_COLOR)
+            idaapi.set_item_color(ea, get_highlight_color())
 
     def _remove_highlight(self, ea):
         idaapi.set_item_color(ea, 0xFFFFFFFF)

@@ -174,7 +174,7 @@ class ChatBubble(QtWidgets.QWidget):
             
             self.bubble.setStyleSheet(f"""
                 QFrame {{
-                    background-color: #ffffff;
+                    background-color: {colors['base']};
                     border-radius: 20px;
                     border-bottom-left-radius: 4px;
                 }}

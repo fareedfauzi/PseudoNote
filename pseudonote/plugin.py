@@ -35,6 +35,7 @@ from pseudonote.handlers import (
     SearchStringHandler,
     SearchBytesCyberChefHandler,
     FlossStringsHandler,
+    AdvancedCopyHandler,
 )
 from pseudonote.deep_analyzer import DeepAnalyzerHandler
 from pseudonote.summarizer import SummarizerHandler
@@ -84,7 +85,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         # Register Highlighter Actions (Disasm)
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:toggle_disasm_highlight", "Toggle Call Highlight (Graph/Linear)",
-            toggle_disasm_highlight_handler(), "",
+            toggle_disasm_highlight_handler(), "Ctrl+Shift+H",
             "Toggle function call highlighting in Graph/Linear view", 48
         ))
 
@@ -192,7 +193,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:add_asm_comments",
             "Add Section Comments (IDA-View)",
             AsmCommentHandler(),
-            "",
+            "Ctrl+Shift+C",
             "Ask AI to add concise section comments to the disassembly",
             45
         )
@@ -203,7 +204,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:delete_asm_comments",
             "Delete IDA-View Comments",
             DeleteAsmCommentsHandler(),
-            "",
+            "Ctrl+Shift+D",
             "Delete all IDA-view comments in the selected range or enclosing function",
             45
         )
@@ -215,7 +216,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:shellcode_analyst",
             "Shellcode Analysis (Static)",
             ShellcodeAnalystHandler(),
-            "",
+            "Ctrl+Shift+E",
             "Open the static shellcode analysis window",
             124
         )
@@ -235,14 +236,14 @@ class PseudoNotePlugin(idaapi.plugin_t):
 
         xrefs_desc = idaapi.action_desc_t(
             "pseudonote:dnspy_xrefs",
-            "Interactive Call Hierarchy...",
+            "Call Tree",
             DnspyXrefsHandler(),
             "Ctrl+Alt+X",
             "View interactive dnSpy style call hierarchy",
             73
         )
         idaapi.register_action(xrefs_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Interactive Call Hierarchy...", "pseudonote:dnspy_xrefs", idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Call Tree...", "pseudonote:dnspy_xrefs", idaapi.SETMENU_APP)
 
         # Structure Analysis Action
         struct_action_desc = idaapi.action_desc_t(
@@ -338,38 +339,48 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:search_bytes_vt", "Search bytes in VirusTotal",
             SearchBytesVTHandler(), "",
-            "Search highlighted bytes in VirusTotal", -1
+            "Search highlighted bytes in VirusTotal", 128
         ))
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:search_bytes_cyberchef", "Add bytes to CyberChef input",
             SearchBytesCyberChefHandler(), "",
-            "Add highlighted bytes to CyberChef input", -1
+            "Add highlighted bytes to CyberChef input", 128
         ))
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:search_str_vt", "Search string in VirusTotal",
             SearchStringHandler("vt"), "",
-            "Search string in VirusTotal", -1
+            "Search string in VirusTotal", 128
         ))
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:search_str_google", "Search string in Google",
             SearchStringHandler("google"), "",
-            "Search string in Google", -1
+            "Search string in Google", 128
         ))
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:search_str_github", "Search string in GitHub",
             SearchStringHandler("github"), "",
-            "Search string in GitHub", -1
+            "Search string in GitHub", 128
         ))
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:search_str_msdn", "Search string (WinAPI) in MSDN",
             SearchStringHandler("msdn"), "",
-            "Search string (WinAPI) in MSDN Documentation", -1
+            "Search string (WinAPI) in MSDN Documentation", 128
         ))
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:search_str_cyberchef", "Add strings to CyberChef input",
             SearchStringHandler("cyberchef"), "",
-            "Add string to CyberChef input", -1
+            "Add string to CyberChef input", 128
         ))
+        
+        # Advanced Copy Actions
+        idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_yara_raw", "Copy Hex Bytes", AdvancedCopyHandler("yara_raw"), "", "Copy selected bytes as hex string", 31))
+        idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_yara_rule", "Generate Yara Rule for the bytes", AdvancedCopyHandler("yara_rule"), "", "Generate a simple Yara rule from selected bytes", 31))
+        idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_yara_mask", "Copy Hex (Mask Targets/Relocs)", AdvancedCopyHandler("yara_mask"), "", "Copy selected bytes masking jumps and memory references", 31))
+        idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_yara_no_imm", "Copy Hex (Mask Immediates)", AdvancedCopyHandler("yara_no_imm"), "", "Copy selected bytes masking immediates and addresses", 31))
+        idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_yara_opcodes", "Copy Hex (Opcodes Only)", AdvancedCopyHandler("yara_opcodes"), "", "Copy selected bytes masking everything but opcodes", 31))
+        idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_python", "Copy Python byte literal", AdvancedCopyHandler("python"), "", 'Copy selected bytes as python string', 31))
+        idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_c_array", "Copy C/C++ array", AdvancedCopyHandler("c_array"), "", "Copy selected bytes as a C array", 31))
+        idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_disasm", "Copy Disassembly Text", AdvancedCopyHandler("disasm"), "", "Copy selected disassembly lines", 31))
 
         self.ctx_hooks = vm.ContextMenuHooks()
         self.ctx_hooks.hook()
@@ -416,7 +427,10 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:search_bytes_vt", "pseudonote:search_str_vt",
             "pseudonote:search_str_google", "pseudonote:search_str_github",
             "pseudonote:search_str_msdn", "pseudonote:search_bytes_cyberchef",
-            "pseudonote:search_str_cyberchef",
+            "pseudonote:search_str_cyberchef", "pseudonote:copy_yara_raw",
+            "pseudonote:copy_yara_rule", "pseudonote:copy_yara_mask",
+            "pseudonote:copy_yara_no_imm", "pseudonote:copy_yara_opcodes",
+            "pseudonote:copy_python", "pseudonote:copy_c_array", "pseudonote:copy_disasm",
         ]:
             idaapi.unregister_action(action_id)
 
