@@ -39,6 +39,7 @@ from pseudonote.handlers import (
 )
 from pseudonote.deep_analyzer import DeepAnalyzerHandler
 from pseudonote.summarizer import SummarizerHandler
+from pseudonote.hexview import OpenHexViewHandler
 
 # These will be imported lazily to avoid circular imports
 _view_module = None
@@ -382,6 +383,17 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_c_array", "Copy C/C++ array", AdvancedCopyHandler("c_array"), "", "Copy selected bytes as a C array", 31))
         idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_disasm", "Copy Disassembly Text", AdvancedCopyHandler("disasm"), "", "Copy selected disassembly lines", 31))
 
+        # Hex Viewer Action
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:hex_viewer",
+            "Hex Viewer",
+            OpenHexViewHandler(),
+            "Ctrl+Alt+B",
+            "Open the PseudoNote Hex Viewer (synced with current function)",
+            80
+        ))
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Hex Viewer", "pseudonote:hex_viewer", idaapi.SETMENU_APP)
+
         self.ctx_hooks = vm.ContextMenuHooks()
         self.ctx_hooks.hook()
 
@@ -431,6 +443,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:copy_yara_rule", "pseudonote:copy_yara_mask",
             "pseudonote:copy_yara_no_imm", "pseudonote:copy_yara_opcodes",
             "pseudonote:copy_python", "pseudonote:copy_c_array", "pseudonote:copy_disasm",
+            "pseudonote:hex_viewer",
         ]:
             idaapi.unregister_action(action_id)
 

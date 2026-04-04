@@ -2845,6 +2845,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         # GROUP 1: PANES & SETTINGS
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:action", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:list", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:hex_viewer", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
         
         # Separator 1

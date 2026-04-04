@@ -36,6 +36,7 @@
     - [Call Tree](#call-tree)
     - [Search Utilities](#search-utilities)
     - [IDA View Advance Copy](#ida-view-advance-copy)
+    - [Hex Viewer](#hex-viewer)
   - [Bulk Analyzer vs Deep Analyzer](#bulk-analyzer-vs-deep-analyzer)
   - [Deep Analyzer Pipeline](#deep-analyzer-pipeline)
     - [PHASE 1: Discovery \& Preparation](#phase-1-discovery--preparation)
@@ -887,7 +888,78 @@ The config is stored at `PseudoNote.ini` in the plugin folder, or `~/.pseudonote
 
 ---
 
-## Tips & Best Practices
+### Hex Viewer
+
+The PseudoNote Hex Viewer is a custom dockable pane that provides a clean, professional hex editor view of the entire loaded binary — not just the current function. It is designed as a companion to the IDA-View and Pseudocode panes for tasks that require working directly with raw bytes: signature development, shellcode extraction, and inspecting global data arrays.
+
+**Opening the Hex Viewer**
+
+| Method | Action |
+|---|---|
+| Hotkey | `Ctrl+Alt+B` |
+| Right-click menu | `PseudoNote > Hex Viewer` |
+| Plugin menu | `Edit > Plugins > PseudoNote > Hex Viewer` |
+
+**Layout**
+
+The viewer is divided into three columns:
+
+- **Address gutter** — absolute EA for each row in hex.
+- **Hex bytes** — 16 bytes per row, grouped in sets of 8. Non-loaded bytes display as `..`.
+- **ASCII** — printable characters rendered inline; non-printable bytes shown as `·`.
+
+The view automatically adapts to IDA's current color theme (light or dark) by reading Qt's palette directly from the embedded widget at paint time.
+
+**Cursor Sync**
+
+When **Auto-follow cursor** is enabled (default), the Hex Viewer scrolls to and marks the currently selected byte in IDA-View or Pseudocode with a red rectangle. Uncheck the box or use **Sync Now** to control syncing manually.
+
+**Navigating the Binary**
+
+The viewer loads the entire binary memory map (all segments) on open. Use the **Jump to EA** input field in the toolbar to navigate directly to any address:
+
+1. Type or paste a hex address into the field.
+2. Press `Enter` or click **Go**.
+
+**Selecting Bytes**
+
+| Action | Result |
+|---|---|
+| Left-click | Set selection start at byte |
+| Left-click + drag | Select a contiguous byte range |
+| Shift + Click | Extend existing selection to clicked byte |
+| Shift + Scroll Up | Scroll view up and extend selection to top-visible row |
+| Shift + Scroll Down | Scroll view down and extend selection to bottom-visible row |
+
+The status bar at the bottom shows the current EA, selected range, and byte value in hex, decimal, and ASCII.
+
+**Copying Selected Bytes**
+
+Right-click any selection to open the copy menu:
+
+| Format | Output Example |
+|---|---|
+| Hex Bytes | `55 8B EC 83 EC 10` |
+| YARA pattern | `{ 55 8B EC 83 EC 10 }` |
+| Python literal | `b"\x55\x8b\xec\x83\xec\x10"` |
+| C/C++ array | `unsigned char data[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x10 };` |
+| Base64 | Standard base64-encoded string |
+
+**Highlighting Byte Ranges**
+
+Multiple byte ranges can be highlighted simultaneously with distinct colors, useful for annotating protocol fields, shellcode stages, or suspicious sequences during manual analysis.
+
+1. Select a byte range by clicking and dragging (or using Shift+Click / Shift+Scroll for large ranges).
+2. Right-click and choose **Highlight selection...**
+3. Set a label (optional) and pick a color from the dialog.
+4. Click **OK** — the range is immediately highlighted in both the hex and ASCII columns.
+
+To remove a highlight, right-click any highlighted byte and choose **Remove highlight: label**. To remove all, choose **Clear all highlights**.
+
+Highlights are rendered as flat, seamless color fills matching the style of most professional hex editors — no per-byte boxes or borders.
+
+---
+
 
 **Start with Bulk Analyzer for orientation**
 
