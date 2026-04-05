@@ -228,7 +228,14 @@ PseudoNote supports six AI providers:
 3. Right-click > **PseudoNote** > pick an action.
 4. Or use a hotkey from the table below.
 
-<img width="1531" height="957" alt="image" src="https://github.com/user-attachments/assets/88012abf-49e2-4856-8cae-8ab12341b1a7" />
+Pseudocode right click menu:
+
+<img width="1536" height="952" alt="image" src="https://github.com/user-attachments/assets/12a002a2-c94d-4812-99f0-10719d41e316" />
+
+IDA view' right click menu:
+
+<img width="1452" height="956" alt="image" src="https://github.com/user-attachments/assets/36a0029d-815b-4626-969c-439c7e06e146" />
+
 
 ---
 
@@ -323,6 +330,8 @@ Key features:
 - Toggle switches to automatically include **Pseudocode** and/or raw **Assembly** Context alongside your query.
 - Responses and prompts are automatically persisted per-function within the IDB so you can revisit your custom analysis.
 
+<img width="953" height="499" alt="image" src="https://github.com/user-attachments/assets/5afba3dd-97a2-4be7-9c43-556626113f93" />
+
 ---
 
 #### Function Explain
@@ -330,7 +339,6 @@ Key features:
 Explain what does the current function do.
 
 <img width="1736" height="957" alt="image" src="https://github.com/user-attachments/assets/860409a0-3481-42c1-bfe8-59173a2f8b29" />
-
 
 ---
 
@@ -561,6 +569,8 @@ Key Features:
 - **Map-Reduce Architecture:** Breaks the massive graph of targeted functions into safe chunks, asks the AI to analyze them securely without token overflow, and synthesizes a final cohesive Markdown report representing the top-down logic.
 - **Persistence:** Generated summaries are persistently stored in the IDB `netnode`. Opening the Summarizer on a previously analyzed chain instantly loads the saved Map-Reduced report!
 
+<img width="1102" height="782" alt="image" src="https://github.com/user-attachments/assets/760b735c-0f57-45e0-9598-8cfb432050a1" />
+
 ---
 
 ### Deep Analyzer
@@ -631,11 +641,11 @@ Results are shown in a tabbed IDA chooser with columns for Type, String value, a
 
 ---
 
-### Shellcode Analysis (Static)
+### Bytes/Instruction/Shellcode Analysis
 
-**Menu:** `Edit > Plugins > PseudoNote > Shellcode Analysis (Static)`
+**Menu:** `Edit > Plugins > PseudoNote > Bytes/Instruction/Shellcode Analysis)`
 
-Opens a static analysis dialog for selected shellcode. Select a byte range in IDA-View before launching — the selected bytes and disassembly are pre-loaded into the dialog. The AI provides a high-level analysis of the shellcode's likely purpose, technique, and target platform.
+Opens a static analysis dialog for selected Bytes/Instruction/Shellcode. Select a byte range in IDA-View before launching — the selected bytes and disassembly are pre-loaded into the dialog. The AI provides a high-level analysis of the Bytes/Instruction/Shellcode's likely purpose, technique, and target platform.
 
 > Tested primarily with msfvenom-generated shellcode.
 
@@ -670,6 +680,9 @@ This acts as a massively upgraded replacement for IDA's native `Alt+X` cross-ref
 - **Live Search Filtering:** Includes a top-docked text filter that dynamically prunes the hierarchy down to exactly the functions or APIs you are searching for.
 - **Navigation:** Double-click on any element in the tree to automatically snap your IDB to the calling instruction.
 
+<img width="567" height="632" alt="image" src="https://github.com/user-attachments/assets/e90e8863-157f-4cec-8660-e9497fe79160" />
+
+
 ---
 
 ### Search Utilities
@@ -686,7 +699,7 @@ Available from the right-click context menu in Disassembly or Pseudocode views.
 | Search String (WinAPI) in MSDN | Highlight text, right-click | MSDN Documentation search |
 | Add String to CyberChef | Highlight text, right-click | Opens CyberChef with the string as input |
 
-<img width="629" height="440" alt="image" src="https://github.com/user-attachments/assets/8caad3f4-10bb-4a62-afb3-f1674fef02e6" />
+<img width="575" height="198" alt="image" src="https://github.com/user-attachments/assets/ddbfdb2c-0ec9-4161-a9b7-7d3260343a5f" />
 
 > If no text is highlighted when triggering a string search, a prompt dialog appears asking you to type the search term manually.
 
@@ -713,6 +726,87 @@ Highly optimized copy formats designed for malware reporting and signature devel
 | **Disassembly** | Copies the clean disassembly text without the address/offset prefixes |
 
 Typical use cases: Creating YARA signatures for malicious functions, extracting shellcode for a Python emulator, or copying clean code logic into a technical report.
+
+<img width="244" height="207" alt="image" src="https://github.com/user-attachments/assets/895cc38e-44bc-43f7-8e55-53fa4655587a" />
+
+---
+
+### Hex Viewer
+
+The PseudoNote Hex Viewer is a custom dockable pane that provides a clean, professional hex editor view of the entire loaded binary — not just the current function. It is designed as a companion to the IDA-View and Pseudocode panes for tasks that require working directly with raw bytes: signature development, shellcode extraction, and inspecting global data arrays.
+
+<img width="1535" height="738" alt="image" src="https://github.com/user-attachments/assets/ce5d356a-854d-4e62-8e34-22e841bf421e" />
+
+**Opening the Hex Viewer**
+
+| Method | Action |
+|---|---|
+| Hotkey | `Ctrl+Alt+B` |
+| Right-click menu | `PseudoNote > Hex Viewer` |
+| Plugin menu | `Edit > Plugins > PseudoNote > Hex Viewer` |
+
+**Layout**
+
+The viewer is divided into three columns:
+
+- **Address gutter** — absolute EA for each row in hex.
+- **Hex bytes** — 16 bytes per row, grouped in sets of 8. Non-loaded bytes display as `..`.
+- **ASCII** — printable characters rendered inline; non-printable bytes shown as `·`.
+
+The view automatically adapts to IDA's current color theme (light or dark) by reading Qt's palette directly from the embedded widget at paint time.
+
+**Cursor Sync**
+
+When **Auto-follow cursor** is enabled (default), the Hex Viewer scrolls to and marks the currently selected byte in IDA-View or Pseudocode with a red rectangle. Uncheck the box or use **Sync Now** to control syncing manually.
+
+**Navigating the Binary**
+
+The viewer loads the entire binary memory map (all segments) on open. Use the **Jump to EA** input field in the toolbar to navigate directly to any address:
+
+1. Type or paste a hex address into the field.
+2. Press `Enter` or click **Go**.
+
+**Selecting Bytes**
+
+| Action | Result |
+|---|---|
+| Left-click | Set selection start at byte |
+| Left-click + drag | Select a contiguous byte range |
+| Shift + Click | Extend existing selection to clicked byte |
+| Shift + Scroll Up | Scroll view up and extend selection to top-visible row |
+| Shift + Scroll Down | Scroll view down and extend selection to bottom-visible row |
+
+The status bar at the bottom shows the current EA, selected range, and byte value in hex, decimal, and ASCII.
+
+**Copying Selected Bytes**
+
+Right-click any selection to open the copy menu:
+
+| Format | Output Example |
+|---|---|
+| Hex Bytes | `55 8B EC 83 EC 10` |
+| YARA pattern | `{ 55 8B EC 83 EC 10 }` |
+| Python literal | `b"\x55\x8b\xec\x83\xec\x10"` |
+| C/C++ array | `unsigned char data[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x10 };` |
+| Base64 | Standard base64-encoded string |
+
+**Highlighting Byte Ranges**
+
+Multiple byte ranges can be highlighted simultaneously with distinct colors, useful for annotating protocol fields, shellcode stages, or suspicious sequences during manual analysis.
+
+1. Select a byte range by clicking and dragging (or using Shift+Click / Shift+Scroll for large ranges).
+2. Right-click and choose **Highlight selection...**
+3. Set a label (optional) and pick a color from the dialog.
+4. Click **OK** — the range is immediately highlighted in both the hex and ASCII columns.
+
+<img width="382" height="200" alt="image" src="https://github.com/user-attachments/assets/8a36c753-8bae-4855-b223-9869ec963f07" />
+
+<img width="1451" height="404" alt="image" src="https://github.com/user-attachments/assets/a603b229-0e20-4df7-baf6-10186d809f17" />
+
+
+To remove a highlight, right-click any highlighted byte and choose **Remove highlight: label**. To remove all, choose **Clear all highlights**.
+
+Highlights are rendered as flat, seamless color fills matching the style of most professional hex editors — no per-byte boxes or borders.
 
 ---
 
@@ -885,78 +979,6 @@ The config is stored at `PseudoNote.ini` in the plugin folder, or `~/.pseudonote
 | `[Analysis]` | `DEEP_REFINEMENT` | `True` | Enable Stage 5 contextual refinement |
 | `[ExternalTools]` | `FLOSS_PATH` | (empty) | Full path to the floss executable |
 | `[Fonts]` | `CODE_FONT` | `Consolas` | Font for code display areas |
-
----
-
-### Hex Viewer
-
-The PseudoNote Hex Viewer is a custom dockable pane that provides a clean, professional hex editor view of the entire loaded binary — not just the current function. It is designed as a companion to the IDA-View and Pseudocode panes for tasks that require working directly with raw bytes: signature development, shellcode extraction, and inspecting global data arrays.
-
-**Opening the Hex Viewer**
-
-| Method | Action |
-|---|---|
-| Hotkey | `Ctrl+Alt+B` |
-| Right-click menu | `PseudoNote > Hex Viewer` |
-| Plugin menu | `Edit > Plugins > PseudoNote > Hex Viewer` |
-
-**Layout**
-
-The viewer is divided into three columns:
-
-- **Address gutter** — absolute EA for each row in hex.
-- **Hex bytes** — 16 bytes per row, grouped in sets of 8. Non-loaded bytes display as `..`.
-- **ASCII** — printable characters rendered inline; non-printable bytes shown as `·`.
-
-The view automatically adapts to IDA's current color theme (light or dark) by reading Qt's palette directly from the embedded widget at paint time.
-
-**Cursor Sync**
-
-When **Auto-follow cursor** is enabled (default), the Hex Viewer scrolls to and marks the currently selected byte in IDA-View or Pseudocode with a red rectangle. Uncheck the box or use **Sync Now** to control syncing manually.
-
-**Navigating the Binary**
-
-The viewer loads the entire binary memory map (all segments) on open. Use the **Jump to EA** input field in the toolbar to navigate directly to any address:
-
-1. Type or paste a hex address into the field.
-2. Press `Enter` or click **Go**.
-
-**Selecting Bytes**
-
-| Action | Result |
-|---|---|
-| Left-click | Set selection start at byte |
-| Left-click + drag | Select a contiguous byte range |
-| Shift + Click | Extend existing selection to clicked byte |
-| Shift + Scroll Up | Scroll view up and extend selection to top-visible row |
-| Shift + Scroll Down | Scroll view down and extend selection to bottom-visible row |
-
-The status bar at the bottom shows the current EA, selected range, and byte value in hex, decimal, and ASCII.
-
-**Copying Selected Bytes**
-
-Right-click any selection to open the copy menu:
-
-| Format | Output Example |
-|---|---|
-| Hex Bytes | `55 8B EC 83 EC 10` |
-| YARA pattern | `{ 55 8B EC 83 EC 10 }` |
-| Python literal | `b"\x55\x8b\xec\x83\xec\x10"` |
-| C/C++ array | `unsigned char data[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x10 };` |
-| Base64 | Standard base64-encoded string |
-
-**Highlighting Byte Ranges**
-
-Multiple byte ranges can be highlighted simultaneously with distinct colors, useful for annotating protocol fields, shellcode stages, or suspicious sequences during manual analysis.
-
-1. Select a byte range by clicking and dragging (or using Shift+Click / Shift+Scroll for large ranges).
-2. Right-click and choose **Highlight selection...**
-3. Set a label (optional) and pick a color from the dialog.
-4. Click **OK** — the range is immediately highlighted in both the hex and ASCII columns.
-
-To remove a highlight, right-click any highlighted byte and choose **Remove highlight: label**. To remove all, choose **Clear all highlights**.
-
-Highlights are rendered as flat, seamless color fills matching the style of most professional hex editors — no per-byte boxes or borders.
 
 ---
 
