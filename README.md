@@ -95,6 +95,8 @@ Everything PseudoNote generates like notes, renamed symbols, AI analysis, chat h
 | Call Highlighter | Highlight function calls in pseudocode and disassembly views |
 | Call Tree | Interactive dnSpy-style lazy-loaded tree viewer for recursive code references and API tracking |
 | Search Utilities | Search bytes/strings in VirusTotal, Google, GitHub, MSDN, CyberChef |
+| Hex View | Alternative hex viewer for IDA Pro with several useful features |
+| Advance copy | Copy bytes to assist YARA rules creation |
 
 ---
 
