@@ -735,7 +735,7 @@ Typical use cases: Creating YARA signatures for malicious functions, extracting 
 
 ### Hex Viewer
 
-The PseudoNote Hex Viewer is a custom dockable pane that provides a clean, professional hex editor view of the entire loaded binary — not just the current function. It is designed as a companion to the IDA-View and Pseudocode panes for tasks that require working directly with raw bytes: signature development, shellcode extraction, and inspecting global data arrays.
+The PseudoNote Hex Viewer is a custom dockable pane that provides a clean and simple hex editor view of the entire loaded binary. It is designed as a companion to the IDA-View and Pseudocode panes for tasks that require working directly with raw bytes.
 
 <img width="1535" height="738" alt="image" src="https://github.com/user-attachments/assets/ce5d356a-854d-4e62-8e34-22e841bf421e" />
 
