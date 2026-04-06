@@ -12,6 +12,8 @@ PseudoNote Hex Viewer — Clean light-theme hex editor widget for IDA Pro.
 import base64
 import functools
 
+#   - Added SearchResultsDialog for multi-hit navigation.
+#
 import idaapi
 import idc
 import idautils
@@ -109,6 +111,7 @@ def _palette_from_widget(widget):
         VP_BG     = base.name(),
         IS_DARK   = is_dark,
         HIGHLIGHT_PALETTE = hl_palette,
+        SEARCH_BG = QtGui.QColor("#FFFFCC") if not is_dark else QtGui.QColor("#404000")
     )
 
 
@@ -205,18 +208,28 @@ class HighlightRange:
 
 
 class AddHighlightDialog(QtWidgets.QDialog):
-    def __init__(self, parent, start_ea, end_ea, palette_idx=0):
+    def __init__(self, parent, start_ea, end_ea, palette_idx=0, existing_hl=None):
         super().__init__(parent)
-        self.setWindowTitle("Add Highlight")
+        self.existing_hl = existing_hl
+        self.setWindowTitle("Edit Highlight" if existing_hl else "Add Highlight")
         self.setModal(True)
         self.setMinimumWidth(380)
-        self._color_hex = HIGHLIGHT_PALETTE[palette_idx % len(HIGHLIGHT_PALETTE)]
+        
+        if existing_hl:
+            self._color_hex = existing_hl.color_hex
+            s_ea, e_ea = existing_hl.start_ea, existing_hl.end_ea
+            label = existing_hl.label
+        else:
+            self._color_hex = HIGHLIGHT_PALETTE[palette_idx % len(HIGHLIGHT_PALETTE)]
+            s_ea, e_ea = start_ea, end_ea
+            label = ""
+
         lay = QtWidgets.QFormLayout(self)
         lay.setSpacing(8)
 
-        self.start_edit = QtWidgets.QLineEdit(f"{start_ea:X}")
-        self.end_edit   = QtWidgets.QLineEdit(f"{end_ea:X}")
-        self.label_edit = QtWidgets.QLineEdit()
+        self.start_edit = QtWidgets.QLineEdit(f"{s_ea:X}")
+        self.end_edit   = QtWidgets.QLineEdit(f"{e_ea:X}")
+        self.label_edit = QtWidgets.QLineEdit(label)
         self.label_edit.setPlaceholderText("Optional label")
 
         lay.addRow("Start EA:", self.start_edit)
@@ -257,11 +270,106 @@ class AddHighlightDialog(QtWidgets.QDialog):
             return None
 
 
+class RangeDialog(QtWidgets.QDialog):
+    def __init__(self, parent, start_ea=None, end_ea=None):
+        super().__init__(parent)
+        self.setWindowTitle("Address Range")
+        self.setModal(True)
+        lay = QtWidgets.QFormLayout(self)
+        self.start_edit = QtWidgets.QLineEdit(f"{start_ea:X}" if start_ea is not None else "")
+        self.end_edit   = QtWidgets.QLineEdit(f"{end_ea:X}" if end_ea is not None else "")
+        lay.addRow("Start EA:", self.start_edit)
+        lay.addRow("End EA (inclusive):", self.end_edit)
+        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        lay.addRow(btns)
+
+    def get_range(self):
+        try:
+            s = int(self.start_edit.text().strip(), 16)
+            e = int(self.end_edit.text().strip(), 16)
+            return min(s, e), max(s, e)
+        except:
+            return None, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEARCH RESULTS DIALOG
+# ─────────────────────────────────────────────────────────────────────────────
+class SearchResultsDialog(QtWidgets.QDialog):
+    result_selected = QtCore.Signal(int)
+
+    def __init__(self, parent, results, pattern, bmap):
+        super().__init__(parent)
+        self.setWindowTitle(f"Search Results: '{pattern.hex() if len(pattern) < 8 else pattern[:8].hex() + '...'}' ({len(results)} hits)")
+        self.resize(700, 400)
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        
+        T = _build_palette()
+        bg = "#F5F5F5" if not _is_dark_theme() else "#1E1E1E"
+        fg = "#1A1A1A" if not _is_dark_theme() else "#CCCCCC"
+        
+        lay = QtWidgets.QVBoxLayout(self)
+        
+        self.table = QtWidgets.QTableWidget(len(results), 3)
+        self.table.setHorizontalHeaderLabels(["Address", "Hex Preview", "Text Preview"])
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        
+        theme_css = f"""
+            QTableWidget {{
+                background-color: {bg};
+                color: {fg};
+                gridline-color: #444444;
+                font-family: 'Consolas', 'DejaVue Sans Mono', monospace;
+                font-size: 12px;
+            }}
+            QHeaderView::section {{
+                background-color: #333333; color: white; padding: 4px; border: 1px solid #444;
+            }}
+        """ if _is_dark_theme() else ""
+        self.table.setStyleSheet(theme_css)
+
+        for i, ea in enumerate(results):
+            # Address
+            item_ea = QtWidgets.QTableWidgetItem(f"{ea:010X}")
+            item_ea.setData(QtCore.Qt.UserRole, ea)
+            self.table.setItem(i, 0, item_ea)
+            
+            # Read a few bytes around match
+            data = ida_bytes.get_bytes(ea, min(16, len(pattern) + 8))
+            if data:
+                h = " ".join(f"{b:02X}" for b in data)
+                t = "".join(chr(b) if 0x20 <= b < 0x7F else "·" for b in data)
+                self.table.setItem(i, 1, QtWidgets.QTableWidgetItem(h))
+                self.table.setItem(i, 2, QtWidgets.QTableWidgetItem(t))
+
+        self.table.doubleClicked.connect(self._on_double_click)
+        lay.addWidget(self.table)
+        
+        self.jump_btn = QtWidgets.QPushButton("Jump to Selected")
+        self.jump_btn.clicked.connect(self._on_jump)
+        lay.addWidget(self.jump_btn)
+
+    def _on_double_click(self, index):
+        self._on_jump()
+
+    def _on_jump(self):
+        row = self.table.currentRow()
+        if row >= 0:
+            ea = self.table.item(row, 0).data(QtCore.Qt.UserRole)
+            self.result_selected.emit(ea)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HEX CANVAS
 # ─────────────────────────────────────────────────────────────────────────────
 class HexCanvas(QtWidgets.QAbstractScrollArea):
     selection_changed = QtCore.Signal(int, int)   # start_ea, end_ea (inclusive)
+    hover_changed = QtCore.Signal(int, int)       # ea, byte_value
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -274,6 +382,10 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
         self._hover_ea    = -1
         self._cursor_ea   = -1    # synced from IDA
         self._jump_ea     = -1    # last manually jumped-to EA (shown with amber rect)
+        
+        self._show_labels = True
+        self._search_results = []  # list of EAs
+        self._search_len     = 0
 
         # Font — prioritise aesthetically tuned code fonts
         self._font = QtGui.QFont()
@@ -297,6 +409,8 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
         self._gap_x     = 0      # thin separator between hex / ascii
         self._ascii_x   = 0
         self._ascii_w   = 0
+        self._label_x   = 0
+        self._label_w   = 0
         self._total_w   = 0
         self._calc_layout()
 
@@ -304,6 +418,7 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
         self.verticalScrollBar().setSingleStep(self._rh * 3)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
         # _T is refreshed at the START of every paintEvent from the real widget palette.
         # We do a first-pass init here; it will be overwritten on first paint.
@@ -323,7 +438,10 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
         # ascii
         self._ascii_x = self._gap_x + cw
         self._ascii_w = cw * (BYTES_PER_ROW + 1)
-        self._total_w = self._ascii_x + self._ascii_w
+        
+        self._label_x = self._ascii_x + self._ascii_w + cw
+        self._label_w = cw * 30
+        self._total_w = self._label_x + self._label_w
 
     def _byte_hex_x(self, col):
         return self._hex_x + col * self._cw * 3
@@ -455,6 +573,10 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
         p.drawText(self._ascii_x, 0, self._ascii_w, HEADER_HEIGHT,
                    QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, "ASCII")
 
+        if self._show_labels:
+            p.drawText(self._label_x, 0, self._label_w, HEADER_HEIGHT,
+                       QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, "Labels")
+
     def _draw_rows(self, p):
         if not self._bmap:
             return
@@ -520,6 +642,9 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
                             byte_fg  = QtGui.QColor("#FFFFFF" if _is_dark_theme() else "#000000")
                             ascii_fg = byte_fg
                             break
+                    
+                    if not cell_bg and ea in self._search_results:
+                         cell_bg = T['SEARCH_BG']
 
                 if cell_bg:
                     p.fillRect(hx, ry, self._cw * 3, self._rh, cell_bg)
@@ -551,6 +676,56 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
                 p.drawText(ax, ry, self._cw, self._rh,
                            QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, ch)
 
+            # Draw Labels for highlights starting on this row
+            if self._show_labels and self._highlights and row_ea != idaapi.BADADDR:
+                starting_hls = []
+                for hl in self._highlights:
+                    if row_ea <= hl.start_ea < row_ea + BYTES_PER_ROW:
+                        starting_hls.append(hl)
+                
+                if starting_hls:
+                    starting_hls.sort(key=lambda h: h.start_ea)
+                    lx = self._label_x
+                    # Filter unique items to avoid redundant labels on same start addr
+                    seen_texts = set()
+                    unique_hls = []
+                    for h in starting_hls:
+                        text = h.label or f"Range:{h.start_ea:X}"
+                        if text not in seen_texts:
+                            seen_texts.add(text)
+                            unique_hls.append((h, text))
+
+                    for i, (h, text) in enumerate(unique_hls):
+                        # Use HSL to extract hue and set a consistent, readable lightness
+                        h_hue, h_sat, h_lum, _ = h.color.getHsl()
+                        if _is_dark_theme():
+                            # High lightness for dark themes
+                            c = QtGui.QColor.fromHsl(h_hue, h_sat, 200)
+                        else:
+                            # Low lightness for light themes (ensure contrast on white)
+                            # We keep the hue and saturation but make it dark enough to read
+                            c = QtGui.QColor.fromHsl(h_hue, h_sat, 100)
+                        
+                        p.setPen(c)
+                        f = p.font()
+                        f.setBold(True)
+                        p.setFont(f)
+                        
+                        tw = p.fontMetrics().horizontalAdvance(text) if hasattr(p.fontMetrics(), 'horizontalAdvance') else p.fontMetrics().width(text)
+                        p.drawText(lx, ry, tw, self._rh, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, text)
+                        lx += tw
+                        
+                        # Reset font for separator/next
+                        f.setBold(False)
+                        p.setFont(f)
+
+                        if i < len(unique_hls) - 1:
+                            sep = " | "
+                            p.setPen(T['GUTTER_FG'])
+                            sw = p.fontMetrics().horizontalAdvance(sep) if hasattr(p.fontMetrics(), 'horizontalAdvance') else p.fontMetrics().width(sep)
+                            p.drawText(lx, ry, sw, self._rh, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, sep)
+                            lx += sw
+
     # ── mouse ─────────────────────────────────────────────────────────────────
     def mousePressEvent(self, event):
         ea, _ = self._ea_hit(event.x(), event.y())
@@ -569,6 +744,9 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
     def mouseMoveEvent(self, event):
         ea, _ = self._ea_hit(event.x(), event.y())
         self._hover_ea = ea
+        bv = self._bmap.read_byte(ea) if self._bmap and ea >= 0 else -1
+        self.hover_changed.emit(ea, bv)
+
         if event.buttons() & QtCore.Qt.LeftButton and self._sel_anchor >= 0 and ea >= 0:
             # Drag always extends the selection end (works for normal drag AND shift-drag)
             self._sel_end = ea
@@ -613,6 +791,9 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
         super().resizeEvent(event)
         self._update_scrollbar()
 
+    def keyPressEvent(self, event):
+        super().keyPressEvent(event)
+
     # ── context menu (right-click) ────────────────────────────────────────────
     def contextMenuEvent(self, event):
         ea, _ = self._ea_hit(event.x(), event.y())
@@ -650,6 +831,17 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
             jump_act.triggered.connect(lambda: idc.jumpto(ea))
             menu.addSeparator()
 
+        # ── Manage highlights if any exist ───────────────────────────────────
+        matching_hls = [h for h in self._highlights if h.contains(ea)] if ea >= 0 else []
+        if matching_hls:
+            hl = matching_hls[0]
+            edit_act = menu.addAction(f"Edit Highlight ({hl.label})...")
+            edit_act.triggered.connect(lambda: self._edit_highlight(hl))
+            
+            rem_act = menu.addAction(f"Remove Highlight")
+            rem_act.triggered.connect(lambda: self._remove_highlight(hl))
+            menu.addSeparator()
+
         # ── Copy (requires selection) ─────────────────────────────────────────
         if has_sel:
             n = sel_b - sel_a + 1
@@ -662,6 +854,7 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
 
             for label, fmt in [
                 ("Hex Bytes",       "hex"),
+                ("Raw Bytes",       "raw_hex"),
                 ("YARA pattern",    "yara"),
                 ("Python literal",  "python"),
                 ("C/C++ array",     "c_array"),
@@ -672,9 +865,24 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
 
             menu.addSeparator()
 
+            save_act = menu.addAction("Save selection as raw file...")
+            save_act.triggered.connect(lambda: self._save_range_as_file(sel_a, sel_b))
+            menu.addSeparator()
+
             # ── Highlights ────────────────────────────────────────────────────
             hl_add = menu.addAction("Highlight selection...")
             hl_add.triggered.connect(lambda: self._add_highlight(sel_a, sel_b + 1))
+
+        # ── Range Operations ──────────────────────────────────────────────────
+        menu.addSeparator()
+        range_menu = menu.addMenu("Range operations...")
+        range_menu.setStyleSheet(menu.styleSheet())
+        
+        ca = range_menu.addAction("Copy bytes from address to address...")
+        ca.triggered.connect(self._copy_range_dialog)
+        
+        sa = range_menu.addAction("Save bytes to file from address to address...")
+        sa.triggered.connect(self._save_range_dialog)
 
         # ── Manage highlights if any exist ───────────────────────────────────
         if self._highlights:
@@ -698,6 +906,8 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
             return
         if fmt == "hex":
             text = " ".join(f"{b:02X}" for b in raw)
+        elif fmt == "raw_hex":
+            text = "".join(f"{b:02X}" for b in raw)
         elif fmt == "yara":
             text = "{ " + " ".join(f"{b:02X}" for b in raw) + " }"
         elif fmt == "python":
@@ -711,6 +921,42 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
             text = " ".join(f"{b:02X}" for b in raw)
         QtWidgets.QApplication.clipboard().setText(text)
 
+    def _save_range_as_file(self, start_ea, end_ea):
+        """Saves bytes from start_ea to end_ea (inclusive) to a file."""
+        if not self._bmap:
+            return
+        
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Raw Bytes", "", "Binary files (*.bin);;All files (*.*)")
+        if not path:
+            return
+            
+        data = bytes([max(0, self._bmap.read_byte(e)) for e in range(start_ea, end_ea + 1)])
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+            print(f"[PseudoNote] Saved {len(data)} bytes to {path}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save file: {e}")
+
+    def _copy_range_dialog(self):
+        sel_a, sel_b = self._sel()
+        dlg = RangeDialog(self, sel_a if sel_a >= 0 else None, sel_b if sel_b >= 0 else None)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            s, e = dlg.get_range()
+            if s is not None and e is not None and self._bmap:
+                data = bytes([max(0, self._bmap.read_byte(addr)) for addr in range(s, e + 1)])
+                text = " ".join(f"{b:02X}" for b in data)
+                QtWidgets.QApplication.clipboard().setText(text)
+                print(f"[PseudoNote] Copied {len(data)} bytes from {s:X} to {e:X}")
+
+    def _save_range_dialog(self):
+        sel_a, sel_b = self._sel()
+        dlg = RangeDialog(self, sel_a if sel_a >= 0 else None, sel_b if sel_b >= 0 else None)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            s, e = dlg.get_range()
+            if s is not None and e is not None:
+                self._save_range_as_file(s, e)
+
     # ── highlight helpers ─────────────────────────────────────────────────────
     def _add_highlight(self, start_ea, end_ea):
         dlg = AddHighlightDialog(self, start_ea, end_ea, self._palette_idx)
@@ -719,6 +965,19 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
             if hl:
                 self._highlights.append(hl)
                 self._palette_idx += 1
+                self.viewport().update()
+
+    def _edit_highlight(self, hl):
+        dlg = AddHighlightDialog(self, hl.start_ea, hl.end_ea, existing_hl=hl)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            new_hl = dlg.result_range()
+            if new_hl:
+                # Replace existing with new values
+                hl.start_ea = new_hl.start_ea
+                hl.end_ea   = new_hl.end_ea
+                hl.color    = new_hl.color
+                hl.color_hex = new_hl.color_hex
+                hl.label     = new_hl.label
                 self.viewport().update()
 
     def _remove_highlight(self, hl):
@@ -732,89 +991,170 @@ class HexCanvas(QtWidgets.QAbstractScrollArea):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# UTILS
+# ─────────────────────────────────────────────────────────────────────────────
+class KLineEdit(QtWidgets.QLineEdit):
+    """A QLineEdit that explicitly handles copy/paste to avoid IDA shadowing."""
+    def keyPressEvent(self, event):
+        if event.modifiers() & QtCore.Qt.ControlModifier:
+            if event.key() == QtCore.Qt.Key_V:
+                self.paste(); return
+            elif event.key() == QtCore.Qt.Key_C:
+                self.copy(); return
+            elif event.key() == QtCore.Qt.Key_X:
+                self.cut(); return
+            elif event.key() == QtCore.Qt.Key_A:
+                self.selectAll(); return
+        super().keyPressEvent(event)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # TOOLBAR
 # ─────────────────────────────────────────────────────────────────────────────
 class HexToolbar(QtWidgets.QWidget):
     jump_requested  = QtCore.Signal(str)
     sync_requested  = QtCore.Signal()
     follow_toggled  = QtCore.Signal(bool)
+    search_changed  = QtCore.Signal(str, bool)   # text, is_hex
+    show_labels_toggled = QtCore.Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(36)
+        self.setFixedHeight(34)
+        
         T = _build_palette()
         fg  = T['TOOLBAR_FG']
         bg  = T['TOOLBAR_BG']
         bdr = T['TOOLBAR_BORDER']
-        edit_bg = "#3C3C3C" if _is_dark_theme() else "#FFFFFF"
-        edit_fg = "#CCCCCC" if _is_dark_theme() else "#1A1A1A"
-        edit_bdr = "#555555" if _is_dark_theme() else "#BBBBBB"
-        cb_fg = "#CCCCCC" if _is_dark_theme() else "#444"
+        
+        # Consistent theme-aware tokens
+        self._edit_bg = "#3C3C3C" if _is_dark_theme() else "#FFFFFF"
+        self._edit_fg = "#CCCCCC" if _is_dark_theme() else "#1A1A1A"
+        self._edit_bdr = "#555555" if _is_dark_theme() else "#BBBBBB"
+        self._cb_fg = "#CCCCCC" if _is_dark_theme() else "#444"
+        self._btn_bg = "#444444" if _is_dark_theme() else "#E0E0E0"
+        self._btn_fg = "#FFFFFF" if _is_dark_theme() else "#222222"
+        self._btn_hover = "#555555" if _is_dark_theme() else "#D0D0D0"
+        
         self.setStyleSheet(f"QWidget {{ background: {bg}; border-bottom: 1px solid {bdr}; }}")
 
         lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(8, 4, 8, 4)
-        lay.setSpacing(6)
+        lay.setContentsMargins(6, 2, 6, 2)
+        lay.setSpacing(8)
 
-        lbl = QtWidgets.QLabel("Jump to EA:")
-        lbl.setStyleSheet(f"background:transparent; color:{fg}; font-size:12px;")
-        lay.addWidget(lbl)
-
-        self.ea_edit = QtWidgets.QLineEdit()
-        self.ea_edit.setPlaceholderText("hex address…")
-        self.ea_edit.setFixedWidth(160)
-        self.ea_edit.setStyleSheet(f"""
-            QLineEdit {{
-                border: 1px solid {edit_bdr};
-                border-radius: 3px;
-                padding: 2px 6px;
-                font-family: Consolas, monospace;
-                font-size: 12px;
-                background: {edit_bg};
-                color: {edit_fg};
-            }}
-            QLineEdit:focus {{ border-color: #3399FF; }}
-        """)
+        # ── Navigation Group ──────────────────────────────────────────────────
+        self.ea_edit = KLineEdit()
+        self.ea_edit.setPlaceholderText("EA (hex)…")
+        self.ea_edit.setFixedWidth(110)
+        self.ea_edit.setStyleSheet(self._edit_style())
         self.ea_edit.returnPressed.connect(lambda: self.jump_requested.emit(self.ea_edit.text()))
         lay.addWidget(self.ea_edit)
 
-        go = self._btn("Go", "#0066CC", "#0052A3")
-        go.clicked.connect(lambda: self.jump_requested.emit(self.ea_edit.text()))
-        lay.addWidget(go)
+        go_btn = self._btn("Go", "#0066CC")
+        go_btn.setFixedWidth(36)
+        go_btn.clicked.connect(lambda: self.jump_requested.emit(self.ea_edit.text()))
+        lay.addWidget(go_btn)
+        
+        lay.addWidget(self._vsep(bdr))
 
-        sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.VLine)
-        sep.setStyleSheet(f"color:{bdr}; background:transparent;")
-        lay.addWidget(sep)
-
-        sync = self._btn("Sync to cursor", "#228B22", "#1A6B1A")
+        # ── Sync & Follow ─────────────────────────────────────────────────────
+        sync = self._btn("Sync", "#2E7D32")
+        sync.setFixedWidth(50)
         sync.clicked.connect(self.sync_requested.emit)
         lay.addWidget(sync)
 
-        self.follow_cb = QtWidgets.QCheckBox("Auto-follow cursor")
+        self.follow_cb = QtWidgets.QCheckBox("Follow")
+        self.follow_cb.setToolTip("Auto-follow IDA cursor")
         self.follow_cb.setChecked(True)
-        self.follow_cb.setStyleSheet(f"background:transparent; color:{cb_fg}; font-size:12px;")
+        self.follow_cb.setStyleSheet(f"background:transparent; color:{self._cb_fg}; font-size:11px;")
         self.follow_cb.toggled.connect(self.follow_toggled.emit)
         lay.addWidget(self.follow_cb)
+        
+        lay.addWidget(self._vsep(bdr))
+
+        # ── Search Group ─────────────────────────────────────────────────────
+        self.search_edit = KLineEdit()
+        self.search_edit.setPlaceholderText("Find hex or text…")
+        self.search_edit.setFixedWidth(160)
+        self.search_edit.setStyleSheet(self._edit_style())
+        self.search_edit.returnPressed.connect(self._on_search_clicked)
+        lay.addWidget(self.search_edit)
+
+        self.search_type = QtWidgets.QComboBox()
+        self.search_type.addItems(["Hex", "Text"])
+        self.search_type.setFixedWidth(55)
+        self.search_type.setStyleSheet(f"""
+            QComboBox {{
+                background: {self._edit_bg}; color: {self._edit_fg}; padding: 1px 3px;
+                border: 1px solid {self._edit_bdr}; border-radius: 2px; font-size: 11px;
+            }}
+            QComboBox::drop-down {{ border: none; width: 12px; }}
+        """)
+        lay.addWidget(self.search_type)
+
+        search_btn = self._btn("Search", "#5E35B1")
+        search_btn.setFixedWidth(60)
+        search_btn.clicked.connect(self._on_search_clicked)
+        lay.addWidget(search_btn)
+        
+        lay.addWidget(self._vsep(bdr))
+
+        # ── Options ──────────────────────────────────────────────────────────
+        self.labels_cb = QtWidgets.QCheckBox("Labels")
+        self.labels_cb.setChecked(True)
+        self.labels_cb.setStyleSheet(f"background:transparent; color:{self._cb_fg}; font-size:11px;")
+        self.labels_cb.toggled.connect(self.show_labels_toggled.emit)
+        lay.addWidget(self.labels_cb)
 
         lay.addStretch()
 
         self.func_lbl = QtWidgets.QLabel("")
-        self.func_lbl.setStyleSheet("background:transparent; color:#4FC1FF; font-size:12px; font-weight:bold;")
+        self.func_lbl.setStyleSheet("background:transparent; color:#4FC1FF; font-size:12px; font-weight:bold; padding-right:12px;")
         lay.addWidget(self.func_lbl)
 
-    def _btn(self, text, bg, hover):
+    def _edit_style(self):
+        return f"""
+            QLineEdit {{
+                border: 1px solid {self._edit_bdr};
+                border-radius: 2px;
+                padding: 1px 6px;
+                font-family: Consolas, monospace;
+                font-size: 12px;
+                background: {self._edit_bg};
+                color: {self._edit_fg};
+            }}
+            QLineEdit:focus {{ border-color: #3399FF; }}
+        """
+
+    def _vsep(self, color):
+        s = QtWidgets.QFrame()
+        s.setFrameShape(QtWidgets.QFrame.VLine)
+        s.setFixedWidth(1)
+        # Use a very subtle vertical line
+        s.setStyleSheet(f"color:{color}; background:{color}; margin: 4px 0;")
+        return s
+
+    def _btn(self, text, brand_color):
         b = QtWidgets.QPushButton(text)
-        b.setFixedHeight(26)
+        b.setFixedHeight(22)
+        b.setCursor(QtCore.Qt.PointingHandCursor)
+        # Use brand_color only as a subtle left accent or border? 
+        # For a clean look, let's keep them compact but solid brand color with a lighter font
         b.setStyleSheet(f"""
             QPushButton {{
-                background: {bg}; color: white;
-                border: none; border-radius: 3px;
-                padding: 0 12px; font-size: 12px;
+                background: {brand_color}; color: white;
+                border: none; border-radius: 2px;
+                padding: 0 4px; font-size: 11px; font-weight: bold;
             }}
-            QPushButton:hover {{ background: {hover}; }}
+            QPushButton:hover {{ background: {brand_color}; opacity: 0.8; border: 1px solid white; }}
+            QPushButton:pressed {{ background: #222; }}
         """)
         return b
+
+    def _on_search_clicked(self):
+        text = self.search_edit.text()
+        is_hex = self.search_type.currentText() == "Hex"
+        self.search_changed.emit(text, is_hex)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -837,10 +1177,11 @@ class HexStatusBar(QtWidgets.QWidget):
 
         self._ea_lbl  = self._lbl("EA: —")
         self._sel_lbl = self._lbl("Selection: —")
-        self._val_lbl = self._lbl("")
+        self._hl_lbl  = self._lbl("")
         lay.addWidget(self._ea_lbl)
+        lay.addSpacing(20)
         lay.addWidget(self._sel_lbl)
-        lay.addWidget(self._val_lbl)
+        lay.addWidget(self._hl_lbl)
         lay.addStretch()
 
     def _lbl(self, t):
@@ -851,15 +1192,20 @@ class HexStatusBar(QtWidgets.QWidget):
     def update_ea(self, ea, bv):
         if ea >= 0:
             self._ea_lbl.setText(f"EA: {ea:X}")
-        if bv >= 0:
-            ch = chr(bv) if 0x20 <= bv < 0x7F else '.'
-            self._val_lbl.setText(f"Byte: {bv:02X}h  {bv}d  '{ch}'")
 
     def update_selection(self, a, b):
         if a >= 0:
-            self._sel_lbl.setText(f"Sel: {a:X} – {b:X}  ({b - a + 1} bytes)")
+            sz = b - a + 1
+            self._sel_lbl.setText(f"Sel: {a:X} – {b:X}  ({sz:X}h bytes)")
         else:
             self._sel_lbl.setText("Selection: —")
+
+    def update_highlight(self, hl):
+        if hl:
+            sz = hl.end_ea - hl.start_ea
+            self._hl_lbl.setText(f"Highlight: {hl.start_ea:X} – {hl.end_ea-1:X}  ({sz:X}h bytes)")
+        else:
+            self._hl_lbl.setText("")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -886,10 +1232,13 @@ class PseudoNoteHexView(idaapi.PluginForm):
         self.toolbar.jump_requested.connect(self._on_jump)
         self.toolbar.sync_requested.connect(lambda: self._go(idaapi.get_screen_ea()))
         self.toolbar.follow_toggled.connect(lambda v: setattr(self, '_auto_follow', v))
+        self.toolbar.search_changed.connect(self._on_search)
+        self.toolbar.show_labels_toggled.connect(self._on_labels_toggled)
         root.addWidget(self.toolbar)
 
         self.hex_canvas = HexCanvas(self.parent)
         self.hex_canvas.selection_changed.connect(self._on_sel)
+        self.hex_canvas.hover_changed.connect(self._on_hover)
         root.addWidget(self.hex_canvas)
 
         self.status_bar = HexStatusBar(self.parent)
@@ -916,8 +1265,65 @@ class PseudoNoteHexView(idaapi.PluginForm):
         bv   = self.hex_canvas._bmap.read_byte(ea) if self.hex_canvas._bmap else -1
         self.status_bar.update_ea(ea, bv)
 
+    def _on_labels_toggled(self, enabled):
+        self.hex_canvas._show_labels = enabled
+        self.hex_canvas.viewport().update()
+
+    def _on_search(self, text, is_hex):
+        text = text.strip()
+        if not text or not self.hex_canvas._bmap:
+            self.hex_canvas._search_results = []
+            self.hex_canvas.viewport().update()
+            return
+
+        pattern = b""
+        if is_hex:
+            try:
+                h = text.replace(" ", "")
+                pattern = bytes.fromhex(h)
+            except:
+                return
+        else:
+            pattern = text.encode()
+
+        if not pattern:
+            return
+
+        results = []
+        for start, end in self.hex_canvas._bmap.segments:
+            chunk = ida_bytes.get_bytes(start, end - start)
+            if not chunk: continue
+            
+            idx = chunk.find(pattern)
+            while idx != -1:
+                results.append(start + idx)
+                if len(results) > 2000: break # Safety limit
+                idx = chunk.find(pattern, idx + 1)
+            if len(results) > 2000: break
+        
+        self.hex_canvas._search_results = results
+        self.hex_canvas._search_len = len(pattern)
+        self.hex_canvas.viewport().update()
+
+        if results:
+            dlg = SearchResultsDialog(self.parent, results, pattern, self.hex_canvas._bmap)
+            dlg.result_selected.connect(self._on_search_result_picked)
+            dlg.show() # Non-modal so user can keep it open
+
+    def _on_search_result_picked(self, ea):
+        self.hex_canvas._jump_ea = ea
+        self.hex_canvas.scroll_to_ea(ea)
+        self.hex_canvas.viewport().update()
+        # We no longer idc.jumpto(ea) here to keep IDA view stable as per user request
+
     def _on_sel(self, a, b):
         self.status_bar.update_selection(a, b)
+
+    def _on_hover(self, ea, bv):
+        self.status_bar.update_ea(ea, bv)
+        # Check if hovering over a highlight
+        matching = [h for h in self.hex_canvas._highlights if h.contains(ea)] if ea >= 0 else []
+        self.status_bar.update_highlight(matching[0] if matching else None)
 
     def cursor_moved(self, ea):
         if self._auto_follow and ea != idaapi.BADADDR:

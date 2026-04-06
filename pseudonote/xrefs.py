@@ -4,6 +4,7 @@ import idautils
 import ida_funcs
 import ida_hexrays
 import ida_bytes
+import ida_kernwin
 from pseudonote.qt_compat import QtWidgets, QtCore, QtGui, QDialog, QVBoxLayout, QTreeWidget, QTreeWidgetItem
 
 _xrefs_win = None
@@ -103,8 +104,8 @@ class XrefTreeItem(QtWidgets.QTreeWidgetItem):
 class XrefsDialog(QtWidgets.QDialog):
     def __init__(self, target_ea):
         super().__init__(None)
-        self.setWindowTitle(f"Call Hierarchy: {idc.get_func_name(target_ea)}")
-        self.resize(500, 600)
+        # Title will be set by reload_tree()
+        self.resize(550, 600)
         self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
         
         self.target_ea = target_ea
@@ -144,6 +145,13 @@ class XrefsDialog(QtWidgets.QDialog):
         self.refresh_btn.setMaximumWidth(70)
         header_layout.addWidget(self.refresh_btn)
         
+        # Add a sync button
+        self.sync_btn = QtWidgets.QPushButton("Sync")
+        self.sync_btn.setToolTip("Sync to current function in IDA")
+        self.sync_btn.clicked.connect(self.sync_to_current)
+        self.sync_btn.setMaximumWidth(60)
+        header_layout.addWidget(self.sync_btn)
+        
         layout.addLayout(header_layout)
         
         self.tree = QTreeWidget()
@@ -174,11 +182,19 @@ class XrefsDialog(QtWidgets.QDialog):
         
     def reload_tree(self):
         self.tree.clear()
-        top_name = idc.get_func_name(self.target_ea)
+        name = idc.get_func_name(self.target_ea)
+        if not name:
+            name = idc.get_name(self.target_ea, idaapi.GN_VISIBLE)
+        
+        if name:
+            self.setWindowTitle(f"Call Hierarchy: {name}")
+        else:
+            self.setWindowTitle(f"Call Hierarchy: 0x{self.target_ea:X}")
+            
         f = idaapi.get_func(self.target_ea)
         is_api = bool(f and (f.flags & (idaapi.FUNC_LIB | idaapi.FUNC_THUNK)))
         
-        top = XrefTreeItem(self.tree, f"Function: {top_name}()", self.target_ea, self.target_ea, is_ref_to=True, is_root=True, is_api=is_api)
+        top = XrefTreeItem(self.tree, f"Function: {name}()" if name else f"Function: 0x{self.target_ea:X}", self.target_ea, self.target_ea, is_ref_to=True, is_root=True, is_api=is_api)
         top.loaded = True
         top.takeChild(0)
         
@@ -244,6 +260,39 @@ class XrefsDialog(QtWidgets.QDialog):
                             child.loaded = True
                             visited.add((ea, 0))
                             
+    def sync_to_current(self):
+        ea = idaapi.get_screen_ea()
+        f = idaapi.get_func(ea)
+        if f:
+            self.target_ea = f.start_ea
+            self.reload_tree()
+        else:
+            # Try to see if we are on an API call or something
+            view = idaapi.get_current_viewer()
+            wtype = idaapi.get_widget_type(view)
+            target_ea = idaapi.BADADDR
+            
+            if wtype == idaapi.BWN_PSEUDOCODE:
+                vu = idaapi.get_widget_vdui(view)
+                if vu and vu.item.citype == idaapi.VDI_EXPR:
+                    if vu.item.e.op == idaapi.cot_obj:
+                        target_ea = vu.item.e.obj_ea
+                    elif vu.item.e.op == idaapi.cot_call and vu.item.e.x.op == idaapi.cot_obj:
+                        target_ea = vu.item.e.x.obj_ea
+            
+            if target_ea == idaapi.BADADDR:
+                hl = ida_kernwin.get_highlight(ida_kernwin.get_current_viewer())
+                if hl and hl[0]:
+                    h_ea = idc.get_name_ea_simple(hl[0])
+                    if h_ea != idaapi.BADADDR:
+                        target_ea = h_ea
+            
+            if target_ea != idaapi.BADADDR:
+                self.target_ea = target_ea
+                self.reload_tree()
+            else:
+                print("[PseudoNote] No function at current EA to sync.")
+                            
     def on_double_click(self, item, col):
         if hasattr(item, 'exact_ea') and item.exact_ea != idaapi.BADADDR and not getattr(item, 'is_root', False):
             idaapi.jumpto(item.exact_ea)
@@ -289,7 +338,6 @@ def show_dnspy_xrefs():
                 target_ea = vu.item.e.x.obj_ea
 
     if target_ea == idaapi.BADADDR:
-        import ida_kernwin
         hl = ida_kernwin.get_highlight(ida_kernwin.get_current_viewer())
         if hl and hl[0]:
             h_ea = idc.get_name_ea_simple(hl[0])

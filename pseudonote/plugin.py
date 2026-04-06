@@ -212,17 +212,17 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(del_asm_comments_desc)
         idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Delete Comments (IDA-View)", "pseudonote:delete_asm_comments", idaapi.SETMENU_APP)
 
-        # Shellcode Analysis (Static)
+        # Bytes/Instructions/Shellcode Analysis
         shell_analyst_desc = idaapi.action_desc_t(
             "pseudonote:shellcode_analyst",
-            "Shellcode Analysis (Static)",
+            "Bytes/Instructions/Shellcode Analysis",
             ShellcodeAnalystHandler(),
             "Ctrl+Shift+E",
             "Open the static shellcode analysis window",
             124
         )
         idaapi.register_action(shell_analyst_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Shellcode Analysis (Static)", "pseudonote:shellcode_analyst", idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bytes-Instructions-Shellcode Analysis", "pseudonote:shellcode_analyst", idaapi.SETMENU_APP)
 
         delete_comments_desc = idaapi.action_desc_t(
             "pseudonote:delete_comments",
@@ -244,7 +244,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             73
         )
         idaapi.register_action(xrefs_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Call Tree...", "pseudonote:dnspy_xrefs", idaapi.SETMENU_APP)
+        # (Call Tree attached in the tools separator group above)
 
         # Structure Analysis Action
         struct_action_desc = idaapi.action_desc_t(
@@ -383,7 +383,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_c_array", "Copy C/C++ array", AdvancedCopyHandler("c_array"), "", "Copy selected bytes as a C array", 31))
         idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_disasm", "Copy Disassembly Text", AdvancedCopyHandler("disasm"), "", "Copy selected disassembly lines", 31))
 
-        # Hex Viewer Action
+        # Hex Viewer Action (attached in the tools separator group above)
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:hex_viewer",
             "Hex Viewer",
@@ -392,7 +392,11 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "Open the PseudoNote Hex Viewer (synced with current function)",
             80
         ))
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Hex Viewer", "pseudonote:hex_viewer", idaapi.SETMENU_APP)
+
+        # --- Tools separator group (after Configure Settings) ---
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/-/Hex Viewer", "pseudonote:hex_viewer", idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/-/Call Tree...", "pseudonote:dnspy_xrefs", idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/-/Toggle Call Highlight (Pseudocode)", "pseudonote:toggle_highlight", idaapi.SETMENU_APP)
 
         self.ctx_hooks = vm.ContextMenuHooks()
         self.ctx_hooks.hook()
@@ -416,13 +420,17 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Comments (Pseudocode)", "pseudonote:add_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Section Comments (IDA-View)", "pseudonote:add_asm_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments (IDA-View)", "pseudonote:delete_asm_comments")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Shellcode Analysis (Static)", "pseudonote:shellcode_analyst")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bytes/Instructions/Shellcode Analysis", "pseudonote:shellcode_analyst")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Deep Analyzer", "pseudonote:deep_analyzer")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Summarizer", "pseudonote:summarizer")
         idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/FLOSS Strings Discovery", "pseudonote:floss_strings")
+        # Tools separator group
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/-/Hex Viewer", "pseudonote:hex_viewer")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/-/Call Tree...", "pseudonote:dnspy_xrefs")
+        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/-/Toggle Call Highlight (Pseudocode)", "pseudonote:toggle_highlight")
 
         # Unregister all actions
         for action_id in [
