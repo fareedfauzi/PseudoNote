@@ -2850,6 +2850,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         # Separator 1 + GROUP: TOOLS (Hex Viewer, Call Tree, Toggle Highlight)
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:hex_viewer", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:dump_bytes", "PseudoNote/")
         if wtype == idaapi.BWN_PSEUDOCODE:
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:dnspy_xrefs", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:toggle_highlight", "PseudoNote/")

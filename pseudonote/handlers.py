@@ -1466,6 +1466,115 @@ class ShellcodeAnalystHandler(idaapi.action_handler_t):
 # ---------------------------------------------------------------------------
 # Search Utilities Handlers
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Dump Bytes Handler
+# ---------------------------------------------------------------------------
+class DumpBytesHandler(idaapi.action_handler_t):
+    """Dump bytes from a selected range or global variable to a file."""
+    def __init__(self):
+        super(DumpBytesHandler, self).__init__()
+
+    def activate(self, ctx):
+        import ida_bytes
+        import ida_kernwin
+        import os
+
+        target_ea = idaapi.BADADDR
+        size = 0
+
+        # 1. Try to get selection
+        ok, start_ea, end_ea = idaapi.read_range_selection(ctx.widget)
+        if ok:
+            target_ea = start_ea
+            size = end_ea - start_ea
+        else:
+            # 2. Try to get item under cursor in Pseudocode
+            v = ida_hexrays.get_widget_vdui(ctx.widget)
+            if v:
+                # In Hex-Rays, v.item usually holds the current item
+                try:
+                    if v.item.e.op == ida_hexrays.cot_obj:
+                        target_ea = v.item.e.obj_ea
+                except:
+                    pass
+                
+                if target_ea == idaapi.BADADDR:
+                    # Try highlight
+                    h = ida_kernwin.get_highlight(v.ct)
+                    if h and h[0]:
+                        target_ea = idc.get_name_ea_simple(h[0])
+            
+            # 3. Try to get item under cursor in Disassembly
+            if target_ea == idaapi.BADADDR:
+                target_ea = ida_kernwin.get_screen_ea()
+                # If we are on a name, it's better
+                h = ida_kernwin.get_highlight(ctx.widget)
+                if h and h[0]:
+                    ea_h = idc.get_name_ea_simple(h[0])
+                    if ea_h != idaapi.BADADDR:
+                        target_ea = ea_h
+
+        if target_ea == idaapi.BADADDR:
+            print("[PseudoNote] Dump Bytes: Could not determine address.")
+            return 0
+
+        # Try to guess size if not from selection
+        if size == 0:
+            size = ida_bytes.get_item_size(target_ea)
+            if size <= 1: # Default to something reasonable if it's just a byte or unknown
+                size = 0x100 
+
+        # Ask for size
+        size_str = ida_kernwin.ask_str(hex(size), 0, f"Enter size to dump from 0x{target_ea:X}:")
+        if not size_str:
+            return 0
+        
+        try:
+            if size_str.lower().startswith("0x"):
+                base = 16
+                s_val = size_str[2:]
+            else:
+                base = 10
+                s_val = size_str
+            size = int(s_val, base)
+        except ValueError:
+            print("[PseudoNote] Dump Bytes: Invalid size.")
+            return 0
+
+        if size <= 0:
+            return 0
+
+        # Read bytes
+        blob = ida_bytes.get_bytes(target_ea, size)
+        if not blob:
+            print(f"[PseudoNote] Dump Bytes: Failed to read {size} bytes at 0x{target_ea:X}.")
+            return 0
+
+        # Open file dialog
+        default_name = idc.get_name(target_ea) or f"dump_{target_ea:X}"
+        # Sanitize filename
+        default_name = "".join([c for c in default_name if c.isalnum() or c in (' ', '.', '_', '-')]).strip()
+        if not default_name: default_name = "dump"
+        
+        save_path = ida_kernwin.ask_file(1, f"{default_name}.bin", "Save dump as...")
+        if not save_path:
+            return 0
+
+        try:
+            with open(save_path, "wb") as f:
+                f.write(blob)
+            print(f"[PseudoNote] Dumped {len(blob)} bytes to {save_path}")
+        except Exception as e:
+            print(f"[PseudoNote] Dump Bytes: Failed to write file: {e}")
+
+        return 1
+
+    def update(self, ctx):
+        if ctx.widget_type in (idaapi.BWN_DISASM, idaapi.BWN_DISASMS, idaapi.BWN_PSEUDOCODE):
+            return idaapi.AST_ENABLE_FOR_WIDGET
+        return idaapi.AST_DISABLE_FOR_WIDGET
+
+
 class SearchBytesVTHandler(idaapi.action_handler_t):
     """Search highlighted bytes in VirusTotal."""
     def __init__(self):

@@ -36,6 +36,7 @@ from pseudonote.handlers import (
     SearchBytesCyberChefHandler,
     FlossStringsHandler,
     AdvancedCopyHandler,
+    DumpBytesHandler,
 )
 from pseudonote.deep_analyzer import DeepAnalyzerHandler
 from pseudonote.summarizer import SummarizerHandler
@@ -383,6 +384,16 @@ class PseudoNotePlugin(idaapi.plugin_t):
         idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_c_array", "Copy C/C++ array", AdvancedCopyHandler("c_array"), "", "Copy selected bytes as a C array", 31))
         idaapi.register_action(idaapi.action_desc_t("pseudonote:copy_disasm", "Copy Disassembly Text", AdvancedCopyHandler("disasm"), "", "Copy selected disassembly lines", 31))
 
+        # Dump Bytes Action
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:dump_bytes",
+            "Dump bytes to file...",
+            DumpBytesHandler(),
+            "",
+            "Dump a range of bytes or a global variable to a file",
+            31
+        ))
+
         # Hex Viewer Action (attached in the tools separator group above)
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:hex_viewer",
@@ -451,7 +462,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:copy_yara_rule", "pseudonote:copy_yara_mask",
             "pseudonote:copy_yara_no_imm", "pseudonote:copy_yara_opcodes",
             "pseudonote:copy_python", "pseudonote:copy_c_array", "pseudonote:copy_disasm",
-            "pseudonote:hex_viewer",
+            "pseudonote:dump_bytes", "pseudonote:hex_viewer",
         ]:
             idaapi.unregister_action(action_id)
 
