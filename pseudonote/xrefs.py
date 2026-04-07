@@ -103,7 +103,8 @@ class XrefTreeItem(QtWidgets.QTreeWidgetItem):
 
 class XrefsDialog(QtWidgets.QDialog):
     def __init__(self, target_ea):
-        super().__init__(None)
+        parent = QtWidgets.QApplication.activeWindow()
+        super().__init__(parent)
         # Title will be set by reload_tree()
         self.resize(550, 600)
         self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
@@ -295,7 +296,11 @@ class XrefsDialog(QtWidgets.QDialog):
                             
     def on_double_click(self, item, col):
         if hasattr(item, 'exact_ea') and item.exact_ea != idaapi.BADADDR and not getattr(item, 'is_root', False):
-            idaapi.jumpto(item.exact_ea)
+            vu = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_viewer())
+            if vu:
+                vu.jumpto(item.exact_ea, True)
+            else:
+                idaapi.jumpto(item.exact_ea)
 
     def on_filter_changed(self, text):
         self._apply_filter(self.tree.invisibleRootItem(), text.lower())

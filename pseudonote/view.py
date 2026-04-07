@@ -2653,7 +2653,7 @@ if QtWidgets:
         def update_ai_progress_details(self, tokens):
             update_ai_progress_details(tokens)
 
-        def refresh_ui(self, force=False, target_ea=idaapi.BADADDR):
+        def refresh_ui(self, force=False, target_ea=idaapi.BADADDR, skip_title=False):
             if not QtWidgets: return
             ea = target_ea
             if ea == idaapi.BADADDR:
@@ -2690,9 +2690,15 @@ if QtWidgets:
             if self.title_label: self.title_label.setText(f'Readable code: <span style="color: {accent};">{name}</span>')
             if getattr(self, "func_name_label", None):
                 self.func_name_label.setText(f'Analyst notes: <span style="color: {accent};">{name}</span>')
-            try: self.SetTitle(f"PseudoNote: {name}")
-            except:
-                if self.parent: self.parent.setWindowTitle(f"PseudoNote: {name}")
+            
+            if not skip_title:
+                new_title = f"PseudoNote: {name}"
+                try:
+                    if self.GetTitle() != new_title:
+                        self.SetTitle(new_title)
+                except:
+                    if self.parent and self.parent.windowTitle() != new_title:
+                        self.parent.setWindowTitle(new_title)
             
             if self.c_code_editor: self.c_code_editor.setReadOnly(True)
             if self.asm_code_editor: self.asm_code_editor.setReadOnly(True)
@@ -2812,7 +2818,18 @@ class ScreenHooks(idaapi.UI_Hooks):
         self.view = view
     def screen_ea_changed(self, ea, prev_ea):
         if self.view:
-            self.view.refresh_ui()
+            # Check if focus is in a window that shouldn't be interrupted by title updates (Xrefs, etc.)
+            cv = ida_kernwin.get_current_viewer()
+            wtype = ida_kernwin.get_widget_type(cv)
+            
+            # If focus is in a transient window, we still want to sync but skip SetTitle
+            is_code_view = wtype in [ida_kernwin.BWN_DISASM, ida_kernwin.BWN_DISASMS, ida_kernwin.BWN_PSEUDOCODE]
+            
+            # Also check for modal widgets
+            if QtWidgets.QApplication.activeModalWidget():
+                return
+
+            self.view.refresh_ui(skip_title=not is_code_view)
 
 
 def show_view():

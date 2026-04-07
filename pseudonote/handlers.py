@@ -1714,6 +1714,7 @@ class FlossStringsHandler(idaapi.action_handler_t):
                 print(f"[PseudoNote] Failed to launch FLOSS Strings Tool: {e}")
         return 1
 
+    def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS
 
 
