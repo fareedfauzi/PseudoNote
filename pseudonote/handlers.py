@@ -19,6 +19,7 @@ import pseudonote.ai_client as _ai_mod
 import pseudonote.chat as _chat
 import pseudonote.view as _view_mod
 from pseudonote.renamer import clean_name
+from pseudonote.idb_storage import save_to_idb
 
 
 def _get_ai_client():
@@ -1721,6 +1722,8 @@ class FlossStringsHandler(idaapi.action_handler_t):
 # ---------------------------------------------------------------------------
 # IDA-View Advanced Copy handlers
 # ---------------------------------------------------------------------------
+
+
 
 def _get_selected_instructions():
     import ida_kernwin

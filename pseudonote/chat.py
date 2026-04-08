@@ -146,14 +146,18 @@ class ChatBubble(QtWidgets.QWidget):
         font = get_chat_font()
         self.label.setFont(font)
 
-        # PySide6 bitwise flag handling
-        flags_val = [QtCore.Qt.TextSelectableByMouse, QtCore.Qt.LinksAccessibleByMouse]
-        flags = qt_cast_flags(flags_val, QtCore.Qt.TextInteractionFlag)
-        self.label.setTextInteractionFlags(flags)
+        # Ensure text is selectable by mouse and keyboard, and links are clickable
+        self.label.setTextInteractionFlags(QtCore.Qt.TextBrowserInteraction)
         self.label.setOpenExternalLinks(True)
+        self.label.setCursor(QtCore.Qt.IBeamCursor)
 
         if self.is_user:
-            self.label.setText(text)
+            # Wrap in a DIV for better selection handling in some Qt versions
+            self.label.setTextFormat(QtCore.Qt.RichText)
+            self.label.setText(f"<div>{html.escape(text)}</div>")
+            
+            # Selection visibility fix: Use a slightly different color or specify selection style
+            # Actually, using a slightly darker/lighter variant for background or specific selection colors:
             self.bubble.setStyleSheet(f"""
                 QFrame {{
                     background-color: {colors['highlight']};
@@ -163,6 +167,8 @@ class ChatBubble(QtWidgets.QWidget):
                 QLabel {{
                     color: {colors['highlight_text']};
                     background: transparent;
+                    selection-background-color: {colors['base']};
+                    selection-color: {colors['text']};
                 }}
             """)
             main_layout.addStretch()
@@ -188,9 +194,9 @@ class ChatBubble(QtWidgets.QWidget):
 
         bubble_layout.addWidget(self.label)
         
-        # Premium sizing for better readability
-        self.bubble.setMinimumWidth(450)
-        self.bubble.setMaximumWidth(1800) 
+        # Reasonable sizing for better readability across various window sizes
+        self.bubble.setMinimumWidth(50)
+        self.bubble.setMaximumWidth(800) 
 
 class ChatInput(QtWidgets.QWidget):
     submitted = Signal(str)

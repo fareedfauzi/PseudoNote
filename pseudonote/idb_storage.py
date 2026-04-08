@@ -201,31 +201,5 @@ def format_context_for_prompt(context):
 
 
 def format_context_for_display(context):
-    """Format gathered context for display in the Function Details tab (compact, no code snippets)."""
-    parts = []
-
-    # Callers
-    parts.append(f"## Callers ({len(context['callers'])})")
-    if context["callers"]:
-        for caller in context["callers"]:
-            parts.append(f"- {caller['name']} ({caller['address']})")
-    else:
-        parts.append("- none")
-    parts.append("")
-
-    # Callees
-    if context["callees_api"] or context["callees_internal"]:
-        total = len(context["callees_api"]) + len(context["callees_internal"])
-        parts.append(f"## Callees ({total})")
-        if context["callees_api"]:
-            for c in context["callees_api"]:
-                parts.append(f"- {c['name']}")
-        if context["callees_internal"]:
-            for c in context["callees_internal"]:
-                parts.append(f"- {c['name']} ({c['address']})")
-    else:
-        parts.append("## Callees")
-        parts.append("- none")
-    parts.append("")
-
-    return "\n".join(parts)
+    """Format gathered context for display (Legacy/Internal use)."""
+    return "" # No longer prepending raw context to the AI display for a cleaner experience

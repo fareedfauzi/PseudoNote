@@ -257,299 +257,136 @@ def extract_ida_strings(graph=None, log_fn=None):
         return []
 
     results_container = []
+    seen_values = set()
 
-    def _sync_worker():
-        # Defensive imports within the synchronized worker to avoid thread-local SWIG issues
-        import idautils
-        import idc
-        import ida_bytes
-        import ida_funcs
-        import ida_nalt
-        import ida_segment
-        import ida_hexrays
-        import idaapi
+    def log(msg, level="info"):
+        if log_fn: log_fn(msg, level)
 
-        local_results = []
-        seen_values = set()
-
-        def log(msg, level="info"):
-            if log_fn: log_fn(msg, level)
-
-        # Heuristics for "Interesting" strings
+    def _add_string(val, ea_for_xref=None, stype="ASCII"):
+        if not val: return
+        val_strip = val.strip()
+        
+        # Noise filters and categorization logic (re-using existing logic)
+        # We need the regexes here
         url_re = re.compile(r'https?://[^\s"\'<>]{4,}', re.I)
         file_re = re.compile(r'[A-Za-z]:\\[\\\w\.\-\s]{5,}')
         reg_re = re.compile(r'(?:HKEY_|HKLM|HKCU|HKCR|HKU|Software\\(?:Microsoft|Wow6432Node|Classes|Policies))[\\\w\.\-\s]{5,}', re.I)
         cmd_re = re.compile(r'\b(?:cmd\.exe|powershell(?:\.exe)?|powershell_ise|bash|sh|cscript|wscript|mshta|regsvr32|rundll32|net\.exe|net1\.exe|schtasks|sc\.exe|bitsadmin)\b.*', re.I)
-        # Strict IPv4 — exactly 4 octets (0-255), not followed by another dot+digit (OID guard),
-        # not preceded by a digit-dot (to avoid matching tail of longer dotted sequence),
-        # and not a version string prefix like "v1." or "2.0.".
-        # EXCLUDES: loopback (127.x), link-local (169.254.x), multicast (224-239.x),
-        #           broadcast (255.x), unspecified (0.0.0.0), and private RFC1918 ranges
-        #           ONLY when the full string is ONLY an IP (to avoid false negatives in URLs).
         _octet = r'(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'
-        ip_re = re.compile(
-            r'(?<!\d\.)(?<!\d)'               # not preceded by digit or "digit."
-            r'\b'
-            r'(' + _octet + r'\.)' + r'{3}'   # exactly 3 "octet." groups
-            r'(' + _octet + r')'              # final octet — no trailing dot
-            r'\b'
-            r'(?!\.\d)'                       # not followed by ".digit" (OID / version guard)
-        )
-
-        def is_valid_public_ip(ip_str):
-            """Validate that an IP is a real, non-trivial internet address worth flagging."""
-            try:
-                parts = [int(p) for p in ip_str.split('.')]
-                if len(parts) != 4: return False
-                a, b = parts[0], parts[1]
-                # Reject loopback
-                if a == 127: return False
-                # Reject unspecified
-                if ip_str == '0.0.0.0': return False
-                # Reject link-local
-                if a == 169 and b == 254: return False
-                # Reject multicast
-                if 224 <= a <= 239: return False
-                # Reject broadcast / reserved
-                if a == 255: return False
-                # Reject private RFC1918 — these are usually noise in static analysis
-                if a == 10: return False
-                if a == 172 and 16 <= b <= 31: return False
-                if a == 192 and b == 168: return False
-                # Reject trivial "all zeros" per octet (e.g. version-like 1.0.0.0)
-                if parts[1] == 0 and parts[2] == 0 and parts[3] == 0: return False
-                return True
-            except Exception:
-                return False
-
+        ip_re = re.compile(r'(?<!\d\.)(?<!\d)\b(' + _octet + r'\.){3}(' + _octet + r')\b(?!\.\d)')
         mutex_re = re.compile(r'(?:\{[A-F0-9-]{32,}\})|(?:\b[A-Za-z0-9_]{8,}\bMutex)', re.I)
         exe_re = re.compile(r'\b[\w\-\.]+\.(?:exe|dll|sys|bat|vbs|ps1|com|scr|pif|vbe)\b', re.I)
-        # Library/Framework/Common boilerplate strings
-        library_re = re.compile(
-            r'\b(?:runtime error|assertion failed|invalid argument|out of memory|permission denied|'
-            r'no such file|not a directory|executable file format|math argument|math result|'
-            r'Mingw-w64 runtime|image-section|Partial loss of significance|Total loss of significance|'
-            r'UNDERFLOW|OVERFLOW|PLOSS|TLOSS|SIGN|Matherr|___report_error|'
-            r'Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|'
-            r'January|February|March|April|May|June|July|August|September|October|November|December|'
-            r'MM/dd/yy|dddd, MMMM dd, yyyy|'
-            r'AreFileApisANSI|LCMapStringEx|LocaleNameToLCID|AppPolicyGetProcessTerminationMethod)\b', re.I)
-        # Patterns for encoded/obfuscated data (Not junk) - Require at least one non-alphanumeric base64 char to reduce false positives
-        base64_re = re.compile(r'^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$')
-        hex_re = re.compile(r'^[0-9a-fA-F]{16,}$')
-        camel_concat_re = re.compile(r'^([A-Z][a-z0-9]{1,}){3,}$') # e.g. NtDelayExecutionGetNamed
+        library_re = re.compile(r'\b(?:runtime error|assertion failed|invalid argument|out of memory|permission denied)\b', re.I)
+        noise_re = re.compile(r'^[ `\'].*[\'\(]$|^\b(?:restrict\(|delete|operator|new\[\]|delete\[\]|Type Descriptor|Base Class Descriptor)\b', re.I)
 
-        # Comprehensive noise filter for C++ metadata, Windows boilerplate, and RTTI
-        noise_re = re.compile(
-            r'^[ `\'].*[\'\(]$|'  # MSVC backtick/quote metadata patterns (e.g. `vftable', `vcall')
-            r'^\b(?:restrict\(|delete|operator|new\[\]|delete\[\]|mscoree\.dll|CONOUT\$|CONIN\$|'
-            r'AreFileApisANSI|LCMapStringEx|LocaleNameToLCID|AppPolicyGetProcessTerminationMethod|'
-            r'FlsAlloc|FlsFree|FlsGetValue|FlsSetValue|InitializeCriticalSectionEx|CorExitProcess|'
-            r'GetCurrentProcess|MiniDumpWriteDump|LoadLibraryA|CloseHandle|GetProcAddress|LocalFree|'
-            r'GetModuleHandleW|TerminateProcess|IsProcessorFeaturePresent|QueryPerformanceCounter|'
-            r'GetCurrentProcessId|GetCurrentThreadId|GetSystemTimeAsFileTime|InitializeSListHead|'
-            r'UnhandledExceptionFilter|SetUnhandledExceptionFilter|RtlCaptureContext|'
-            r'RtlLookupFunctionEntry|RtlVirtualUnwind|__scrt_|__dcrt_|'
-            r'Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|'
-            r'January|February|March|April|May|June|July|August|September|October|November|December|'
-            r'MM/dd/yy|dddd, MMMM dd, yyyy|'
-            r'Type Descriptor|Base Class Descriptor|Base Class Array|Class Hierarchy Descriptor|Complete Object Locator'
-            r')|'                 # Keywords and RTTI phrases
-            r'^(?:api-ms-|ext-ms-|kernel32|user32|advapi32|ntdll|shell32|gdi32)', # System prefix
-            re.I
-        )
+        if noise_re.search(val_strip): return
+        
+        cat = "String"
+        if url_re.search(val_strip): cat = "URL"
+        elif file_re.search(val_strip): cat = "File Path"
+        elif reg_re.search(val_strip): cat = "Registry Key"
+        elif ip_re.search(val_strip): cat = "IP Address"
+        elif mutex_re.search(val_strip): cat = "Mutex"
+        elif cmd_re.search(val_strip): cat = "Command"
+        elif library_re.search(val_strip): cat = "Library/Runtime String"
+        elif exe_re.search(val_strip): cat = "Filename"
 
-        def get_entropy(s):
-            if not s: return 0
-            import math
-            counts = collections.Counter(s)
-            entropy = 0
-            for count in counts.values():
-                freq = count / len(s)
-                entropy -= freq * math.log2(freq)
-            return entropy
+        if cat in ["String", "Library/Runtime String"]:
+            if len(val_strip) < 5: return
+            # Simple repetitive sequence check
+            if len(val_strip) >= 5 and any(val_strip.count(c) / len(val_strip) > 0.7 for c in set(val_strip)): return
 
-        def is_junk(s):
-            if not s: return True
-            s_stripped = s.strip()
-            length = len(s_stripped)
-            if length < 5:
-                if cmd_re.search(s_stripped): return False
-                return True
-            
-            # Repetitive sequences (e.g., gffff, UUUUw)
-            if length >= 5 and any(s_stripped.count(c) / length > 0.7 for c in set(s_stripped)):
-                return True
+        if val in seen_values: return
+        seen_values.add(val)
+        
+        funcs = set()
+        if ea_for_xref is not None and idaapi:
+            try:
+                for ref in idautils.DataRefsTo(ea_for_xref):
+                    f = ida_funcs.get_func(ref)
+                    if f:
+                        fname = ida_funcs.get_func_name(f.start_ea)
+                        if fname: funcs.add(fname)
+            except: pass
+        
+        results_container.append({
+            "value": val, "type": stype, "category": cat, "funcs": sorted(list(funcs))[:3]
+        })
 
-            # Instruction fragment check (e.g., D$&f, |$81, L[^_])
-            # High symbol density + short length often indicates binary noise
-            symbols = sum(1 for c in s_stripped if not c.isalnum() and not c.isspace())
-            if length < 10 and symbols / length > 0.5:
-                # But keep if it looks like a known command part
-                if not cmd_re.search(s_stripped): return True
-
-            printable_ratio = sum(1 for c in s if 32 <= ord(c) <= 126) / len(s)
-            if printable_ratio < 0.6: return True
-            
-            # Common compiler/instruction junk (e.g., ?. , ?? , __ , etc.)
-            if s.startswith('__') or s.startswith('?.') or s.startswith('??'):
-                # Keep if it looks like a real runtime error
-                if not library_re.search(s): return True
-            
-            # Specific instruction patterns found in strings (Stack refs)
-            if re.search(r'[\$\[\]\^]{3,}', s_stripped): return True
-
-            return False
-
-        def _add_string(val, ea_for_xref=None, stype="ASCII"):
-            if not val: return
-            val_strip = val.strip()
-            
-            # Explicit Noise Block: Return early if string is a known system/metadata artifact
-            if noise_re.search(val_strip):
-                return
-            
-            # Determine Category first to see if it's "Interesting" enough to bypass junk filter
-            cat = "String"
-            if url_re.search(val_strip): cat = "URL"
-            elif file_re.search(val_strip): cat = "File Path"
-            elif reg_re.search(val_strip): cat = "Registry Key"
-            elif (m := ip_re.search(val_strip)) and is_valid_public_ip(m.group()): cat = "IP Address"
-            elif mutex_re.search(val_strip): cat = "Mutex"
-            elif cmd_re.search(val_strip): cat = "Command"
-            elif library_re.search(val_strip): cat = "Library/Runtime String"
-            elif exe_re.search(val_strip): cat = "Filename"
-            elif val_strip.lower().startswith(('api-ms-win-', 'ext-ms-win-')) or val_strip.lower() in ["kernel32", "user32", "advapi32", "ntdll", "shell32", "gdi32"]:
-                cat = "System Component"
-            elif len(val_strip) >= 16 and (hex_re.match(val_strip) or (base64_re.match(val_strip) and (not val_strip.isalnum() or get_entropy(val_strip) > 4.5))):
-                # Extra check: if it looks like CamelCase concatenation, it's probably not Base64
-                if not camel_concat_re.match(val_strip):
-                    cat = "Encoded Data"
-            elif len(val_strip) >= 12 and get_entropy(val_strip) > 3.8 and ' ' not in val_strip:
-                if not camel_concat_re.match(val_strip):
-                    cat = "Potential Encryption/Obfuscation"
-
-            # Filter Junk unless it's specifically categorized as something interesting
-            if cat in ["String", "Library/Runtime String"] and is_junk(val): return
-            
-            if val in seen_values: return
-            seen_values.add(val)
-            
-            funcs = set()
-            if ea_for_xref is not None:
-                try:
-                    for ref in idautils.DataRefsTo(ea_for_xref):
-                        f = ida_funcs.get_func(ref)
-                        if f:
-                            fname = ida_funcs.get_func_name(f.start_ea)
-                            if fname: funcs.add(fname)
-                except: pass
-            
-            local_results.append({
-                "value": val,
-                "type": stype,
-                "category": cat,
-                "funcs": sorted(list(funcs))[:3]
-            })
-
-        log("Starting string extraction (synchronized)...", "info")
-
-        # 1. Standard IDA Strings scan (Baseline)
-        try:
+    # Phase 1: Baseline scan (Standard IDA Strings)
+    try:
+        log("Baseline string scan (Standard IDA Strings)...", "info")
+        def _sync_baseline():
+            import idautils, ida_nalt
             s_obj = idautils.Strings()
-            # Setup with all types if possible
             s_obj.setup(strtypes=[ida_nalt.STRTYPE_C, ida_nalt.STRTYPE_C_16])
             for s in s_obj:
                 stype = "ASCII"
-                if hasattr(s, 'type') and s.type in (ida_nalt.STRTYPE_C_16, ida_nalt.STRTYPE_P_16, ida_nalt.STRTYPE_LEN2_16):
+                if hasattr(s, 'type') and s.type in (ida_nalt.STRTYPE_C_16, ida_nalt.STRTYPE_P_16):
                     stype = "Unicode"
                 _add_string(str(s), s.ea, stype)
-        except Exception as e:
-            log(f"Baseline string scan error: {e}", "err")
+        idaapi.execute_sync(_sync_baseline, idaapi.MFF_READ)
+    except Exception as e:
+        log(f"Baseline scan failure: {e}", "err")
         
-        # 2. Strategic Supplement: Scan analyzed functions specifically
-        if graph:
-            try:
-                for node in graph.values():
-                    if node.is_library: continue
-                    for item_ea in idautils.FuncItems(node.ea):
-                        for xref in idautils.DataRefsFrom(item_ea):
-                            s_content = idc.get_strlit_contents(xref)
-                            if s_content:
-                                try:
-                                    val = s_content.decode('utf-8')
-                                    stype = "ASCII"
-                                except UnicodeDecodeError:
-                                    try:
-                                        val = s_content.decode('utf-16le')
-                                        stype = "Unicode"
-                                    except: continue
-                                _add_string(val, xref, stype)
-            except Exception as e:
-                log(f"Function supplement scan error: {e}", "err")
-
-        # 3. Decompiled Source Scan
-        if graph:
-            try:
-                for node in graph.values():
-                    if node.is_library: continue
-                    try:
-                        cfunc = ida_hexrays.decompile(node.ea)
-                        if cfunc:
-                            decompiled = str(cfunc)
-                            found_literals = re.findall(r'"((?:[^"\\]|\\.)*)"', decompiled)
-                            for val in found_literals:
-                                _add_string(val, node.ea, "ASCII")
-                    except: continue
-            except Exception as e:
-                log(f"Decompiled scan error: {e}", "err")
-
-        # 4. Deterministic Segment Scanning (The "No matter what" scan)
-        # We are commenting this out because blindly pulling sequences of 4 ASCII
-        # printable characters from binary segments results in a massive amount of
-        # false positives (opcodes interpreted as strings), filling the report with
-        # garbage. IDA's built-in strings list (`idautils.Strings`) and the
-        # Function Supplement scanner are already pulling the valid strings.
-        """
+    # Phase 2: Supplemental scan of analyzed functions (CHUNKED)
+    if graph:
         try:
-            log("Performing deterministic segment-level scan...", "info")
-            for i in range(idaapi.get_segm_qty()):
-                seg = idaapi.getnseg(i)
-                if not seg: continue
-                ea = seg.start_ea
-                end_ea = seg.end_ea
+            log("Supplemental scan of analyzed functions...", "info")
+            nodes = [n for n in graph.values() if not n.is_library]
+            CHUNK = 20
+            for i in range(0, len(nodes), CHUNK):
+                batch = nodes[i:i+CHUNK]
                 
-                # Use chunks to avoid massive memory overhead
-                chunk_size = 0x10000
-                while ea < end_ea:
-                    curr_chunk = min(chunk_size, end_ea - ea)
-                    data = ida_bytes.get_bytes(ea, curr_chunk)
-                    if data:
-                        # ASCII Scan
-                        for match in re.finditer(b'[ -~]{4,}', data):
-                            try:
-                                val = match.group().decode('ascii')
-                                _add_string(val, ea + match.start(), "ASCII")
-                            except: pass
-                        # UTF-16LE Scan
-                        for match in re.finditer(b'(?:[ -~]\x00){4,}', data):
-                            try:
-                                val = match.group().decode('utf-16le')
-                                _add_string(val, ea + match.start(), "Unicode")
-                            except: pass
-                    ea += curr_chunk
+                def _sync_batch_item(curr_batch=batch):
+                    import idautils, idc
+                    for node in curr_batch:
+                        for item_ea in idautils.FuncItems(node.ea):
+                            for xref in idautils.DataRefsFrom(item_ea):
+                                s_content = idc.get_strlit_contents(xref)
+                                if s_content:
+                                    try:
+                                        val = s_content.decode('utf-8')
+                                        stype = "ASCII"
+                                    except UnicodeDecodeError:
+                                        try:
+                                            val = s_content.decode('utf-16le')
+                                            stype = "Unicode"
+                                        except: continue
+                                    _add_string(val, xref, stype)
+                
+                idaapi.execute_sync(_sync_batch_item, idaapi.MFF_READ)
+                time.sleep(0.005) # Yield to UI
         except Exception as e:
-            log(f"Deterministic segment scan error: {e}", "err")
-        """
-            
-        results_container.extend(local_results)
-        return idaapi.MFF_READ
+            log(f"Function supplement scan error: {e}", "err")
 
-    # Execute all IDA API calls on the main thread and collect result
-    # We use MFF_WRITE for maximizing access permission on worker threads
-    # We return results_container (list) regardless of execute_sync's return value
-    idaapi.execute_sync(_sync_worker, idaapi.MFF_WRITE)
-    
+    # Phase 3: Decompile scan (CHUNKED - Most expensive)
+    if graph:
+        try:
+            log("Strategic decompile scan for strings...", "info")
+            nodes = [n for n in graph.values() if not n.is_library]
+            # Decompilation is very heavy, use smaller chunk
+            CHUNK = 5
+            for i in range(0, len(nodes), CHUNK):
+                batch = nodes[i:i+CHUNK]
+                
+                def _sync_decompile_batch(curr_batch=batch):
+                    import ida_hexrays
+                    for node in curr_batch:
+                        try:
+                            cfunc = ida_hexrays.decompile(node.ea)
+                            if cfunc:
+                                decompiled = str(cfunc)
+                                found_literals = re.findall(r'"((?:[^"\\]|\\.)*)"', decompiled)
+                                for val in found_literals:
+                                    _add_string(val, node.ea, "ASCII")
+                        except: continue
+                
+                idaapi.execute_sync(_sync_decompile_batch, idaapi.MFF_READ)
+                time.sleep(0.01) # Yield to UI
+        except Exception as e:
+            log(f"Decompiled scan error: {e}", "err")
+            
     if log_fn:
         log_fn(f"Extracted {len(results_container)} categorized strings.", "info")
     return results_container
@@ -2546,12 +2383,21 @@ def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn
     names_map = {n.ea: n.name for n in graph.values()}
     categorized_apis = collections.defaultdict(list)
     
-    for node in graph.values():
-        if node.is_library: continue
-        hits = _real_get_api_tags(node.ea, getattr(node, 'callees', []), names_map=names_map)
-        for cat, apis in hits.items():
-            for api in apis:
-                categorized_apis[cat].append((api, node.name))
+    # 1. Aggregate categorized APIs (CHUNKED)
+    nodes_to_process = [n for n in graph.values() if not n.is_library]
+    CHUNK = 50
+    for i in range(0, len(nodes_to_process), CHUNK):
+        batch = nodes_to_process[i:i+CHUNK]
+        
+        def _sync_api_batch(curr_batch=batch):
+            for node in curr_batch:
+                hits = _real_get_api_tags(node.ea, getattr(node, 'callees', []), names_map=names_map)
+                for cat, apis in hits.items():
+                    for api in apis:
+                        categorized_apis[cat].append((api, node.name))
+        
+        idaapi.execute_sync(_sync_api_batch, idaapi.MFF_READ)
+        time.sleep(0.005) # Yield to UI
     
     api_digest = []
     
@@ -2777,7 +2623,12 @@ def build_analysis_digest(graph, entry_ea, analysis_cache=None, interest_calc_fn
     else:
         cg_ascii = "  No call graph available."
 
-    nb_dispatch = f"=== EXECUTION DISPATCH & CALL GRAPH ===\nLAYER 1 DISPATCH:\n{chr(10).join(entry_children_blocks) if entry_children_blocks else '  No immediate operational calls identifiable.'}\n\nCALL GRAPH HIERARCHY:\n{cg_ascii}\n"
+    entry_info = ""
+    if entry_node:
+        entry_one_liner = (analysis_cache.get(entry_node.ea, "") if analysis_cache else "") or getattr(entry_node, "one_liner", "") or "(analyzed entry point)"
+        entry_info = f"  [ENTRY POINT: {entry_node.name}] (0x{entry_node.ea:X})\n    Purpose: {entry_one_liner.strip()}\n\n"
+
+    nb_dispatch = f"=== EXECUTION DISPATCH & CALL GRAPH ===\nLAYER 1 DISPATCH (Callers of Entry):\n{entry_info}{chr(10).join(entry_children_blocks) if entry_children_blocks else '  No immediate operational calls identifiable.'}\n\nCALL GRAPH HIERARCHY:\n{cg_ascii}\n"
     
     # Notebook Section 3: Critical Payloads (NEVER TRUNCATED)
     nb_malicious = f"=== CRITICAL MALICIOUS PAYLOADS ===\n{chr(10).join(malicious_blocks) if malicious_blocks else '  No explicitly malicious payload functions discovered.'}\n"

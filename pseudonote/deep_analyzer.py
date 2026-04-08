@@ -401,118 +401,69 @@ def build_call_graph(entry_ea: int, stop_checker: Optional[Callable[[], bool]] =
         if not f:
             continue
 
-        # Traverse instructions to find callees
-        func_items = res_f["func_items"]
-        for item_ea in func_items:
+        # Traverse instructions to find callees (BATCHED)
+        res_callees = {"data": []}
+        def _sync_gather_callees():
+            func_items = list(idautils.FuncItems(f.start_ea))
+            data = []
+            for item_ea in func_items:
+                # Direct Code References
+                crefs = list(idautils.CodeRefsFrom(item_ea, False))
+                for ref_ea in crefs:
+                    cf = ida_funcs.get_func(ref_ea)
+                    if cf:
+                        c_ea = cf.start_ea
+                        c_name = idc.get_func_name(c_ea) or idc.get_name(c_ea) or f"sub_{c_ea:x}"
+                        data.append(("direct", item_ea, c_ea, c_name))
+                
+                # Indirect / Data References
+                drefs = list(idautils.DataRefsFrom(item_ea))
+                for ref_ea in drefs:
+                    if not _is_valid_seg_raw(ref_ea): continue
+                    seg = ida_segment.getseg(ref_ea)
+                    if not seg or seg.type != ida_segment.SEG_CODE: continue
+                    cf = ida_funcs.get_func(ref_ea)
+                    if cf:
+                        c_ea = cf.start_ea
+                        c_name = idc.get_func_name(c_ea) or idc.get_name(c_ea) or f"sub_{c_ea:x}"
+                        data.append(("indirect", item_ea, c_ea, c_name))
+            res_callees["data"] = data
+
+        idaapi.execute_sync(_sync_gather_callees, idaapi.MFF_READ)
+        
+        callee_count = 0
+        for ref_type, item_ea, callee_ea, callee_name in res_callees["data"]:
             if stop_checker and stop_checker():
                 break
             
-            # Direct Code References
-            res_crefs = {"refs": []}
-            def _sync_crefs():
-                res_crefs["refs"] = list(idautils.CodeRefsFrom(item_ea, False))
-            idaapi.execute_sync(_sync_crefs, idaapi.MFF_READ)
-            
-            # Bug #4: Callee fan-out limit
-            callee_count = 0
-            for ref_ea in res_crefs["refs"]:
-                if callee_count >= MAX_CALLEES:
-                    if log_fn and callee_count == MAX_CALLEES:
-                        log_fn(f"Fan-out limit ({MAX_CALLEES}) reached for 0x{item_ea:X}. Skipping further callees.", "warn")
-                    break
-                res_callee = {"f": None, "ea": 0, "name": ""}
-                def _sync_callee():
-                    cf = ida_funcs.get_func(ref_ea)
-                    if cf:
-                        res_callee["f"] = cf
-                        res_callee["ea"] = cf.start_ea
-                        res_callee["name"] = idc.get_func_name(cf.start_ea) or idc.get_name(cf.start_ea) or f"sub_{cf.start_ea:x}"
-                idaapi.execute_sync(_sync_callee, idaapi.MFF_READ)
-                
-                callee_f = res_callee["f"]
-                if not callee_f: continue
-                
-                callee_ea = res_callee["ea"]
-                if callee_ea == curr_ea: continue
+            if callee_ea == curr_ea: continue
+            if callee_count >= MAX_CALLEES:
+                if log_fn and callee_count == MAX_CALLEES:
+                    log_fn(f"Fan-out limit ({MAX_CALLEES}) reached for 0x{item_ea:X}. Skipping further callees.", "warn")
+                break
 
-                callee_name = res_callee["name"]
-                
-                if callee_ea not in graph:
-                    if len(graph) < MAX_NODES:
-                        graph[callee_ea] = FuncNode(callee_ea, callee_name, depth + 1)
-                    else:
-                        if callee_ea not in boundary_eas: boundary_eas.append(callee_ea)
-                        continue
-                
-                callee_node = graph[callee_ea]
-                if curr_ea not in callee_node.callers: callee_node.callers.append(curr_ea)
-                if callee_ea not in curr_node.callees: curr_node.callees.append(callee_ea)
-                
-                if callee_node.is_library:
-                    continue
-                callee_count += 1
-
-                if callee_ea not in visited:
-                    visited.add(callee_ea)
-                    if len(queue) < MAX_QUEUE:
-                        queue.append((callee_ea, depth + 1))
-
-            # Indirect Call / Vtable / Data Reference Detection
-            res_drefs = {"refs": []}
-            def _sync_drefs():
-                res_drefs["refs"] = list(idautils.DataRefsFrom(item_ea))
-            idaapi.execute_sync(_sync_drefs, idaapi.MFF_READ)
-            
-            for ref_ea in res_drefs["refs"]:
-                res_indirect = {"f": None, "ea": 0, "name": "", "is_valid": False, "is_code": False}
-                def _sync_indirect():
-                    res_indirect["is_valid"] = _is_valid_seg_raw(ref_ea)
-                    if not res_indirect["is_valid"]: return
-                    
-                    seg = ida_segment.getseg(ref_ea)
-                    if not seg or seg.type != ida_segment.SEG_CODE: return
-                    res_indirect["is_code"] = True
-                    
-                    cf = ida_funcs.get_func(ref_ea)
-                    if cf:
-                        res_indirect["f"] = cf
-                        res_indirect["ea"] = cf.start_ea
-                        res_indirect["name"] = idc.get_func_name(cf.start_ea) or idc.get_name(cf.start_ea) or f"sub_{cf.start_ea:x}"
-                idaapi.execute_sync(_sync_indirect, idaapi.MFF_READ)
-                
-                # Bug #4: Callee fan-out limit (Indirect)
-                if callee_count >= MAX_CALLEES:
-                    break
-                if not res_indirect["is_valid"] or not res_indirect["is_code"]: continue
-                callee_f = res_indirect["f"]
-                if not callee_f: continue
-
-                callee_ea = res_indirect["ea"]
-                if callee_ea == curr_ea: continue
-
-                callee_name = res_indirect["name"]
-                
-                if callee_ea not in graph:
-                    if len(graph) < MAX_NODES:
-                        graph[callee_ea] = FuncNode(callee_ea, callee_name, depth + 1)
+            if callee_ea not in graph:
+                if len(graph) < MAX_NODES:
+                    graph[callee_ea] = FuncNode(callee_ea, callee_name, depth + 1)
+                    if ref_type == "indirect":
                         graph[callee_ea].is_callback = True
                         graph[callee_ea].is_indirect = True
-                    else:
-                        if callee_ea not in boundary_eas: boundary_eas.append(callee_ea)
-                        continue
-                
-                callee_node = graph[callee_ea]
-                if curr_ea not in callee_node.callers: callee_node.callers.append(curr_ea)
-                if callee_ea not in curr_node.callees: curr_node.callees.append(callee_ea)
-
-                if callee_node.is_library:
+                else:
+                    if callee_ea not in boundary_eas: boundary_eas.append(callee_ea)
                     continue
-                callee_count += 1
+            
+            callee_node = graph[callee_ea]
+            if curr_ea not in callee_node.callers: callee_node.callers.append(curr_ea)
+            if callee_ea not in curr_node.callees: curr_node.callees.append(callee_ea)
+            
+            if not callee_node.is_library and callee_ea not in visited:
+                visited.add(callee_ea)
+                if len(queue) < MAX_QUEUE:
+                    queue.append((callee_ea, depth + 1))
+            callee_count += 1
 
-                if callee_ea not in visited:
-                    visited.add(callee_ea)
-                    if len(queue) < MAX_QUEUE:
-                        queue.append((callee_ea, depth + 1))
+        # Yield to UI after each function processed to prevent lockup
+        time.sleep(0.001)
 
     # Detect Mutual Recursion (Cycles)
     def _find_cycles():
@@ -1772,20 +1723,8 @@ def validate_variable_renames(ea, raw_var_map, log_fn):
 # Two-Stage Strategy Helpers
 # ---------------------------------------------------------------------------
 
-def build_caller_context(node, graph):
-    """Build rich context from all callers and their purposes.
-    
-    This tells the function: "You were called to do X in the context of Y"
-    
-    Returns:
-        dict: {
-            "call_chain": ["main", "setup_exploit", "allocate_buffer"],
-            "caller_purposes": [{"function": "main", "purpose": "..."}],
-            "sibling_functions": ["enable_debug_priv", "open_lsass"],
-            "execution_phase": "main execution branch",
-            "data_flow": []
-        }
-    """
+def build_caller_context(node, graph, entry_ea=None):
+    """Build rich context from all callers and their purposes."""
     context = {
         "call_chain": [],
         "caller_purposes": [],
@@ -1795,28 +1734,30 @@ def build_caller_context(node, graph):
     }
     
     # Build call chain from entry to this node
-    call_chain = find_path_from_entry(node.ea, graph)
+    call_chain = find_path_from_entry(node.ea, graph, entry_ea=entry_ea)
     context["call_chain"] = [graph[ea].name for ea in call_chain if ea in graph]
     
     # Get caller purposes from their analyses
     for caller_ea in node.callers:
-        if caller_ea not in graph:
-            continue
+        if caller_ea not in graph: continue
         caller = graph[caller_ea]
         
-        # Load caller's analysis (might be preliminary or final)
-        caller_raw = load_from_idb(caller_ea, tag=85)
-        if caller_raw:
-            try:
-                data = json.loads(caller_raw)
-                context["caller_purposes"].append({
-                    "function": caller.name,
-                    "purpose": data.get("one_liner", ""),
-                    "risk": data.get("risk_tag", "unknown"),
-                    "suspicious": data.get("suspicious", [])
-                })
-            except Exception as e:
-                pass
+        # Check memory cache first to avoid MFF_READ sync call
+        analysis_data = _analysis_cache.get(caller_ea)
+        if not isinstance(analysis_data, dict):
+            caller_raw = load_from_idb(caller_ea, tag=85)
+            try: 
+                analysis_data = json.loads(caller_raw) if caller_raw else {}
+                if analysis_data: _analysis_cache[caller_ea] = analysis_data
+            except: analysis_data = {}
+
+        if analysis_data:
+            context["caller_purposes"].append({
+                "function": caller.name,
+                "purpose": analysis_data.get("one_liner", ""),
+                "risk": analysis_data.get("risk_tag", "unknown"),
+                "suspicious": analysis_data.get("suspicious", [])
+            })
         # Get sibling functions (other functions caller uses)
         siblings = [graph[c].name for c in caller.callees 
                    if c in graph and c != node.ea and not graph[c].is_library]
@@ -1838,19 +1779,19 @@ def build_caller_context(node, graph):
     return context
 
 
-def find_path_from_entry(target_ea, graph):
+def find_path_from_entry(target_ea, graph, entry_ea=None):
     """Find shortest path from entry point to target function using BFS.
     
     Returns:
         list: [entry_ea, intermediate_ea, ..., target_ea]
     """
-    # Find entry point (node with depth=0 or lowest depth)
-    entry_ea = None
-    min_depth = float('inf')
-    for ea, node in graph.items():
-        if not node.is_library and node.depth < min_depth:
-            min_depth = node.depth
-            entry_ea = ea
+    if entry_ea is None:
+        # Find entry point (node with depth=0 or lowest depth)
+        min_depth = float('inf')
+        for ea, node in graph.items():
+            if not getattr(node, 'is_library', False) and node.depth < min_depth:
+                min_depth = node.depth
+                entry_ea = ea
     
     if not entry_ea or entry_ea == target_ea:
         return [target_ea]
@@ -1877,7 +1818,7 @@ def find_path_from_entry(target_ea, graph):
     return [target_ea]
 
 
-def get_malicious_context_semantic(node, graph):
+def get_malicious_context_semantic(node, graph, entry_ea=None):
     """Identify malicious analysis red flags using semantic analysis instead of keyword matching.
     
     Uses multiple detection layers:
@@ -1902,21 +1843,21 @@ def get_malicious_context_semantic(node, graph):
     # LAYER 2: BEHAVIORAL PATTERN DETECTION
     # ═══════════════════════════════════════════════════════════════
     
-    behavior_markers = detect_behavioral_patterns(node, graph)
+    behavior_markers = detect_behavioral_patterns(node, graph, entry_ea=entry_ea)
     markers.extend(behavior_markers)
     
     # ═══════════════════════════════════════════════════════════════
     # LAYER 3: CALL CHAIN SEMANTIC ANALYSIS
     # ═══════════════════════════════════════════════════════════════
     
-    chain_markers = analyze_call_chain_semantics(node, graph)
+    chain_markers = analyze_call_chain_semantics(node, graph, entry_ea=entry_ea)
     markers.extend(chain_markers)
     
     # ═══════════════════════════════════════════════════════════════
     # LAYER 4: STRING CONTENT ANALYSIS
     # ═══════════════════════════════════════════════════════════════
     
-    string_markers = analyze_string_content(node, graph)
+    string_markers = analyze_string_content(node, graph, entry_ea=entry_ea)
     markers.extend(string_markers)
     
     return list(set(markers))  # Deduplicate
@@ -1960,10 +1901,10 @@ def detect_sensitive_api_patterns(node, graph):
 # LAYER 2: BEHAVIORAL PATTERN DETECTION
 # ═══════════════════════════════════════════════════════════════════════
 
-def detect_behavioral_patterns(node, graph):
+def detect_behavioral_patterns(node, graph, entry_ea=None):
     """Detect malicious behavior patterns along the call chain using taxonomy and AI semantics."""
     markers = []
-    call_chain = find_path_from_entry(node.ea, graph)
+    call_chain = find_path_from_entry(node.ea, graph, entry_ea=entry_ea)
     
     # Track observed capabilities along the path
     path_capabilities = set()
@@ -2018,11 +1959,11 @@ def detect_behavioral_patterns(node, graph):
 # LAYER 3: CALL CHAIN SEMANTIC ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════
 
-def analyze_call_chain_semantics(node, graph):
+def analyze_call_chain_semantics(node, graph, entry_ea=None):
     """Use AI-derived semantics to analyze call chain purpose."""
     markers = []
     
-    call_chain = find_path_from_entry(node.ea, graph)
+    call_chain = find_path_from_entry(node.ea, graph, entry_ea=entry_ea)
     if len(call_chain) < 3:
         return markers
     
@@ -2057,11 +1998,11 @@ def analyze_call_chain_semantics(node, graph):
 # LAYER 4: STRING CONTENT ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════
 
-def analyze_string_content(node, graph):
+def analyze_string_content(node, graph, entry_ea=None):
     """Analyze string literals for sensitive targets and indicators."""
     markers = []
     
-    call_chain = find_path_from_entry(node.ea, graph)
+    call_chain = find_path_from_entry(node.ea, graph, entry_ea=entry_ea)
     all_strings = []
     
     for ea in call_chain:
@@ -2177,16 +2118,8 @@ def detect_sibling_patterns(node, graph):
     return list(set(patterns))
 
 
-def determine_risk_with_context(node, result, context, graph):
-    """Determine final risk using both local analysis and contextual information.
-
-    STRICT MODE — guards against malware hallucination:
-    - Local indicator must be HIGH quality (not just any API hit).
-    - At least 2 independent upgrade conditions must fire simultaneously.
-    - Minimum confidence thresholds enforced before assigning malicious/suspicious.
-    - Small functions (< 8 pseudocode lines) cannot be upgraded to malicious.
-    - Downgrade protection extended to depth > 2.
-    """
+def determine_risk_with_context(node, result, context, graph, entry_ea=None):
+    """Determine final risk using both local analysis and contextual information."""
     risk = result.get("risk_tag", "benign")
     suspicious = result.get("suspicious", [])
     confidence = result.get("confidence", 0)
@@ -2257,7 +2190,7 @@ def determine_risk_with_context(node, result, context, graph):
         risk = "suspicious"
 
     # ── 2. MARKER / PATTERN COMPUTATION ───────────────────────────────────────
-    malicious_markers = get_malicious_context_semantic(node, graph)
+    malicious_markers = get_malicious_context_semantic(node, graph, entry_ea=entry_ea)
     sibling_patterns  = detect_sibling_patterns(node, graph)
 
     result["context_markers"] = malicious_markers
@@ -2657,24 +2590,26 @@ def determine_risk_with_context(node, result, context, graph):
 
 
 def analyze_with_context(ea, node, graph, output_dir, ai_cfg, analyzed_eas, context, log_fn,
-                        char_count_cb=None, cooldown_cb=None, llm_state_cb=None):
+                        char_count_cb=None, cooldown_cb=None, llm_state_cb=None, entry_ea=None):
     """Perform contextual re-analysis of a function (Contextual Malicious Code Analysis Refinement)."""
     # Call analyze_single_function in contextual mode
-    result = analyze_single_function(
+    result, used_code = analyze_single_function(
         ea, node, graph, output_dir, ai_cfg, analyzed_eas, log_fn,
         mode="contextual",
         context=context,
         char_count_cb=char_count_cb,
         cooldown_cb=cooldown_cb,
-        llm_state_cb=llm_state_cb
+        llm_state_cb=llm_state_cb,
+        entry_ea=entry_ea
     )
     
-    # Apply contextual risk determination
-    def _sync_risk():
-        determine_risk_with_context(node, result, context, graph)
-    idaapi.execute_sync(_sync_risk, idaapi.MFF_READ)
+    if result:
+        # Apply contextual risk determination
+        def _sync_risk():
+            determine_risk_with_context(node, result, context, graph, entry_ea=entry_ea)
+        idaapi.execute_sync(_sync_risk, idaapi.MFF_READ)
     
-    return result
+    return result, used_code
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3050,7 +2985,8 @@ Reply with ONLY valid JSON. No markdown backticks."""
 
 def analyze_single_function(ea, node, graph, output_dir, ai_cfg, analyzed_eas, log_fn, 
                            mode="preliminary", context=None,
-                           char_count_cb=None, cooldown_cb=None, llm_state_cb=None, update_cb=None):
+                           char_count_cb=None, cooldown_cb=None, llm_state_cb=None, update_cb=None,
+                           entry_ea=None):
     """Perform a deep analysis of a function using AI and store results in JSON."""
     
     # Last-mile library/sys skip defense
@@ -3062,7 +2998,7 @@ def analyze_single_function(ea, node, graph, output_dir, ai_cfg, analyzed_eas, l
             "one_liner": "Standard library / compiler-generated helper function (skipped analysis).",
             "summary": "This function was identified as a system/compiler helper. It is automatically classified as benign.",
             "risk_logic": "Verified via static name/signature matching against standard signatures."
-        }
+        }, ""
 
     # For contextual mode (Stage 5), always fetch fresh code so lvar names reflect
     # any renames applied during Stage 4 — NOT the stale pre-rename disk cache.
@@ -3327,7 +3263,8 @@ def analyze_single_function(ea, node, graph, output_dir, ai_cfg, analyzed_eas, l
     log_fn(f"   [+] Analyzed {node.name} ({node.confidence}% confidence)", "ok")
     
     if update_cb: update_cb(ea, node.name, node.name, node.confidence)
-    return result
+    # Final return (result, analysis_code)
+    return result, analysis_code
 
 def analyze_batch_functions(batch, graph, output_dir, ai_cfg, analyzed_eas, log_fn,
                            char_count_cb=None, cooldown_cb=None, llm_state_cb=None):
@@ -3695,26 +3632,33 @@ class AnalysisWorker(QThread):
             for round_idx, wave_eas in enumerate(waves):
                 if self._stop or _ai_mod.AI_CANCEL_REQUESTED: break
                 
-                # Step 3b: gather wave pseudocode + ASM counts (Read Phase)
+                # Step 3b: gather wave pseudocode + ASM counts (Read Phase - BATCHED)
                 res_data_ana = {}
-                def _gather_wave():
-                    for ea in wave_eas:
-                        if self._stop: break
-                        c = get_code_fast(ea) or ""
-                        res_data_ana[ea] = c
-                        node = self.graph.get(ea)
-                        if node:
-                            try:
-                                f = ida_funcs.get_func(ea)
-                                node._asm_count = len(list(idautils.FuncItems(f.start_ea))) if f else 0
-                                # GATHER TECHNICAL INDICATORS (Stage 4 Improvement)
-                                node.complexity = count_cfg_complexity(ea)
-                                node.entropy = calculate_data_entropy(ea)
-                            except: 
-                                node._asm_count = 0
-                                node.complexity = {"branches": 0, "loops": 0}
-                                node.entropy = 0.0
-                idaapi.execute_sync(_gather_wave, idaapi.MFF_READ)
+                # Process wave in chunks of 10 to keep UI alive
+                CHUNK_SIZE = 10
+                for i in range(0, len(wave_eas), CHUNK_SIZE):
+                    if self._stop: break
+                    chunk = wave_eas[i:i+CHUNK_SIZE]
+                    
+                    def _gather_chunk_task(c_eas=chunk):
+                        for ea in c_eas:
+                            code = get_code_fast(ea) or ""
+                            res_data_ana[ea] = code
+                            node = self.graph.get(ea)
+                            if node:
+                                try:
+                                    f = ida_funcs.get_func(ea)
+                                    node._asm_count = len(list(idautils.FuncItems(f.start_ea))) if f else 0
+                                    node.complexity = count_cfg_complexity(ea)
+                                    node.entropy = calculate_data_entropy(ea)
+                                except:
+                                    node._asm_count = 0
+                                    node.complexity = {"branches": 0, "loops": 0}
+                                    node.entropy = 0.0
+                    
+                    idaapi.execute_sync(_gather_chunk_task, idaapi.MFF_READ)
+                    # Yield thread after each chunk
+                    time.sleep(0.005)
 
                 # Step 3c: Single task generation for this wave (batching disabled for Stage 4)
                 wave_tasks = []
@@ -3764,16 +3708,19 @@ class AnalysisWorker(QThread):
                             self.func_updated_signal.emit(node.ea, node.name, node.name, 0)
                             
                             try:
-                                res = analyze_single_function(
+                                res, _ = analyze_single_function(
                                     node.ea, node, self.graph, output_dir, ai_cfg, analyzed_eas, log_fn, mode="preliminary", 
                                     char_count_cb=lambda c, m: self.char_count_signal.emit(c, m),
                                     cooldown_cb=lambda c, t: self.cooldown_progress_signal.emit(c, t),
-                                    llm_state_cb=lambda s: self.llm_state_signal.emit(s)
+                                    llm_state_cb=lambda s: self.llm_state_signal.emit(s),
+                                    entry_ea=self.entry_ea
                                 )
                                 results = [("single", node, res)] if res else []
                             except Exception as e:
                                 log_fn(f"   [-] Assessment failed for {node.name}: {e}", "err")
                                 results = []
+                            # Yield to UI thread to keep main loop responsive
+                            time.sleep(0.005)
                         else:  # batch
                             batch = payload
                             for ea, n, _ in batch:
@@ -3801,11 +3748,12 @@ class AnalysisWorker(QThread):
                                     log_fn(f"   [~] Retrying {len(failed_nodes)} failed batch nodes individually...", "warn")
                                     for r_ea, r_node, _ in failed_nodes:
                                         try:
-                                            r_res = analyze_single_function(
-                                                r_node.ea, r_node, self.graph, output_dir, ai_cfg, analyzed_eas, log_fn, mode="preliminary",
+                                            r_res, _ = analyze_single_function(
+                                                r_node.ea, r_node, self.graph, output_dir, ai_cfg, analyzed_eas, log_fn, mode="preliminary", 
                                                 char_count_cb=lambda c, m: self.char_count_signal.emit(c, m),
                                                 cooldown_cb=lambda c, t: self.cooldown_progress_signal.emit(c, t),
-                                                llm_state_cb=lambda s: self.llm_state_signal.emit(s)
+                                                llm_state_cb=lambda s: self.llm_state_signal.emit(s),
+                                                entry_ea=self.entry_ea
                                             )
                                             if r_res:
                                                 results.append(("single", r_node, r_res))
@@ -3935,114 +3883,73 @@ class AnalysisWorker(QThread):
                     self.llm_state_signal.emit("requesting")
                     
                     try:
-                        # Build context for Contextual Malicious Code Analysis Refinement (Synchronized)
-                        ctx_res = {}
-                        def _sync_ctx():
-                            ctx_res["context"] = build_caller_context(node, self.graph)
-                        idaapi.execute_sync(_sync_ctx, idaapi.MFF_READ)
-                        context = ctx_res.get("context", {})
+                        # 1. Gather Context (Read Phase - Background)
+                        current_entry_ea = self.entry_ea
+                        if not current_entry_ea or current_entry_ea == idaapi.BADADDR:
+                             for g_ea, g_n in self.graph.items():
+                                 if getattr(g_n, 'depth', -1) == 0:
+                                     current_entry_ea = g_ea; break
+                                     
+                        context = build_caller_context(node, self.graph, entry_ea=current_entry_ea)
                         
-                        result = analyze_with_context(
+                        # 2. Re-analysis (AI request)
+                        result, background_code = analyze_with_context(
                             ea, node, self.graph, output_dir, ai_cfg, analyzed_eas, context, log_fn,
                             char_count_cb=lambda c, m: self.char_count_signal.emit(c, m),
                             cooldown_cb=lambda c, t: self.cooldown_progress_signal.emit(c, t),
-                            llm_state_cb=lambda s: self.llm_state_signal.emit(s)
+                            llm_state_cb=lambda s: self.llm_state_signal.emit(s),
+                            entry_ea=current_entry_ea
                         )
                         self.llm_state_signal.emit("idle")
                         
                         if result:
-                            node.status = "analyzed"
-                            node.stage5_status = "OK"
-                            node.confidence = result.get("confidence", 100)
-                            # Sync the final risk decision from Stage 5 back into the node.
-                            # IMPORTANT: result["risk_tag"] here is the POST-determine_risk_with_context
-                            # value (may have been UPGRADED or DOWNGRADED from the raw AI output).
-                            raw_risk = str(result.get("risk_tag") or "benign").lower().strip()
-                            node.risk_tag = raw_risk if raw_risk in ("malicious", "suspicious", "benign") else "benign"
-                            result["risk_tag"] = node.risk_tag  # ensure result dict is consistent
-
-                            # ── Flush final authoritative risk to storage ─────────────────────
-                            # Both IDB and disk JSON were written INSIDE analyze_single_function,
-                            # BEFORE determine_risk_with_context ran — so they may have a stale
-                            # risk value.  Re-patch just the risk_tag and re-write both stores.
-                            try:
-                                raw_stored = load_from_idb(ea, tag=85)
-                                stored = json.loads(raw_stored) if raw_stored else {}
-                                if stored.get("risk_tag") != node.risk_tag:
-                                    stored["risk_tag"] = node.risk_tag
-                                    idaapi.execute_sync(
-                                        lambda e=ea, s=stored: save_to_idb(e, json.dumps(s), tag=85),
-                                        idaapi.MFF_WRITE
-                                    )
-                                    # Patch disk analysis JSON too
-                                    _sn = re.sub(r'[^A-Za-z0-9_]', '_', node.name)[:60]
-                                    _jp = os.path.join(output_dir, "analysis", "%s_0x%X.json" % (_sn, ea))
-                                    if os.path.isfile(_jp):
-                                        try:
-                                            with open(_jp, "r", encoding="utf-8") as _f:
-                                                _d = json.load(_f)
-                                            _d["risk_tag"] = node.risk_tag
-                                            with open(_jp, "w", encoding="utf-8") as _f:
-                                                json.dump(_d, _f, indent=2)
-                                        except: pass
-                            except: pass
-                            # ─────────────────────────────────────────────────────────────────
-
-                            # Cache properties to memory immediately for report_generator.py Analyst Notebook
-                            node.one_liner = result.get("one_liner", node.one_liner if hasattr(node, 'one_liner') else "")
-                            node.summary = result.get("summary", node.summary if hasattr(node, 'summary') else "")
-                            node.risk_tag = result.get("risk_tag", node.risk_tag if hasattr(node, 'risk_tag') else "benign")
-                            node.suspicious = result.get("suspicious", node.suspicious if hasattr(node, 'suspicious') else [])
-                            _analysis_cache[ea] = node.one_liner
-
-                            
-                            # Re-apply rename if needed (context might suggest better name)
-                            if self.do_analysis_rename:
-                                res_name = {"name": node.name}
-                                def _sync_rename_ctx(ea=ea, n=node, res=result):
-                                    res_name["name"] = apply_function_rename_from_analysis(ea, n, res, log_fn)
-                                idaapi.execute_sync(_sync_rename_ctx, idaapi.MFF_WRITE)
-                            
-                            # Re-apply comment
-                            if self.do_func_comment:
-                                idaapi.execute_sync(
-                                    lambda ea=ea, res=result: apply_function_comment(ea, res, log_fn),
-                                    idaapi.MFF_WRITE)
-                            
-                            # Variable renames in Stage 5 (Contextual Refinement)
-                            if self.do_var_rename:
-                                log_fn(f"  Trace: Contextual Malicious Code Analysis Refinement var rename for 0x{ea:X}", 'info')
-                                # Fetch FRESH code (not disk cache) so lvar names match
-                                # current IDA state, not the stale pre-rename Stage 4 snapshot.
-                                _fresh_var_code = [""]
-                                def _fetch_var_code(e=ea):
-                                    ida_hexrays.mark_cfunc_dirty(e)
-                                idaapi.execute_sync(_fetch_var_code, idaapi.MFF_WRITE)
-                                _fresh_var_code[0] = get_code_fast(ea) or ""
-                                var_code = _fresh_var_code[0]
-                                var_map = extract_variable_renames_from_analysis(result, var_code)
-                                if var_map:
-                                    var_map = validate_variable_renames(ea, var_map, log_fn)
-                                    # Synchronize variable renaming for Contextual Malicious Code Analysis Refinement
+                            # 3. CONSOLIDATED WRITE PHASE
+                            def _consolidated_sync_update():
+                                # A. Risk Sync
+                                node.status = "analyzed"
+                                node.stage5_status = "OK"
+                                node.confidence = result.get("confidence", 100)
+                                raw_risk = str(result.get("risk_tag") or "benign").lower().strip()
+                                node.risk_tag = raw_risk if raw_risk in ("malicious", "suspicious", "benign") else "benign"
+                                result["risk_tag"] = node.risk_tag
+                                
+                                # B. IDB Persistence
+                                # Note: result is already a fresh dict from Stage 5 refinement
+                                save_to_idb(ea, json.dumps(result), tag=85)
+                                
+                                # C. Rename applied (if enabled)
+                                if self.do_analysis_rename:
+                                    apply_function_rename_from_analysis(ea, node, result, log_fn)
+                                
+                                # D. Comment applied
+                                if self.do_func_comment:
+                                    apply_function_comment(ea, result, log_fn)
+                                    
+                                # E. Variables renamed (if enabled)
+                                # REUSE THE BACKGROUND CODE TO PREVENT MAIN-THREAD DECOMPILATION HANG
+                                if self.do_var_rename and background_code:
+                                    var_map = extract_variable_renames_from_analysis(result, background_code)
                                     if var_map:
-                                        _var_res = [0]
-                                        def _sync_p2_vars():
-                                            _var_res[0] = apply_variable_renames_in_ida(ea, var_map, log_fn)
-                                        idaapi.execute_sync(_sync_p2_vars, idaapi.MFF_WRITE)
-                                        
-                                        self.total_vars_renamed += _var_res[0]
-                                        if _var_res[0] > 0:
-                                            self.func_updated_signal.emit(ea, node.name, node.name, node.confidence)
-                                else:
-                                    log_fn(f"  Trace: Contextual Malicious Code Analysis Refinement no valid var renames for 0x{ea:X}", 'info')
+                                        var_map = validate_variable_renames(ea, var_map, log_fn)
+                                        if var_map:
+                                            # Still requires main thread for rename call, but we skipped decompilation!
+                                            renamed = apply_variable_renames_in_ida(ea, var_map, log_fn)
+                                            self.total_vars_renamed += renamed
+                                
+                            try:
+                                idaapi.execute_sync(_consolidated_sync_update, idaapi.MFF_WRITE)
+                            except Exception as sync_ex:
+                                log_fn(f"   [-] Consolidated sync update failed for {node.name}: {sync_ex}", "err")
+
+                            # Cache analysis result in memory to speed up UI updates
+                            _analysis_cache[ea] = result
+                            node.one_liner = result.get("one_liner", "")
+                            node.summary = result.get("summary", "")
                             
-                            # Append updated section to markdown
-                            # Note: Usually Stage 1 creates the section, Stage 2 could replace it or append.
-                            # For simplicity we append it as "Refined Analysis" or similar.
+                            # Update UI
                             md_section = build_function_markdown_piece(ea, node, result, self.graph, code="")
                             self.func_updated_signal.emit(ea, node.name, node.name, node.confidence)
                             self.markdown_updated_signal.emit(md_section)
-                            
                         else:
                             node.status = "error"
                             self.func_updated_signal.emit(ea, node.name, node.name, 0)
@@ -4052,10 +3959,18 @@ class AnalysisWorker(QThread):
                         log_fn("Contextual re-analysis error for %s: %s" % (node.name, ex), "err")
                         node.status = "error"
                         self.func_updated_signal.emit(ea, node.name, node.name, 0)
+                    finally:
+                        if node.status == "in_progress":
+                             node.status = "error"
+                             node.stage5_status = "ERROR"
                         
                     completed_ctx += 1
                     self.progress_signal.emit(completed_ctx, total_ctx, node.name)
                     
+                    # Yield to main thread (Breathing room for IDA UI)
+                    # Increased from 0.01 to 0.1 to guarantee Windows processes its message queue
+                    time.sleep(0.1)
+
                     # Per-task cooldown
                     if CONFIG.deep_cooldown > 0 and not self._stop and task_idx < total_ctx - 1:
                         total_ticks = int(CONFIG.deep_cooldown * 10)
@@ -5790,27 +5705,27 @@ class DeepAnalyzerDialog(QDialog):
         item.setText(5, "%d%%" % confidence)
 
         # Risk Classification (aligned with analyzer.py)
-        # Use AI's tag if available, otherwise fall back to logic
-        risk = None
-        # FIX: Extract callees from graph node instead of passing entire graph
         callees_list = node.callees if node and hasattr(node, 'callees') else []
         api_risk = _derive_risk_from_api_tags(ea, callees_list)
-        if node.status == "analyzed":
+        
+        # Use cache if possible to avoid redundant IDB calls on main thread
+        res = _analysis_cache.get(ea)
+        if not isinstance(res, dict) and node.status == "analyzed":
             raw = load_from_idb(ea, tag=85)
             if raw:
-                try:
+                try: 
                     res = json.loads(raw)
-                    risk = res.get("risk_tag", "").lower().strip() or None
-                    # Fallback if old data doesn't have tag
-                    if not risk:
-                        susp = res.get("suspicious", [])
-                        if susp:
-                            risk = "malicious" if confidence >= 75 else "suspicious"
-                        else:
-                            risk = "benign"
-                except:
-                    risk = "benign"
+                    _analysis_cache[ea] = res
+                except: res = {}
+        
+        if isinstance(res, dict) and res:
+            risk = res.get("risk_tag", "").lower().strip() or None
+            if not risk:
+                susp = res.get("suspicious", [])
+                risk = ("malicious" if confidence >= 75 else "suspicious") if susp else "benign"
             risk = _pick_higher_risk(risk, api_risk) or "benign"
+        elif node.status == "analyzed":
+            risk = api_risk or "benign"
         else:
             # Risk should strictly stay 'Pending' (gray) until Stage 5 Refinement
             risk = "pending"
@@ -5953,7 +5868,7 @@ class DeepAnalyzerDialog(QDialog):
                     def _log(m, l='info'):
                         _ida.execute_sync(lambda: self.on_log(m, l), _ida.MFF_WRITE)
 
-                    result = analyze_single_function(ea, node, self.graph, self.output_dir or get_output_dir(), ai_cfg, analyzed_eas, _log)
+                    result, _ = analyze_single_function(ea, node, self.graph, self.output_dir or get_output_dir(), ai_cfg, analyzed_eas, _log)
                     if self.output_dir:
                         code = load_decompiled_from_disk(ea, node.name, self.output_dir) or ""
                         md_section = build_function_markdown_piece(ea, node, result, self.graph, code=code)

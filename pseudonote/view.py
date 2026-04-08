@@ -4,6 +4,7 @@ Main view, settings dialog, context-menu hooks, and supporting UI for PseudoNote
 """
 import re
 import functools
+import sys
 
 import idaapi
 import ida_kernwin
@@ -1459,11 +1460,14 @@ if QtWidgets:
             cp_layout.setContentsMargins(0, 5, 0, 0)
             
             cp_input_layout = QtWidgets.QHBoxLayout()
-            self.custom_prompt_input = QtWidgets.QLineEdit()
-            self.custom_prompt_input.setPlaceholderText("Enter custom AI prompt...")
-            self.custom_prompt_input.setStyleSheet("QLineEdit { background-color: #1E1E1E; color: #D4D4D4; border: 1px solid #3E3E42; padding: 5px; font-family: 'Inter', 'Segoe UI', sans-serif; }")
+            self.custom_prompt_input = QtWidgets.QPlainTextEdit()
+            self.custom_prompt_input.setPlaceholderText("Enter custom AI prompt (e.g., 'What does this function do?')")
+            self.custom_prompt_input.setFixedHeight(60)
+            self.custom_prompt_input.setStyleSheet("QPlainTextEdit { background-color: #1E1E1E; color: #D4D4D4; border: 1px solid #3E3E42; border-radius: 4px; padding: 8px; font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 11pt; }")
             
             self.cp_submit_btn = QtWidgets.QPushButton("Ask AI")
+            self.cp_submit_btn.setFixedWidth(100)
+            self.cp_submit_btn.setFixedHeight(60)
             self.cp_submit_btn.setStyleSheet(self.get_btn_style(blue=True))
             self.cp_submit_btn.clicked.connect(self.on_custom_prompt)
             
@@ -1821,17 +1825,20 @@ if QtWidgets:
             
             m_fam_safe = get_safe_font(self.config.markdown_font, "sans-serif")
             css = f"""
-                body {{ background-color: {bg}; color: {fg}; font-family: {m_fam_safe}; font-size: {self.config.markdown_font_size}pt; line-height: 155%; }}
-                h1, h2, h3 {{ color: {header_fg}; margin-top: 20px; margin-bottom: 8px; font-weight: bold; }}
-                h1 {{ font-size: 1.4em; border-bottom: 1px solid {hr_color}; padding-bottom: 4px; }}
-                h2 {{ font-size: 1.25em; color: {accent}; }}
-                h3 {{ font-size: 1.1em; }}
-                code {{ background-color: {code_bg}; font-family: 'Consolas', 'Courier New', monospace; padding: 2px 5px; border-radius: 4px; font-size: 0.95em; }}
-                pre {{ background-color: {code_bg}; border: 1px solid {code_border}; padding: 12px; border-radius: 6px; margin: 12px 0; font-family: 'Consolas', 'Fira Code', monospace; font-size: 0.95em; }}
-                a {{ color: {accent}; text-decoration: none; }}
-                hr {{ height: 1px; border: none; background-color: {hr_color}; margin: 20px 0; }}
-                li {{ margin-top: 4px; margin-bottom: 4px; }}
-                p {{ margin-bottom: 10px; }}
+                body {{ background-color: {bg}; color: {fg}; font-family: {m_fam_safe}; font-size: {self.config.markdown_font_size}pt; line-height: 1.6; padding: 10px; }}
+                h1, h2, h3, h4 {{ color: {header_fg}; font-weight: 700; margin-top: 1.25em; margin-bottom: 0.6em; }}
+                h1 {{ font-size: 1.6em; border-bottom: 2px solid {hr_color}; padding-bottom: 0.3em; }}
+                h2 {{ font-size: 1.4em; color: {accent}; border-bottom: 1px solid {hr_color}; padding-bottom: 0.2em; }}
+                h3 {{ font-size: 1.2em; }}
+                h4 {{ font-size: 1.1em; color: {accent}; font-style: italic; }}
+                code {{ background-color: {code_bg}; font-family: 'Consolas', 'Fira Code', 'Courier New', monospace; padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em; }}
+                pre {{ background-color: {code_bg}; border: 1px solid {code_border}; padding: 1em; border-radius: 8px; margin: 1em 0; font-family: 'Consolas', 'Fira Code', monospace; font-size: 0.9em; }}
+                a {{ color: {accent}; text-decoration: none; font-weight: bold; }}
+                hr {{ height: 2px; border: none; background-color: {hr_color}; margin: 2em 0; }}
+                ul, ol {{ margin-left: 0; padding-left: 1.5em; }}
+                li {{ margin-bottom: 0.5em; }}
+                p {{ margin-bottom: 1em; }}
+                blockquote {{ border-left: 4px solid {accent}; margin: 0; padding-left: 1em; color: {fg}; font-style: italic; }}
             """
             doc.setDefaultStyleSheet(css)
             
@@ -2011,6 +2018,8 @@ if QtWidgets:
                  self.cp_include_c_cb.setStyleSheet(f"color: {n_fg};")
              if getattr(self, 'cp_include_asm_cb', None):
                  self.cp_include_asm_cb.setStyleSheet(f"color: {n_fg};")
+             if getattr(self, 'custom_prompt_input', None):
+                 self.custom_prompt_input.setStyleSheet(f"QPlainTextEdit {{ background-color: {n_bg}; color: {n_fg}; border: {n_border if self.notes_light_mode else '1px solid #3E3E42'}; border-radius: 4px; padding: 8px; font-family: {m_fam_safe}; font-size: {m_size}pt; }}")
 
              ui_fam = self.config.ui_font
              ui_size = self.config.ui_font_size
@@ -2420,18 +2429,16 @@ if QtWidgets:
 
             AI_CLIENT.query_model_async(
                 prompt,
-                functools.partial(self.handle_suggest_name_callback, func_ea=func.start_ea, context_text=display_text),
+                functools.partial(self.handle_suggest_name_callback, func_ea=func.start_ea),
                 on_chunk=chunk_cb,
                 on_status=update_ai_progress_details,
                 additional_options={"max_completion_tokens": 16384}
             )
 
-        def handle_suggest_name_callback(self, response, func_ea, context_text="", **kwargs):
+        def handle_suggest_name_callback(self, response, func_ea, **kwargs):
             try:
                 if func_ea == self.last_func_ea and response:
                     full_content = response.strip()
-                    if context_text:
-                        full_content = context_text + "\n\n<hr>\n\n" + full_content
                     self.display_markdown(self.suggestion_viewer, full_content)
                     save_to_idb(func_ea, full_content, tag=80)
             finally: hide_ai_progress()
@@ -2443,7 +2450,12 @@ if QtWidgets:
             func = idaapi.get_func(ea)
             if not func: return
             
-            prompt_text = self.custom_prompt_input.text().strip()
+            prompt_text = self.custom_prompt_input.toPlainText().strip()
+            if not prompt_text:
+                # Fallback check: if somehow it's still being treated as a QLineEdit in a weird edge case
+                if hasattr(self.custom_prompt_input, 'text'):
+                    prompt_text = self.custom_prompt_input.text().strip()
+            
             if not prompt_text:
                 QtWidgets.QMessageBox.warning(self.parent, "PseudoNote", "Please enter a custom prompt.")
                 return
@@ -2895,6 +2907,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         
         # GROUP 3: AI & BULK ACTIONS
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:ask_chat_chain", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:deep_analyzer", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:summarizer", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:bulk_rename", "PseudoNote/")

@@ -40,6 +40,7 @@ from pseudonote.handlers import (
 )
 from pseudonote.deep_analyzer import DeepAnalyzerHandler
 from pseudonote.summarizer import SummarizerHandler
+from pseudonote.chat_chain import ChatChainHandler
 from pseudonote.hexview import OpenHexViewHandler
 
 # These will be imported lazily to avoid circular imports
@@ -111,7 +112,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             109
         )
         idaapi.register_action(action_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Show PseudoNote Panes", "pseudonote:action", idaapi.SETMENU_APP)
+        # Main menu entry removed - focusing on right-click menu
 
         list_action_desc = idaapi.action_desc_t(
             "pseudonote:list",
@@ -122,7 +123,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             58
         )
         idaapi.register_action(list_action_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/View saved Codes and Notes", "pseudonote:list", idaapi.SETMENU_APP)
 
         # Register Settings Action
         idaapi.register_action(idaapi.action_desc_t(
@@ -133,7 +133,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "Configure AI Provider and Performance settings",
             147
         ))
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Configure Settings...", "pseudonote:settings", idaapi.SETMENU_APP)
 
         rename_func_desc = idaapi.action_desc_t(
             "pseudonote:rename_function",
@@ -144,7 +143,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             204
         )
         idaapi.register_action(rename_func_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Rename Function (Code)", "pseudonote:rename_function", idaapi.SETMENU_APP)
 
         rename_malware_desc = idaapi.action_desc_t(
             "pseudonote:rename_function_malware",
@@ -155,7 +153,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             204
         )
         idaapi.register_action(rename_malware_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Rename Function (Malware)", "pseudonote:rename_function_malware", idaapi.SETMENU_APP)
 
         rename_vars_desc = idaapi.action_desc_t(
             "pseudonote:rename_variables",
@@ -166,7 +163,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             203
         )
         idaapi.register_action(rename_vars_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Rename Variables", "pseudonote:rename_variables", idaapi.SETMENU_APP)
 
         # Suggest Function Prototype Action
         sugg_sig_desc = idaapi.action_desc_t(
@@ -178,7 +174,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             138
         )
         idaapi.register_action(sugg_sig_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Function Prototype", "pseudonote:suggest_function_prototype", idaapi.SETMENU_APP)
 
         comment_handler_desc = idaapi.action_desc_t(
             "pseudonote:add_comments",
@@ -189,7 +184,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             45
         )
         idaapi.register_action(comment_handler_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Add Comments (Pseudocode)", "pseudonote:add_comments", idaapi.SETMENU_APP)
 
         asm_comment_handler_desc = idaapi.action_desc_t(
             "pseudonote:add_asm_comments",
@@ -200,7 +194,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             45
         )
         idaapi.register_action(asm_comment_handler_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Add Section Comments (IDA-View)", "pseudonote:add_asm_comments", idaapi.SETMENU_APP)
 
         del_asm_comments_desc = idaapi.action_desc_t(
             "pseudonote:delete_asm_comments",
@@ -211,7 +204,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             45
         )
         idaapi.register_action(del_asm_comments_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Delete Comments (IDA-View)", "pseudonote:delete_asm_comments", idaapi.SETMENU_APP)
 
         # Bytes/Instructions/Shellcode Analysis
         shell_analyst_desc = idaapi.action_desc_t(
@@ -223,7 +215,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             124
         )
         idaapi.register_action(shell_analyst_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bytes-Instructions-Shellcode Analysis", "pseudonote:shellcode_analyst", idaapi.SETMENU_APP)
 
         delete_comments_desc = idaapi.action_desc_t(
             "pseudonote:delete_comments",
@@ -234,7 +225,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             45
         )
         idaapi.register_action(delete_comments_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments", idaapi.SETMENU_APP)
 
         xrefs_desc = idaapi.action_desc_t(
             "pseudonote:dnspy_xrefs",
@@ -288,7 +278,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             122
         )
         idaapi.register_action(deep_analyzer_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Deep Analyzer", "pseudonote:deep_analyzer", idaapi.SETMENU_APP)
 
         # Summarizer Action
         summarizer_desc = idaapi.action_desc_t(
@@ -300,7 +289,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             122
         )
         idaapi.register_action(summarizer_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Summarizer", "pseudonote:summarizer", idaapi.SETMENU_APP)
 
         # Bulk Variable Renamer Action
         bulk_var_rename_desc = idaapi.action_desc_t(
@@ -312,7 +300,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             206
         )
         idaapi.register_action(bulk_var_rename_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename", idaapi.SETMENU_APP)
         
         # FLOSS Strings Discovery Action
         floss_strings_desc = idaapi.action_desc_t(
@@ -324,7 +311,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             183
         )
         idaapi.register_action(floss_strings_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/FLOSS Strings Discovery", "pseudonote:floss_strings", idaapi.SETMENU_APP)
+        
 
         ask_chat_desc = idaapi.action_desc_t(
             "pseudonote:ask_chat",
@@ -335,7 +322,16 @@ class PseudoNotePlugin(idaapi.plugin_t):
             124
         )
         idaapi.register_action(ask_chat_desc)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat", idaapi.SETMENU_APP)
+
+        ask_chat_chain_desc = idaapi.action_desc_t(
+            "pseudonote:ask_chat_chain",
+            "Ask Chat (Multiple Functions)",
+            ChatChainHandler(),
+            "Ctrl+Alt+Shift+A",
+            "Open a chat to ask AI about multiple functions in a chain",
+            124
+        )
+        idaapi.register_action(ask_chat_chain_desc)
 
         # Register Search Utils Actions
         idaapi.register_action(idaapi.action_desc_t(
@@ -405,9 +401,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         ))
 
         # --- Tools separator group (after Configure Settings) ---
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/-/Hex Viewer", "pseudonote:hex_viewer", idaapi.SETMENU_APP)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/-/Call Tree...", "pseudonote:dnspy_xrefs", idaapi.SETMENU_APP)
-        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/-/Toggle Call Highlight (Pseudocode)", "pseudonote:toggle_highlight", idaapi.SETMENU_APP)
+        # Tools separator group menu attachments removed
 
         self.ctx_hooks = vm.ContextMenuHooks()
         self.ctx_hooks.hook()
@@ -422,27 +416,6 @@ class PseudoNotePlugin(idaapi.plugin_t):
             self.ctx_hooks.unhook()
             self.ctx_hooks = None
 
-        # Detach all menu items
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Show PseudoNote Panes", "pseudonote:action")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Rename Variables", "pseudonote:rename_variables")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Rename Function (Code)", "pseudonote:rename_function")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Rename Function (Malware)", "pseudonote:rename_function_malware")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Function Prototype", "pseudonote:suggest_function_prototype")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Comments (Pseudocode)", "pseudonote:add_comments")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Add Section Comments (IDA-View)", "pseudonote:add_asm_comments")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments (IDA-View)", "pseudonote:delete_asm_comments")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bytes/Instructions/Shellcode Analysis", "pseudonote:shellcode_analyst")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Delete Comments", "pseudonote:delete_comments")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Ask Chat (AI)", "pseudonote:ask_chat")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Bulk Variable Renamer", "pseudonote:bulk_var_rename")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Deep Analyzer", "pseudonote:deep_analyzer")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/Summarizer", "pseudonote:summarizer")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/FLOSS Strings Discovery", "pseudonote:floss_strings")
-        # Tools separator group
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/-/Hex Viewer", "pseudonote:hex_viewer")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/-/Call Tree...", "pseudonote:dnspy_xrefs")
-        idaapi.detach_action_from_menu("Edit/Plugins/PseudoNote/-/Toggle Call Highlight (Pseudocode)", "pseudonote:toggle_highlight")
-
         # Unregister all actions
         for action_id in [
             "pseudonote:action", "pseudonote:list",
@@ -454,7 +427,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:analyze_struct", "pseudonote:bulk_rename",
             "pseudonote:bulk_var_rename",
             "pseudonote:toggle_highlight", "pseudonote:toggle_disasm_highlight",
-            "pseudonote:ask_chat", "pseudonote:deep_analyzer", "pseudonote:summarizer", "pseudonote:floss_strings",
+            "pseudonote:ask_chat", "pseudonote:ask_chat_chain", "pseudonote:deep_analyzer", "pseudonote:summarizer", "pseudonote:floss_strings",
             "pseudonote:search_bytes_vt", "pseudonote:search_str_vt",
             "pseudonote:search_str_google", "pseudonote:search_str_github",
             "pseudonote:search_str_msdn", "pseudonote:search_bytes_cyberchef",
