@@ -296,11 +296,7 @@ class XrefsDialog(QtWidgets.QDialog):
                             
     def on_double_click(self, item, col):
         if hasattr(item, 'exact_ea') and item.exact_ea != idaapi.BADADDR and not getattr(item, 'is_root', False):
-            vu = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_viewer())
-            if vu:
-                vu.jumpto(item.exact_ea, True)
-            else:
-                idaapi.jumpto(item.exact_ea)
+            ida_kernwin.jumpto(item.exact_ea)
 
     def on_filter_changed(self, text):
         self._apply_filter(self.tree.invisibleRootItem(), text.lower())
