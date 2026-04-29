@@ -37,6 +37,8 @@ from pseudonote.handlers import (
     FlossStringsHandler,
     AdvancedCopyHandler,
     DumpBytesHandler,
+    CopyFunctionTreeHandler,
+    CopyGlobalXrefTreeHandler,
 )
 from pseudonote.deep_analyzer import DeepAnalyzerHandler
 from pseudonote.summarizer import SummarizerHandler
@@ -400,6 +402,26 @@ class PseudoNotePlugin(idaapi.plugin_t):
             80
         ))
 
+        # Copy Function Tree Action
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:copy_function_tree",
+            "Copy Function Tree",
+            CopyFunctionTreeHandler(),
+            "Ctrl+Alt+T",
+            "Recursively copy decompiled sub-functions called by the current function",
+            31
+        ))
+
+        # Copy Global Variable Xref Tree Action
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:copy_global_xref_tree",
+            "Copy xref tree Global Variable",
+            CopyGlobalXrefTreeHandler(),
+            "",
+            "Recursively copy functions and their callers that use the selected global variable",
+            31
+        ))
+
         # --- Tools separator group (after Configure Settings) ---
         # Tools separator group menu attachments removed
 
@@ -436,6 +458,8 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:copy_yara_no_imm", "pseudonote:copy_yara_opcodes",
             "pseudonote:copy_python", "pseudonote:copy_c_array", "pseudonote:copy_disasm",
             "pseudonote:dump_bytes", "pseudonote:hex_viewer",
+            "pseudonote:copy_function_tree",
+            "pseudonote:copy_global_xref_tree",
         ]:
             idaapi.unregister_action(action_id)
 

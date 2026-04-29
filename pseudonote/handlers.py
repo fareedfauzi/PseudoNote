@@ -13,7 +13,7 @@ import ida_hexrays
 import idc
 import ida_lines
 
-from pseudonote.qt_compat import QtWidgets, QtGui
+from pseudonote.qt_compat import QtWidgets, QtGui, QtCore, set_tab_stop_width, get_text_width
 from pseudonote.config import CONFIG, LOGGER
 import pseudonote.ai_client as _ai_mod
 import pseudonote.chat as _chat
@@ -1840,6 +1840,468 @@ class AdvancedCopyHandler(idaapi.action_handler_t):
         preview = output.replace('\n', ' ')
         if len(preview) > 60: preview = preview[:57] + "..."
         print(f"[PseudoNote] Copied: {preview}")
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+# ---------------------------------------------------------------------------
+# Function Copy Mapper / Copy Function Tree
+# ---------------------------------------------------------------------------
+
+class FunctionTreeDialog(QtWidgets.QDialog):
+    def __init__(self, root_ea, parent=None):
+        super(FunctionTreeDialog, self).__init__(parent or QtWidgets.QApplication.activeWindow())
+        self.setWindowTitle("PseudoNote: Function Copy Mapper")
+        self.resize(1100, 750)
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowMaximizeButtonHint)
+        
+        self.root_ea = root_ea
+        self.mapped_functions = {} # ea -> {name, depth, cfunc_str}
+        self.visited_eas = set()
+        
+        self.init_ui()
+        self.build_tree_async()
+
+    def init_ui(self):
+        main_layout = QtWidgets.QVBoxLayout(self)
+        
+        # Toolbar / Options
+        toolbar = QtWidgets.QHBoxLayout()
+        
+        self.max_depth_spin = QtWidgets.QSpinBox()
+        self.max_depth_spin.setRange(1, 20)
+        self.max_depth_spin.setValue(3)
+        self.max_depth_spin.setToolTip("Recursive depth to scan for sub-functions")
+        toolbar.addWidget(QtWidgets.QLabel("Max Depth:"))
+        toolbar.addWidget(self.max_depth_spin)
+        
+        self.include_lib_cb = QtWidgets.QCheckBox("Include Library/Thunks")
+        self.include_lib_cb.setChecked(False)
+        toolbar.addWidget(self.include_lib_cb)
+        
+        self.refresh_btn = QtWidgets.QPushButton("Re-Scan")
+        self.refresh_btn.clicked.connect(self.build_tree_async)
+        toolbar.addWidget(self.refresh_btn)
+        
+        toolbar.addStretch()
+        
+        self.filter_edit = QtWidgets.QLineEdit()
+        self.filter_edit.setPlaceholderText("Filter list...")
+        self.filter_edit.textChanged.connect(self.on_filter_changed)
+        toolbar.addWidget(self.filter_edit)
+        
+        main_layout.addLayout(toolbar)
+        
+        # Splitter for Tree and Preview
+        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        
+        # Left Panel: Tree
+        tree_container = QtWidgets.QWidget()
+        tree_layout = QtWidgets.QVBoxLayout(tree_container)
+        tree_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.tree = QtWidgets.QTreeWidget()
+        self.tree.setHeaderLabels(["Function", "Address"])
+        self.tree.setColumnWidth(0, 250)
+        self.tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.tree.itemSelectionChanged.connect(self.on_selection_changed)
+        self.tree.itemChanged.connect(self.on_item_changed)
+        tree_layout.addWidget(self.tree)
+        
+        # Tree Selection Buttons
+        tree_btns = QtWidgets.QHBoxLayout()
+        self.sel_all_btn = QtWidgets.QPushButton("Select All")
+        self.sel_all_btn.clicked.connect(lambda: self.set_all_checked(True))
+        tree_btns.addWidget(self.sel_all_btn)
+        
+        self.sel_none_btn = QtWidgets.QPushButton("Select None")
+        self.sel_none_btn.clicked.connect(lambda: self.set_all_checked(False))
+        tree_btns.addWidget(self.sel_none_btn)
+        
+        self.sel_root_btn = QtWidgets.QPushButton("Root Only")
+        self.sel_root_btn.clicked.connect(self.select_root_only)
+        tree_btns.addWidget(self.sel_root_btn)
+        
+        tree_layout.addLayout(tree_btns)
+        
+        self.splitter.addWidget(tree_container)
+        
+        # Right Panel: Preview
+        preview_container = QtWidgets.QWidget()
+        preview_layout = QtWidgets.QVBoxLayout(preview_container)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.preview_label = QtWidgets.QLabel("Preview (Decompiled Code):")
+        self.preview_label.setStyleSheet("font-weight: bold;")
+        preview_layout.addWidget(self.preview_label)
+        
+        self.preview_edit = QtWidgets.QTextEdit()
+        self.preview_edit.setReadOnly(True)
+        self.preview_edit.setFont(QtGui.QFont("Consolas", 10))
+        # Set tab stop
+        font_metrics = QtGui.QFontMetrics(self.preview_edit.font())
+        set_tab_stop_width(self.preview_edit, get_text_width(font_metrics, ' ') * 4)
+        preview_layout.addWidget(self.preview_edit)
+        
+        self.splitter.addWidget(preview_container)
+        self.splitter.setSizes([400, 700])
+        main_layout.addWidget(self.splitter)
+        
+        # Bottom Buttons
+        bottom_layout = QtWidgets.QHBoxLayout()
+        self.status_label = QtWidgets.QLabel("Ready")
+        bottom_layout.addWidget(self.status_label)
+        
+        bottom_layout.addStretch()
+        
+        self.copy_btn = QtWidgets.QPushButton("Copy Selected to Clipboard")
+        self.copy_btn.setMinimumHeight(40)
+        self.copy_btn.setMinimumWidth(200)
+        self.copy_btn.setStyleSheet("background-color: #007ACC; color: white; font-weight: bold; font-size: 14px; border-radius: 4px;")
+        self.copy_btn.clicked.connect(self.on_copy)
+        bottom_layout.addWidget(self.copy_btn)
+        
+        self.cancel_btn = QtWidgets.QPushButton("Close")
+        self.cancel_btn.setMinimumHeight(40)
+        self.cancel_btn.clicked.connect(self.close)
+        bottom_layout.addWidget(self.cancel_btn)
+        
+        main_layout.addLayout(bottom_layout)
+
+    def build_tree_async(self):
+        self.tree.clear()
+        self.visited_eas.clear()
+        self.mapped_functions.clear()
+        
+        max_depth = self.max_depth_spin.value()
+        include_lib = self.include_lib_cb.isChecked()
+        
+        self.status_label.setText("Mapping functions...")
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        
+        try:
+            import idautils
+            root_name = idc.get_func_name(self.root_ea) or f"sub_{self.root_ea:X}"
+            root_item = QtWidgets.QTreeWidgetItem(self.tree)
+            root_item.setText(0, root_name)
+            root_item.setText(1, f"0x{self.root_ea:X}")
+            root_item.setData(0, QtCore.Qt.UserRole, self.root_ea)
+            root_item.setCheckState(0, QtCore.Qt.Checked)
+            root_item.setExpanded(True)
+            
+            self.visited_eas.add(self.root_ea)
+            self._recursive_map(self.root_ea, root_item, 1, max_depth, include_lib)
+            
+            count = len(self.visited_eas)
+            self.status_label.setText(f"Mapped {count} functions.")
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+    def _recursive_map(self, ea, parent_item, depth, max_depth, include_lib):
+        if depth > max_depth:
+            return
+            
+        import idautils
+        callees = set()
+        for item in idautils.FuncItems(ea):
+            # Scan both code references (direct calls) and data references (callbacks/pointers)
+            refs = set(idautils.CodeRefsFrom(item, 0))
+            refs.update(idautils.DataRefsFrom(item))
+            
+            for ref in refs:
+                cf = idaapi.get_func(ref)
+                if cf and cf.start_ea != ea:
+                    callees.add(cf.start_ea)
+        
+        for c_ea in sorted(callees):
+            f = idaapi.get_func(c_ea)
+            if not f: continue
+            
+            is_lib = bool(f.flags & (idaapi.FUNC_LIB | idaapi.FUNC_THUNK))
+            if not include_lib and is_lib:
+                continue
+                
+            name = idc.get_func_name(c_ea) or f"sub_{c_ea:X}"
+            
+            child_item = QtWidgets.QTreeWidgetItem(parent_item)
+            child_item.setText(0, name)
+            child_item.setText(1, f"0x{c_ea:X}")
+            child_item.setData(0, QtCore.Qt.UserRole, c_ea)
+            
+            # Auto-check if first time visiting
+            if c_ea not in self.visited_eas:
+                child_item.setCheckState(0, QtCore.Qt.Checked)
+                self.visited_eas.add(c_ea)
+                self._recursive_map(c_ea, child_item, depth + 1, max_depth, include_lib)
+            else:
+                # Already visited, just add a grayed out entry or similar
+                child_item.setCheckState(0, QtCore.Qt.Unchecked)
+                child_item.setForeground(0, QtGui.QColor("gray"))
+                child_item.setText(0, f"{name} (repeat)")
+
+    def on_selection_changed(self):
+        items = self.tree.selectedItems()
+        if not items:
+            return
+        
+        item = items[0]
+        ea = item.data(0, QtCore.Qt.UserRole)
+        if ea is None: return
+        
+        self.status_label.setText(f"Previewing 0x{ea:X}...")
+        
+        # Get decompilation
+        try:
+            cfunc = ida_hexrays.decompile(ea)
+            if cfunc:
+                self.preview_edit.setPlainText(str(cfunc))
+            else:
+                self.preview_edit.setPlainText("[Decompilation unavailable]")
+        except Exception as e:
+            self.preview_edit.setPlainText(f"[Decompilation failed: {e}]")
+
+    def on_item_changed(self, item, column):
+        if column == 0:
+            # Maybe handle recursive checking?
+            pass
+
+    def set_all_checked(self, checked):
+        state = QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked
+        it = QtWidgets.QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            it.value().setCheckState(0, state)
+            it += 1
+
+    def select_root_only(self):
+        self.set_all_checked(False)
+        if self.tree.topLevelItemCount() > 0:
+            self.tree.topLevelItem(0).setCheckState(0, QtCore.Qt.Checked)
+
+    def on_filter_changed(self, text):
+        text = text.lower()
+        it = QtWidgets.QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            item.setHidden(text not in item.text(0).lower() and text not in item.text(1).lower())
+            it += 1
+
+    def on_copy(self):
+        selected_eas = []
+        visited = set()
+        
+        # Traverse tree to maintain orders
+        it = QtWidgets.QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            if item.checkState(0) == QtCore.Qt.Checked:
+                ea = item.data(0, QtCore.Qt.UserRole)
+                if ea is not None and ea not in visited:
+                    selected_eas.append(ea)
+                    visited.add(ea)
+            it += 1
+            
+        if not selected_eas:
+            idaapi.info("No functions selected.")
+            return
+            
+        self.status_label.setText(f"Copying {len(selected_eas)} functions...")
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        
+        output = []
+        divider = "=" * 50
+        
+        try:
+            for ea in selected_eas:
+                name = idc.get_func_name(ea) or f"sub_{ea:X}"
+                
+                header = f"{divider}\nFunction: {name}\nAddress: 0x{ea:X}\n{divider}"
+                
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    if cfunc:
+                        code = str(cfunc)
+                    else:
+                        code = "[Decompilation unavailable]"
+                except:
+                    code = "[Decompilation failed]"
+                    
+                output.append(f"{header}\n{code}\n")
+                
+            final_text = "\n".join(output)
+            QtWidgets.QApplication.clipboard().setText(final_text)
+            
+            self.status_label.setText(f"Copied {len(selected_eas)} functions to clipboard.")
+            # QtWidgets.QMessageBox.information(self, "Success", f"Copied {len(selected_eas)} functions to clipboard.")
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+
+class CopyFunctionTreeHandler(idaapi.action_handler_t):
+    """Launch the Function Copy Mapper Dialog."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        ea = idaapi.get_screen_ea()
+        f = idaapi.get_func(ea)
+        if not f:
+            print("[PseudoNote] No function at current address.")
+            return 0
+            
+        # Register and show dialog
+        dlg = FunctionTreeDialog(f.start_ea)
+        dlg.show()
+        
+        # Persist reference
+        if not hasattr(_view_mod, "_copy_tree_dialogs"):
+            _view_mod._copy_tree_dialogs = []
+        _view_mod._copy_tree_dialogs.append(dlg)
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+class GlobalXrefTreeDialog(FunctionTreeDialog):
+    def __init__(self, obj_ea, parent=None):
+        self.obj_ea = obj_ea
+        # Note: FunctionTreeDialog.__init__ calls build_tree_async, 
+        # which we override below.
+        super(GlobalXrefTreeDialog, self).__init__(obj_ea, parent)
+        self.setWindowTitle(f"PseudoNote: Global Xref Tree (0x{obj_ea:X})")
+
+    def build_tree_async(self):
+        self.tree.clear()
+        self.visited_eas.clear()
+        self.mapped_functions.clear()
+        
+        max_depth = self.max_depth_spin.value()
+        include_lib = self.include_lib_cb.isChecked()
+        
+        self.status_label.setText("Mapping global xrefs...")
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        
+        try:
+            import idautils
+            obj_name = idc.get_name(self.obj_ea) or f"unk_{self.obj_ea:X}"
+            root_item = QtWidgets.QTreeWidgetItem(self.tree)
+            root_item.setText(0, obj_name)
+            root_item.setText(1, f"0x{self.obj_ea:X}")
+            root_item.setData(0, QtCore.Qt.UserRole, None) # Not a function
+            root_item.setExpanded(True)
+            
+            # Find functions that use this global variable
+            seed_funcs = set()
+            for ref in idautils.XrefsTo(self.obj_ea):
+                f = idaapi.get_func(ref.frm)
+                if f:
+                    seed_funcs.add(f.start_ea)
+            
+            for f_ea in sorted(seed_funcs):
+                name = idc.get_func_name(f_ea) or f"sub_{f_ea:X}"
+                f_item = QtWidgets.QTreeWidgetItem(root_item)
+                f_item.setText(0, name)
+                f_item.setText(1, f"0x{f_ea:X}")
+                f_item.setData(0, QtCore.Qt.UserRole, f_ea)
+                f_item.setCheckState(0, QtCore.Qt.Checked)
+                
+                if f_ea not in self.visited_eas:
+                    self.visited_eas.add(f_ea)
+                    self._recursive_map(f_ea, f_item, 1, max_depth, include_lib)
+            
+            count = len(self.visited_eas)
+            self.status_label.setText(f"Mapped {count} functions from global xrefs.")
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+    def _recursive_map(self, ea, parent_item, depth, max_depth, include_lib):
+        if depth > max_depth:
+            return
+            
+        import idautils
+        # Here we look for CALLERS (backward tree)
+        callers = set()
+        for ref in idautils.CodeRefsTo(ea, 0):
+            f = idaapi.get_func(ref)
+            if f and f.start_ea != ea:
+                callers.add(f.start_ea)
+        
+        for c_ea in sorted(callers):
+            f = idaapi.get_func(c_ea)
+            if not f: continue
+            
+            is_lib = bool(f.flags & (idaapi.FUNC_LIB | idaapi.FUNC_THUNK))
+            if not include_lib and is_lib:
+                continue
+                
+            name = idc.get_func_name(c_ea) or f"sub_{c_ea:X}"
+            
+            child_item = QtWidgets.QTreeWidgetItem(parent_item)
+            child_item.setText(0, name)
+            child_item.setText(1, f"0x{c_ea:X}")
+            child_item.setData(0, QtCore.Qt.UserRole, c_ea)
+            
+            if c_ea not in self.visited_eas:
+                child_item.setCheckState(0, QtCore.Qt.Checked)
+                self.visited_eas.add(c_ea)
+                self._recursive_map(c_ea, child_item, depth + 1, max_depth, include_lib)
+            else:
+                child_item.setCheckState(0, QtCore.Qt.Unchecked)
+                child_item.setForeground(0, QtGui.QColor("gray"))
+                child_item.setText(0, f"{name} (repeat)")
+
+
+class CopyGlobalXrefTreeHandler(idaapi.action_handler_t):
+    """Launch the Global Xref Copy Mapper Dialog."""
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        obj_ea = idaapi.BADADDR
+        
+        # Try to get object under cursor
+        v = ida_hexrays.get_widget_vdui(ctx.widget)
+        if v:
+            try:
+                if v.item.e.op == ida_hexrays.cot_obj:
+                    obj_ea = v.item.e.obj_ea
+            except:
+                pass
+            
+            if obj_ea == idaapi.BADADDR:
+                import ida_kernwin
+                h = ida_kernwin.get_highlight(v.ct)
+                if h and h[0]:
+                    obj_ea = idc.get_name_ea_simple(h[0])
+        else:
+            import ida_kernwin
+            obj_ea = ida_kernwin.get_screen_ea()
+            h = ida_kernwin.get_highlight(ctx.widget)
+            if h and h[0]:
+                ea_h = idc.get_name_ea_simple(h[0])
+                if ea_h != idaapi.BADADDR:
+                    obj_ea = ea_h
+
+        if obj_ea == idaapi.BADADDR:
+            print("[PseudoNote] Could not determine global variable address.")
+            return 0
+            
+        # Check if it's actually a data object (basic check)
+        flags = idaapi.get_full_flags(obj_ea)
+        if not idaapi.is_data(flags) and not idaapi.is_unknown(flags):
+            # If it's code, we can still proceed but it might not be what the user expects 
+            # if they specifically asked for "Global variable"
+            pass
+
+        dlg = GlobalXrefTreeDialog(obj_ea)
+        dlg.show()
+        
+        # Persist reference
+        import pseudonote.view as _view_mod
+        if not hasattr(_view_mod, "_copy_tree_dialogs"):
+            _view_mod._copy_tree_dialogs = []
+        _view_mod._copy_tree_dialogs.append(dlg)
         return 1
 
     def update(self, ctx):

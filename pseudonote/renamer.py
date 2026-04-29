@@ -1202,6 +1202,11 @@ class BulkRenamer(QDialog):
         wrapper_btn.clicked.connect(self.load_import_wrappers)
         smart_row.addWidget(wrapper_btn)
 
+        self.tree_btn = QPushButton("Current function tree")
+        self.tree_btn.setToolTip("Load the current function and all functions it calls (recursively).")
+        self.tree_btn.clicked.connect(self.load_current_tree)
+        smart_row.addWidget(self.tree_btn)
+
         smart_row.addStretch()
         tb_container.addWidget(smart_row_widget)
 
@@ -1352,6 +1357,18 @@ class BulkRenamer(QDialog):
         cb.setFixedWidth(120) 
         cb.clicked.connect(lambda: self.log.clear())
         log_header.addWidget(cb)
+
+        cache_btn = QPushButton('Clear cache')
+        cache_btn.setFixedWidth(120)
+        cache_btn.setToolTip("Clear unapplied AI suggestions from table and IDB cache")
+        cache_btn.clicked.connect(self.clear_cache)
+        log_header.addWidget(cache_btn)
+
+        addr_btn = QPushButton('Suffix Address')
+        addr_btn.setFixedWidth(130)
+        addr_btn.setToolTip("Append _<ADDRESS> to the suggested name (or current name if no suggestion)")
+        addr_btn.clicked.connect(self.append_address_suffix)
+        log_header.addWidget(addr_btn)
         bottom.addLayout(log_header)
 
         # Merged Log and Progress area
@@ -1835,6 +1852,47 @@ class BulkRenamer(QDialog):
 
 
 
+    def load_current_tree(self):
+        """Load the current function and all functions it calls (recursively)."""
+        cur_ea = ida_kernwin.get_screen_ea()
+        f = ida_funcs.get_func(cur_ea)
+        if not f:
+            self.add_log("No function at current cursor position", 'err')
+            return
+        
+        root_ea = f.start_ea
+        found = {root_ea}
+        q = [root_ea]
+        
+        def _collect():
+            while q:
+                ea = q.pop(0)
+                for item in idautils.FuncItems(ea):
+                    for xref in idautils.CodeRefsFrom(item, False):
+                        cf = ida_funcs.get_func(xref)
+                        if cf:
+                            cea = cf.start_ea
+                            if cea not in found:
+                                if is_valid_seg(cea):
+                                    found.add(cea)
+                                    if len(found) < 500: # Safety limit to avoid hanging on massive trees
+                                        q.append(cea)
+        
+        idaapi.execute_sync(_collect, idaapi.MFF_READ)
+        
+        # Filter out system functions if they aren't sub_*
+        to_load = []
+        for ea in found:
+            name = idc.get_func_name(ea)
+            if name and (name.startswith('sub_') or not is_sys_func(name)):
+                to_load.append(ea)
+        
+        if to_load:
+            self.load_eas(to_load, append=True)
+            self.add_log(f"Loaded function tree for {idc.get_func_name(root_ea)} ({len(to_load)} functions)", 'ok')
+        else:
+            self.add_log("No valid user functions found in the tree", 'info')
+
     def get_existing(self):
         ex = set()
         for ea in idautils.Functions():
@@ -2159,6 +2217,60 @@ class BulkRenamer(QDialog):
         self.workers = []
         self._last_done = 0
         self.sel_good_btn.setEnabled(suggestions > 0)
+
+    def clear_cache(self):
+        """Clear AI suggestions that haven't been applied to the database yet."""
+        count = 0
+        self.model.beginResetModel()
+        for f in self.model.funcs:
+            # Only clear if it hasn't been applied yet
+            if f.suggested and not f.status.startswith('Applied'):
+                f.suggested = ""
+                f.score = ""
+                f.status = "Pending"
+                # Restore the correct queue state
+                f.queue = 'clear' if f.sub_count == 0 else 'blocked'
+                # Clear persistent storage tag 84 (Suggestion cache)
+                save_to_idb(f.ea, "", tag=84)
+                count += 1
+        self.model.endResetModel()
+        
+        self.add_log(f"Cleared {count} unapplied suggestions from cache.", 'ok')
+        self.update_count()
+        self.save_table_state()
+
+    def append_address_suffix(self):
+        """Utility to append _<ADDRESS> to the suggested name for selected functions."""
+        items = self.model.get_checked()
+        if not items:
+            self.add_log("No functions selected to suffix.", 'warn')
+            return
+            
+        count = 0
+        indices = []
+        self.model.beginResetModel()
+        for i, f in items:
+            # Use suggestion if exists, otherwise use current name (fallback to demangled if possible)
+            base_name = f.suggested if f.suggested else (f.demangled or f.name)
+            
+            # Use 0x prefix if configured in the plugin config
+            addr_str = f"{f.ea:X}"
+            if getattr(self.pn_config, 'bulk_use_0x', False):
+                addr_str = f"0x{addr_str}"
+            
+            suffix = f"_{addr_str}"
+            
+            # Avoid double suffixing if already present
+            if not base_name.endswith(suffix):
+                f.suggested = base_name + suffix
+                f.status = "Suffix Added"
+                indices.append(i)
+                count += 1
+        
+        self.model.endResetModel()
+        self.add_log(f"Appended address suffix to {count} function(s).", 'ok')
+        self.update_count()
+        self.save_table_state()
 
     def on_select_good(self):
         count = self.model.select_good_scores(80)

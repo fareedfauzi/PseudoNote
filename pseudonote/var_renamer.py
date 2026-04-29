@@ -950,6 +950,11 @@ class BulkVariableRenamer(QDialog):
         wrapper_btn.clicked.connect(self.load_import_wrappers)
         smart_row.addWidget(wrapper_btn)
 
+        self.tree_btn = QPushButton("Current function tree")
+        self.tree_btn.setToolTip("Load the current function and all functions it calls (recursively).")
+        self.tree_btn.clicked.connect(self.load_current_tree)
+        smart_row.addWidget(self.tree_btn)
+
         smart_row.addStretch()
         layout.addLayout(smart_row)
 
@@ -1450,6 +1455,47 @@ class BulkVariableRenamer(QDialog):
         self.load_all_btn.setEnabled(True)
         self.update_button_states()
         self.save_table_state()
+
+    def load_current_tree(self):
+        """Load the current function and all functions it calls (recursively)."""
+        cur_ea = ida_kernwin.get_screen_ea()
+        f = ida_funcs.get_func(cur_ea)
+        if not f:
+            self.add_log("No function at current cursor position", 'err')
+            return
+        
+        root_ea = f.start_ea
+        found = {root_ea}
+        q = [root_ea]
+        
+        def _collect():
+            while q:
+                ea = q.pop(0)
+                for item in idautils.FuncItems(ea):
+                    for xref in idautils.CodeRefsFrom(item, False):
+                        cf = ida_funcs.get_func(xref)
+                        if cf:
+                            cea = cf.start_ea
+                            if cea not in found:
+                                if is_valid_seg(cea):
+                                    found.add(cea)
+                                    if len(found) < 500: # Safety limit
+                                        q.append(cea)
+        
+        idaapi.execute_sync(_collect, idaapi.MFF_READ)
+        
+        # Filter out system functions if they aren't sub_*
+        to_load = []
+        for ea in found:
+            name = idc.get_func_name(ea)
+            if name and (name.startswith('sub_') or not is_sys_func(name)):
+                to_load.append(ea)
+        
+        if to_load:
+            self.load_eas(to_load, append=True)
+            self.add_log(f"Loaded function tree for {idc.get_func_name(root_ea)} ({len(to_load)} functions)", 'ok')
+        else:
+            self.add_log("No valid user functions found in the tree", 'info')
 
     # -----------------------------------------------------------------------
     # Start rename

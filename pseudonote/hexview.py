@@ -298,7 +298,7 @@ class RangeDialog(QtWidgets.QDialog):
 # SEARCH RESULTS DIALOG
 # ─────────────────────────────────────────────────────────────────────────────
 class SearchResultsDialog(QtWidgets.QDialog):
-    result_selected = QtCore.Signal(int)
+    result_selected = QtCore.Signal(object)
 
     def __init__(self, parent, results, pattern, bmap):
         super().__init__(parent)
@@ -368,8 +368,8 @@ class SearchResultsDialog(QtWidgets.QDialog):
 # HEX CANVAS
 # ─────────────────────────────────────────────────────────────────────────────
 class HexCanvas(QtWidgets.QAbstractScrollArea):
-    selection_changed = QtCore.Signal(int, int)   # start_ea, end_ea (inclusive)
-    hover_changed = QtCore.Signal(int, int)       # ea, byte_value
+    selection_changed = QtCore.Signal(object, object)   # start_ea, end_ea (inclusive)
+    hover_changed = QtCore.Signal(object, object)       # ea, byte_value
 
     def __init__(self, parent=None):
         super().__init__(parent)
