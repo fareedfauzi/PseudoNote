@@ -103,10 +103,18 @@ SYS_MODULES = ('kernel32.', 'ntdll.', 'user32.', 'advapi32.', 'msvcrt.', 'ucrtba
 
 DEFAULT_PROMPT = """Expert reverse engineer. Name this function in snake_case.
 
-THUNK RULE (overrides all):
-If the function only returns, jumps, or forwards directly to another unnamed/opaque target →
-name it thunk_<offset> or wrap_<offset>, confidence ≤20%.
-Do NOT create semantic names for pure thunks or wrappers.
+STUB & THUNK RULES (overrides all):
+1. If function is EMPTY (no operations) → null_sub.
+2. If function only returns 0 → ret_0.
+3. If function only returns a constant (e.g. return 1) → ret_<value>.
+4. If function only returns a global offset/pointer → ret_<offset_name>.
+5. If function performs an indirect call or jump to a dynamic/computed address (e.g. (...)()) → wrap_indirect_call.
+6. If function only forwards directly to another unnamed/opaque target (sub_*) → thunk_<offset>.
+7. If function is a pure JUMP/Thunk to a known API → j_<api_name>.
+
+WRAPPER RULE:
+If a small function primarily calls exactly one known API or named function →
+name it wrap_<target_name> or call_<target_name>, confidence 40–60%.
 
 SUB RULE:
 sub_XXXXX calls are unnamed black boxes — zero semantic information.
@@ -116,13 +124,13 @@ confidence ≤30% and use wrap_<offset>.
 
 STRICT NAMING RULES (MANDATORY):
 1. NEVER reuse meaningless tokens from the current function name.
-2. NEVER produce names like:
-   the_, calls_, wrap_, func_, process_data_, work_, etc.
-3. Forbidden generic words:
-   the, calls, call, wrap, func, function, do, run, exec, work,
+2. NEVER produce generic filler names like:
+   the_func, calls_logic, process_data, work_thing, etc.
+3. Forbidden generic words (unless used as prefix):
+   the, calls, call, func, function, do, run, exec, work,
    handler, routine, logic, stuff, thing.
-4. Minimum 2 meaningful semantic tokens required (e.g. parse_flags, compute_size).
-5. If meaning is unclear → use wrap_<offset> (≤30% confidence).
+4. Minimum 2 meaningful semantic tokens required (except for STUB/THUNK rules).
+5. If meaning is unclear → use lowconf_something (≤30% confidence).
 6. DO NOT invent purpose.
 7. DO NOT guess.
 8. DO NOT summarize structure.
@@ -135,7 +143,11 @@ Valid evidence:
 - Named API calls
 - Meaningful strings
 - Constants or magic values
-- Recognizable parsing/crypto/memory patterns
+- Recognizable logic patterns:
+  - Byte/word comparison loops returning -1, 0, 1 → compare_*
+  - Pointer arithmetic + value checks → parse_* or find_*
+  - Bitwise flag extraction → get_flags or check_status
+  - Memory copying/initialization → copy_* or init_*
 - Clear algorithmic intent
 
 If function is primarily:
@@ -146,7 +158,7 @@ If function is primarily:
 
 Allowed prefixes ONLY if supported by evidence:
 init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
-compute_ decode_ encode_ dispatch_ allocate_ copy_
+compute_ decode_ encode_ dispatch_ allocate_ copy_ compare_ wrap_ call_ ret_ j_
 
 Length: 3–40 characters.
 No filler names.
@@ -166,10 +178,17 @@ decrypt_payload [95]"""
 
 DEFAULT_BATCH_PROMPT = """Expert reverse engineer. Name each function in snake_case.
 
-THUNK RULE (overrides all):
-If a function only returns, jumps, or forwards directly to another unnamed/opaque target →
-name it thunk_<offset> or wrap_<offset>, confidence ≤20%.
-Do NOT create semantic names for pure thunks or wrappers.
+STUB & THUNK RULES (overrides all):
+1. If EMPTY (no operations) → null_sub.
+2. If only returns 0 → ret_0.
+3. If only returns a constant → ret_<value>.
+4. If only returns a global offset → ret_<offset_name>.
+5. If indirect call/jump to dynamic address (e.g. (...)()) → wrap_indirect_call.
+6. If forwards directly to unnamed target (sub_*) → thunk_<offset>.
+
+WRAPPER RULE:
+If a small function primarily calls exactly one known API or named function →
+name it wrap_<target_name> or call_<target_name>, confidence 40–60%.
 
 SUB RULE:
 sub_XXXXX calls are unnamed black boxes — zero semantic information.
@@ -179,12 +198,12 @@ confidence ≤30% and use wrap_<offset>.
 
 STRICT NAMING RULES (MANDATORY):
 1. NEVER reuse meaningless tokens from the current function name.
-2. NEVER produce names like:
-   the_, calls_, wrap_, func_, process_data_, work_, etc.
-3. Forbidden generic words:
-   the, calls, call, wrap, func, function, do, run, exec, work,
+2. NEVER produce generic filler names like:
+   the_func, calls_logic, process_data, etc.
+3. Forbidden generic words (unless used as prefix):
+   the, calls, call, func, function, do, run, exec, work,
    handler, routine, logic, stuff, thing.
-4. Minimum 2 meaningful semantic tokens required.
+4. Minimum 2 meaningful semantic tokens required (except for STUB/THUNK rules).
 5. If meaning is unclear → use wrap_<offset> (≤30% confidence).
 6. DO NOT invent purpose.
 7. DO NOT guess.
@@ -198,7 +217,7 @@ Valid evidence:
 - Named API calls
 - Meaningful strings
 - Constants or magic values
-- Recognizable parsing/crypto/memory patterns
+- Recognizable logic patterns (comparisons, loops, arithmetic)
 - Clear algorithmic intent
 
 If function is primarily:
@@ -209,7 +228,7 @@ If function is primarily:
 
 Allowed prefixes ONLY if supported by evidence:
 init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
-compute_ decode_ encode_ dispatch_ allocate_ copy_
+compute_ decode_ encode_ dispatch_ allocate_ copy_ compare_ wrap_ call_ ret_ j_
 
 Length: 3–40 characters.
 No filler names.

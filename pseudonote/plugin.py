@@ -66,6 +66,8 @@ class PseudoNotePlugin(idaapi.plugin_t):
     def __init__(self):
         super(PseudoNotePlugin, self).__init__()
         self.view = None
+        self.code_view = None
+        self.notes_view = None
         self.hooks = None
         self.config = CONFIG
         self.ctx_hooks = None
@@ -105,15 +107,27 @@ class PseudoNotePlugin(idaapi.plugin_t):
         print("Use Ctrl+Shift+G or Edit -> PseudoNote to open.")
         print("-" * 60)
 
-        action_desc = idaapi.action_desc_t(
-            "pseudonote:action",
-            "Show PseudoNote Panes",
-            vm.PseudoNoteHandler(),
+        # Register Readable Code Action
+        readable_code_desc = idaapi.action_desc_t(
+            "pseudonote:readable_code",
+            "Readable Code",
+            vm.PseudoNoteHandler("code"),
             "Ctrl+Alt+G",
-            "Open PseudoNote AI Assistant",
+            "Open Readable Code View",
             109
         )
-        idaapi.register_action(action_desc)
+        idaapi.register_action(readable_code_desc)
+
+        # Register Analyst Notes Action
+        analyst_notes_desc = idaapi.action_desc_t(
+            "pseudonote:analyst_notes",
+            "Analyst Notes",
+            vm.PseudoNoteHandler("notes"),
+            "Ctrl+Alt+Shift+G",
+            "Open Analyst Notes View",
+            109
+        )
+        idaapi.register_action(analyst_notes_desc)
         # Main menu entry removed - focusing on right-click menu
 
         list_action_desc = idaapi.action_desc_t(
@@ -431,7 +445,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         return idaapi.PLUGIN_KEEP
 
     def run(self, arg):
-        self.open_view()
+        self.open_code_view()
 
     def term(self):
         if self.ctx_hooks:
@@ -440,7 +454,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
 
         # Unregister all actions
         for action_id in [
-            "pseudonote:action", "pseudonote:list",
+            "pseudonote:readable_code", "pseudonote:analyst_notes", "pseudonote:list",
             "pseudonote:rename_variables", "pseudonote:rename_function",
             "pseudonote:rename_function_malware", "pseudonote:suggest_function_prototype",
             "pseudonote:add_comments", "pseudonote:delete_comments",
@@ -464,15 +478,33 @@ class PseudoNotePlugin(idaapi.plugin_t):
             idaapi.unregister_action(action_id)
 
     def open_view(self, ea=idaapi.BADADDR):
+        self.open_code_view(ea)
+
+    def open_code_view(self, ea=idaapi.BADADDR):
         vm = _get_view_module()
-        if not self.view:
-            self.view = vm.PseudoNoteView(self.config)
-        self.view._target_ea = ea if ea != idaapi.BADADDR else idaapi.get_screen_ea()
-        self.view.Show("PseudoNote")
+        if not self.code_view:
+            self.code_view = vm.PseudoNoteView(self.config, mode="code")
+        self.code_view._target_ea = ea if ea != idaapi.BADADDR else idaapi.get_screen_ea()
+        self.code_view.Show("Readable Code")
         if ea != idaapi.BADADDR:
-            self.view.refresh_ui(force=True, target_ea=ea)
+            self.code_view.refresh_ui(force=True, target_ea=ea)
+
+    def open_notes_view(self, ea=idaapi.BADADDR):
+        vm = _get_view_module()
+        if not self.notes_view:
+            self.notes_view = vm.PseudoNoteView(self.config, mode="notes")
+        self.notes_view._target_ea = ea if ea != idaapi.BADADDR else idaapi.get_screen_ea()
+        self.notes_view.Show("Analyst Notes")
+        if ea != idaapi.BADADDR:
+            self.notes_view.refresh_ui(force=True, target_ea=ea)
 
     def Unregister(self):
         if self.view:
             self.view.Close()
             self.view = None
+        if self.code_view:
+            self.code_view.Close()
+            self.code_view = None
+        if self.notes_view:
+            self.notes_view.Close()
+            self.notes_view = None

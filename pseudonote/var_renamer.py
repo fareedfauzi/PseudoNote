@@ -563,9 +563,10 @@ class VirtualFuncModel(QAbstractTableModel):
 
 VAR_SYS_PROMPT = """You are an expert reverse engineer. Review the C function code provided.
 Identify variables with generic or unhelpful names (e.g., v1, a2, result, qword_1234, dword_5678).
-Propose more descriptive names based on their usage, context, and data flow.
+Propose developer-like variable names (i.e. self-documenting, meaningful, context-aware names that look like they were written by a software developer in high-quality source code) based on their usage, context, and data flow.
 
 RULES:
+- Suggest natural, descriptive, developer-style variable names (e.g., use `bytes_written`, `packet_len`, `user_id`, `is_authenticated` rather than generic or robotic names).
 - Do NOT suggest renames for bare register names (e.g., rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8-r15, eax, ebx, ecx, edx, esi, edi, ebp, esp, x0-x30, r0-r15). 
 - Do NOT rename registers appearing in comments (e.g., "// r10", "// x0").
 - Only rename actual C variable names (v1, a1, v2, result, etc.) that appear in the code.
@@ -581,11 +582,12 @@ Example:
 
 VAR_BATCH_SYS_PROMPT = """You are an expert reverse engineer. Review the C functions provided.
 Instructions:
-For EACH function, provide a JSON object mapping original variable names to new suggested names.
+For EACH function, provide a JSON object mapping original variable names to suggested developer-like variable names (i.e. self-documenting, meaningful, context-aware names that look like they were written by a software developer in high-quality source code).
 Use numeric [ID: N] markers to indicate which function you are analyzing.
 
 RULES:
 - Use snake_case for new names.
+- Propose developer-like, self-documenting names based on the function's logic and domain (e.g., `payload_size`, `socket_fd`, `session_token` rather than generic names).
 - Identify parameters (a1, a2) and locals (v1, v2).
 - Do NOT suggest renames for bare register names (rax, ebx, x0, r10, etc., or registers in comments).
 - Only rename actual C variables that appear in the function code.

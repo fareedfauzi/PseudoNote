@@ -296,6 +296,14 @@ def on_floss_finished(results_json):
                             if ea and idaapi.is_mapped(ea):
                                 final_ea = ea; break
                         if final_ea: break
+                        
+                        # Fallback: check offset in inst
+                        offset = inst.get("offset", 0)
+                        if offset:
+                            ea = idaapi.get_fileregion_ea(offset)
+                            if ea != idaapi.BADADDR and idaapi.is_mapped(ea):
+                                final_ea = ea; break
+                        if final_ea: break
                 
                 if not final_ea:
                     for k in ["va", "address", "location", "function", "decoding_routine"]:
@@ -443,7 +451,46 @@ def show_floss_strings_ui():
         input_file = ida_kernwin.ask_file(0, "*.*", "Select Binary for FLOSS Scan")
         if not input_file or not os.path.exists(input_file): return
         
-    cmd = [floss_path, "-j", "--", input_file]
+    # Detect file type and architecture to check if it's shellcode
+    file_type = idc.get_inf_attr(idc.INF_FILETYPE)
+    file_type_name = idaapi.get_file_type_name().lower()
+    is_pe = "portable executable" in file_type_name or "pe" in file_type_name or file_type == getattr(idc, "FT_PE", 11)
+    
+    floss_format = None
+    if not is_pe:
+        import ida_ida
+        is_64 = ida_ida.inf_is_64bit()
+        formats = [
+            "32-bit Shellcode (sc32)",
+            "64-bit Shellcode (sc64)",
+            "PE (Portable Executable / Auto-detect)"
+        ]
+        default_idx = 1 if is_64 else 0
+        
+        parent = QtWidgets.QApplication.activeWindow()
+        item, ok = QtWidgets.QInputDialog.getItem(
+            parent,
+            "Select FLOSS Format",
+            "The database file is not detected as a standard PE.\n"
+            "FLOSS requires a format specification for shellcode.\n"
+            "Please select the analysis format:",
+            formats,
+            default_idx,
+            False
+        )
+        if not ok:
+            ida_kernwin.msg("FLOSS Scan cancelled.\n")
+            return
+            
+        if "sc32" in item:
+            floss_format = "sc32"
+        elif "sc64" in item:
+            floss_format = "sc64"
+
+    cmd = [floss_path, "-j"]
+    if floss_format:
+        cmd.extend(["--format", floss_format])
+    cmd.extend(["--", input_file])
     
     global floss_thread
     floss_thread = FlossWorker(cmd)

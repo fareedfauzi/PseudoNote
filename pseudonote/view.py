@@ -1045,9 +1045,10 @@ if QtWidgets:
             self.accept()
 
     class PseudoNoteView(idaapi.PluginForm):
-        def __init__(self, config):
+        def __init__(self, config, mode="both"):
             super().__init__()
             self.config = config
+            self.mode = mode
             self.current_ea = None
             self.last_func_ea = None
             self.parent = None
@@ -1152,13 +1153,17 @@ if QtWidgets:
             
             layout = QtWidgets.QVBoxLayout()
             layout.setContentsMargins(0, 0, 0, 0)
-            self.splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+            if self.mode == "both":
+                self.splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+            else:
+                self.splitter = None
 
             self.show_code_btn = QtWidgets.QPushButton("Show Readable Code")
             self.show_code_btn.setStyleSheet(self.get_btn_style(blue=True))
             self.show_code_btn.clicked.connect(self.on_show_code)
             self.show_code_btn.setVisible(False)
-            self.splitter.addWidget(self.show_code_btn)
+            if self.splitter:
+                self.splitter.addWidget(self.show_code_btn)
 
             self.code_widget = QtWidgets.QWidget()
             code_layout = QtWidgets.QVBoxLayout()
@@ -1291,14 +1296,16 @@ if QtWidgets:
             self.code_tab_widget.currentChanged.connect(self.on_code_tab_changed)
             code_layout.addWidget(self.code_tab_widget)
             self.code_widget.setLayout(code_layout)
-            self.splitter.addWidget(self.code_widget)
+            if self.splitter:
+                self.splitter.addWidget(self.code_widget)
 
             # --- Notes section ---
             self.show_notes_btn = QtWidgets.QPushButton("Show Analyst Notes")
             self.show_notes_btn.setStyleSheet(self.get_btn_style(blue=True))
             self.show_notes_btn.clicked.connect(self.on_show_notes)
             self.show_notes_btn.setVisible(False)
-            self.splitter.addWidget(self.show_notes_btn)
+            if self.splitter:
+                self.splitter.addWidget(self.show_notes_btn)
 
             self.note_widget = QtWidgets.QWidget()
             note_layout = QtWidgets.QVBoxLayout()
@@ -1495,9 +1502,18 @@ if QtWidgets:
 
             note_layout.addWidget(self.note_tab_widget)
             self.note_widget.setLayout(note_layout)
-            self.splitter.addWidget(self.note_widget)
-
-            layout.addWidget(self.splitter)
+            if self.splitter:
+                self.splitter.addWidget(self.note_widget)
+                layout.addWidget(self.splitter)
+            else:
+                if self.mode == "code":
+                    layout.addWidget(self.code_widget)
+                    if hasattr(self, 'toggle_code_btn') and self.toggle_code_btn:
+                        self.toggle_code_btn.setVisible(False)
+                elif self.mode == "notes":
+                    layout.addWidget(self.note_widget)
+                    if hasattr(self, 'toggle_notes_btn') and self.toggle_notes_btn:
+                        self.toggle_notes_btn.setVisible(False)
             
             # Progress Overlay managed globally
             
@@ -2704,7 +2720,8 @@ if QtWidgets:
                 self.func_name_label.setText(f'Analyst notes: <span style="color: {accent};">{name}</span>')
             
             if not skip_title:
-                new_title = f"PseudoNote: {name}"
+                prefix = "PseudoNote Code" if self.mode == "code" else ("PseudoNote Notes" if self.mode == "notes" else "PseudoNote")
+                new_title = f"{prefix}: {name}"
                 try:
                     if self.GetTitle() != new_title:
                         self.SetTitle(new_title)
@@ -2712,109 +2729,111 @@ if QtWidgets:
                     if self.parent and self.parent.windowTitle() != new_title:
                         self.parent.setWindowTitle(new_title)
             
-            if self.c_code_editor: self.c_code_editor.setReadOnly(True)
-            if self.asm_code_editor: self.asm_code_editor.setReadOnly(True)
-            if self.manual_edit_btn:
-                self.manual_edit_btn.setText("Edit")
-                self.manual_edit_btn.setEnabled(True)
-                self.manual_edit_btn.setStyleSheet(self.get_btn_style(blue=True))
+            if self.mode in ["both", "code"]:
+                if self.c_code_editor: self.c_code_editor.setReadOnly(True)
+                if self.asm_code_editor: self.asm_code_editor.setReadOnly(True)
+                if self.manual_edit_btn:
+                    self.manual_edit_btn.setText("Edit")
+                    self.manual_edit_btn.setEnabled(True)
+                    self.manual_edit_btn.setStyleSheet(self.get_btn_style(blue=True))
 
-            code_c = load_from_idb(func_ea, tag=0)
-            if self.c_code_editor:
-                self.c_code_editor.blockSignals(True)
-                if code_c:
-                    self.last_saved_c_code = code_c
-                    if self.c_convert_btn: self.c_convert_btn.setText(f"Regenerate {self.current_lang} (AI)")
-                    self.c_code_editor.setPlainText(code_c)
-                    if self.c_status_stack: self.c_status_stack.setCurrentWidget(self.c_code_editor)
-                    if self.code_tab_widget: self.code_tab_widget.setTabText(1, "Pseudocode converted")
-                else:
-                    self.last_saved_c_code = ""
-                    if self.c_convert_btn: self.c_convert_btn.setText(f"Convert to {self.current_lang} (AI)")
-                    self.c_code_editor.setPlainText("")
-                    if self.c_status_stack: self.c_status_stack.setCurrentWidget(self.c_status_stack.widget(0))
-                    if self.c_status_label: self.c_status_label.setText(START_TEXT)
-                    if self.code_tab_widget: self.code_tab_widget.setTabText(1, "Pseudocode")
-                self.c_code_editor.blockSignals(False)
+                code_c = load_from_idb(func_ea, tag=0)
+                if self.c_code_editor:
+                    self.c_code_editor.blockSignals(True)
+                    if code_c:
+                        self.last_saved_c_code = code_c
+                        if self.c_convert_btn: self.c_convert_btn.setText(f"Regenerate {self.current_lang} (AI)")
+                        self.c_code_editor.setPlainText(code_c)
+                        if self.c_status_stack: self.c_status_stack.setCurrentWidget(self.c_code_editor)
+                        if self.code_tab_widget: self.code_tab_widget.setTabText(1, "Pseudocode converted")
+                    else:
+                        self.last_saved_c_code = ""
+                        if self.c_convert_btn: self.c_convert_btn.setText(f"Convert to {self.current_lang} (AI)")
+                        self.c_code_editor.setPlainText("")
+                        if self.c_status_stack: self.c_status_stack.setCurrentWidget(self.c_status_stack.widget(0))
+                        if self.c_status_label: self.c_status_label.setText(START_TEXT)
+                        if self.code_tab_widget: self.code_tab_widget.setTabText(1, "Pseudocode")
+                    self.c_code_editor.blockSignals(False)
 
-            code_asm = load_from_idb(func_ea, tag=81)
-            if self.asm_code_editor:
-                self.asm_code_editor.blockSignals(True)
-                if code_asm:
-                    self.last_saved_asm_code = code_asm
-                    if self.asm_convert_btn: self.asm_convert_btn.setText(f"Regenerate {self.current_lang} (AI)")
-                    self.asm_code_editor.setPlainText(code_asm)
-                    if self.asm_status_stack: self.asm_status_stack.setCurrentWidget(self.asm_code_editor)
-                    if self.code_tab_widget: self.code_tab_widget.setTabText(0, "IDA-View converted")
-                else:
-                    self.last_saved_asm_code = ""
-                    if self.asm_convert_btn: self.asm_convert_btn.setText(f"Convert to {self.current_lang} (AI)")
-                    self.asm_code_editor.setPlainText("")
-                    if self.asm_status_stack: self.asm_status_stack.setCurrentWidget(self.asm_status_stack.widget(0))
-                    if self.asm_status_label: self.asm_status_label.setText(START_TEXT)
-                    if self.code_tab_widget: self.code_tab_widget.setTabText(0, "IDA-View")
-                self.asm_code_editor.blockSignals(False)
+                code_asm = load_from_idb(func_ea, tag=81)
+                if self.asm_code_editor:
+                    self.asm_code_editor.blockSignals(True)
+                    if code_asm:
+                        self.last_saved_asm_code = code_asm
+                        if self.asm_convert_btn: self.asm_convert_btn.setText(f"Regenerate {self.current_lang} (AI)")
+                        self.asm_code_editor.setPlainText(code_asm)
+                        if self.asm_status_stack: self.asm_status_stack.setCurrentWidget(self.asm_code_editor)
+                        if self.code_tab_widget: self.code_tab_widget.setTabText(0, "IDA-View converted")
+                    else:
+                        self.last_saved_asm_code = ""
+                        if self.asm_convert_btn: self.asm_convert_btn.setText(f"Convert to {self.current_lang} (AI)")
+                        self.asm_code_editor.setPlainText("")
+                        if self.asm_status_stack: self.asm_status_stack.setCurrentWidget(self.asm_status_stack.widget(0))
+                        if self.asm_status_label: self.asm_status_label.setText(START_TEXT)
+                        if self.code_tab_widget: self.code_tab_widget.setTabText(0, "IDA-View")
+                    self.asm_code_editor.blockSignals(False)
 
-            self.on_code_text_changed()
-            if self.code_tab_widget: self.on_code_tab_changed(self.code_tab_widget.currentIndex())
-            if self.c_convert_btn: self.c_convert_btn.setEnabled(True)
-            if self.asm_convert_btn: self.asm_convert_btn.setEnabled(True)
+                self.on_code_text_changed()
+                if self.code_tab_widget: self.on_code_tab_changed(self.code_tab_widget.currentIndex())
+                if self.c_convert_btn: self.c_convert_btn.setEnabled(True)
+                if self.asm_convert_btn: self.asm_convert_btn.setEnabled(True)
 
-            note = load_from_idb(func_ea, tag=78)
-            if self.note_editor:
-                self.last_saved_note = note if note else ""
-                self.note_editor.blockSignals(True)
-                self.note_editor.setPlainText(self.last_saved_note)
-                self.note_editor.blockSignals(False)
-                if self.note_save_btn: self.update_save_btn_state(self.note_save_btn, saved=True)
-                self.toggle_note_mode(edit=False)
-                if not self.last_saved_note and self.note_viewer:
-                    self.note_viewer.setText("")
+                comments = load_from_idb(func_ea, tag=87)
+                if self.comments_ai_editor:
+                    if comments:
+                        code = comments.strip()
+                        if "```" in code:
+                            matches = re.findall(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
+                            if matches: code = matches[0]
+                            else:
+                                parts = code.split("```")
+                                if len(parts) >= 3: code = parts[1]
+                        self.comments_ai_editor.setPlainText(code.strip())
+                        if self.comments_ai_stack: self.comments_ai_stack.setCurrentIndex(1)
+                    else:
+                        if self.comments_ai_status_label: self.comments_ai_status_label.setText(START_TEXT)
+                        if self.comments_ai_stack: self.comments_ai_stack.setCurrentIndex(0)
+                        self.comments_ai_editor.setPlainText("")
 
-            explanation = load_from_idb(func_ea, tag=79)
-            if self.explanation_viewer:
-                if explanation: self.explanation_viewer.setMarkdown(explanation)
-                else:
-                    self.explanation_viewer.setPlaceholderText("Click 'Explain (AI)' to generate an explanation for the current function.")
-                    self.explanation_viewer.setText("")
+            if self.mode in ["both", "notes"]:
+                note = load_from_idb(func_ea, tag=78)
+                if self.note_editor:
+                    self.last_saved_note = note if note else ""
+                    self.note_editor.blockSignals(True)
+                    self.note_editor.setPlainText(self.last_saved_note)
+                    self.note_editor.blockSignals(False)
+                    if self.note_save_btn: self.update_save_btn_state(self.note_save_btn, saved=True)
+                    self.toggle_note_mode(edit=False)
+                    if not self.last_saved_note and self.note_viewer:
+                        self.note_viewer.setText("")
 
-            gflow = load_from_idb(func_ea, tag=88)
-            if self.gflow_viewer:
-                if gflow: self.gflow_viewer.setMarkdown(gflow)
-                else:
-                    self.gflow_viewer.setPlaceholderText("Click 'Get graph' to generate a text flow graph.")
-                    self.gflow_viewer.setText("")
+                explanation = load_from_idb(func_ea, tag=79)
+                if self.explanation_viewer:
+                    if explanation: self.explanation_viewer.setMarkdown(explanation)
+                    else:
+                        self.explanation_viewer.setPlaceholderText("Click 'Explain (AI)' to generate an explanation for the current function.")
+                        self.explanation_viewer.setText("")
 
-            suggestions = load_from_idb(func_ea, tag=80)
-            if self.suggestion_viewer:
-                if suggestions: self.suggestion_viewer.setMarkdown(suggestions)
-                else:
-                    self.suggestion_viewer.setPlaceholderText("Click 'Function Details (AI)' to generate details.")
-                    self.suggestion_viewer.setText("")
+                gflow = load_from_idb(func_ea, tag=88)
+                if self.gflow_viewer:
+                    if gflow: self.gflow_viewer.setMarkdown(gflow)
+                    else:
+                        self.gflow_viewer.setPlaceholderText("Click 'Get graph' to generate a text flow graph.")
+                        self.gflow_viewer.setText("")
 
-            cp_res = load_from_idb(func_ea, tag=97)
-            if getattr(self, 'custom_prompt_viewer', None):
-                if cp_res: self.custom_prompt_viewer.setMarkdown(cp_res)
-                else:
-                    self.custom_prompt_viewer.setPlaceholderText("Result will appear here.")
-                    self.custom_prompt_viewer.setText("")
+                suggestions = load_from_idb(func_ea, tag=80)
+                if self.suggestion_viewer:
+                    if suggestions: self.suggestion_viewer.setMarkdown(suggestions)
+                    else:
+                        self.suggestion_viewer.setPlaceholderText("Click 'Function Details (AI)' to generate details.")
+                        self.suggestion_viewer.setText("")
 
-            comments = load_from_idb(func_ea, tag=87)
-            if self.comments_ai_editor:
-                if comments:
-                    code = comments.strip()
-                    if "```" in code:
-                        matches = re.findall(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
-                        if matches: code = matches[0]
-                        else:
-                            parts = code.split("```")
-                            if len(parts) >= 3: code = parts[1]
-                    self.comments_ai_editor.setPlainText(code.strip())
-                    if self.comments_ai_stack: self.comments_ai_stack.setCurrentIndex(1)
-                else:
-                    if self.comments_ai_status_label: self.comments_ai_status_label.setText(START_TEXT)
-                    if self.comments_ai_stack: self.comments_ai_stack.setCurrentIndex(0)
-                    self.comments_ai_editor.setPlainText("")
+                cp_res = load_from_idb(func_ea, tag=97)
+                if getattr(self, 'custom_prompt_viewer', None):
+                    if cp_res: self.custom_prompt_viewer.setMarkdown(cp_res)
+                    else:
+                        self.custom_prompt_viewer.setPlaceholderText("Result will appear here.")
+                        self.custom_prompt_viewer.setText("")
 
         def OnClose(self, form):
             global _view_instance
@@ -2847,17 +2866,23 @@ class ScreenHooks(idaapi.UI_Hooks):
 def show_view():
     """Helper to show the view, primarily for manual invocation."""
     if plugin_instance:
-        plugin_instance.open_view()
+        plugin_instance.open_code_view()
 
 
 
 class PseudoNoteHandler(idaapi.action_handler_t):
-    def __init__(self):
+    def __init__(self, mode="both"):
         idaapi.action_handler_t.__init__(self)
+        self.mode = mode
     def activate(self, ctx):
         if plugin_instance:
             ea = ctx.cur_ea if hasattr(ctx, 'cur_ea') and ctx.cur_ea != idaapi.BADADDR else idaapi.get_screen_ea()
-            plugin_instance.open_view(ea)
+            if self.mode == "code":
+                plugin_instance.open_code_view(ea)
+            elif self.mode == "notes":
+                plugin_instance.open_notes_view(ea)
+            else:
+                plugin_instance.open_view(ea)
         else:
             print("PseudoNote plugin instance not found.")
         return 1
@@ -2872,7 +2897,8 @@ class ContextMenuHooks(idaapi.UI_Hooks):
             return
 
         # GROUP 1: PANES & SETTINGS
-        idaapi.attach_action_to_popup(widget, popup, "pseudonote:action", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:readable_code", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyst_notes", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:list", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
 

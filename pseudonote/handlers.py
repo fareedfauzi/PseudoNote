@@ -2064,8 +2064,19 @@ class FunctionTreeDialog(QtWidgets.QDialog):
 
     def on_item_changed(self, item, column):
         if column == 0:
-            # Maybe handle recursive checking?
-            pass
+            self.tree.blockSignals(True)
+            try:
+                state = item.checkState(0)
+                self._propagate_check_state(item, state)
+            finally:
+                self.tree.blockSignals(False)
+
+    def _propagate_check_state(self, item, state):
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child.checkState(0) != state:
+                child.setCheckState(0, state)
+            self._propagate_check_state(child, state)
 
     def set_all_checked(self, checked):
         state = QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked
