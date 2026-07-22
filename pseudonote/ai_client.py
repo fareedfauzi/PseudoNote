@@ -9,7 +9,7 @@ import time
 
 import ida_kernwin
 
-from pseudonote.qt_compat import openai, httpx, anthropic, genai
+from pseudonote.qt_compat import openai, httpx, anthropic, genai, gemini_backend
 from pseudonote.config import CONFIG, LOGGER
 
 
@@ -112,8 +112,11 @@ class SimpleAI:
             if not genai or not self.config.gemini_key:
                 LOGGER.log("Google GenAI library or Key missing.")
                 return
-            genai.configure(api_key=self.config.gemini_key)
-            self.client = "gemini_configured"
+            if gemini_backend == "google-genai":
+                self.client = genai.Client(api_key=self.config.gemini_key)
+            else:
+                genai.configure(api_key=self.config.gemini_key)
+                self.client = "gemini_configured"
 
     def query_model_async(self, prompt, callback, additional_options=None, on_chunk=None, on_status=None):
         """
@@ -259,7 +262,6 @@ class SimpleAI:
 
                 elif self.provider == "gemini":
                      if not self.client: raise ValueError("Gemini not configured.")
-                     model = genai.GenerativeModel(self.config.model)
                      
                      generation_config = {}
                      if "max_completion_tokens" in additional_options:
@@ -269,77 +271,169 @@ class SimpleAI:
                      if "top_p" in additional_options:
                          generation_config["top_p"] = additional_options["top_p"]
 
-                     if isinstance(prompt, list):
-                         history = []
-                         for m in prompt:
-                             role = m.get("role", "user")
-                             if role == "assistant": role = "model"
-                             if role == "system": continue 
-                             history.append({"role": role, "parts": [m.get("content", "")]})
-                         
-                         chat = model.start_chat(history=history[:-1])
-                         if on_chunk:
-                             response_stream = chat.send_message(history[-1]["parts"][0], stream=True, generation_config=generation_config)
-                             buffer = ""
-                             last_update = time.time()
-                             for chunk in response_stream:
-                                 if AI_CANCEL_REQUESTED:
-                                     finish_reason = "cancelled"
-                                     break
-                                 full_content += chunk.text
-                                 buffer += chunk.text
-                                 if time.time() - last_update > 0.05 or len(buffer) > 100:
-                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
-                                     buffer = ""
-                                     last_update = time.time()
-                             if buffer:
-                                 ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                     if gemini_backend == "google-genai":
+                         if isinstance(prompt, list):
+                             history = []
+                             for m in prompt:
+                                 role = m.get("role", "user")
+                                 if role == "assistant": role = "model"
+                                 if role == "system": continue 
+                                 history.append({"role": role, "parts": [{"text": m.get("content", "")}]})
                              
-                             # Gemini finish reason
-                             try:
-                                 fr = response_stream.last.candidates[0].finish_reason
-                                 if fr == 2: finish_reason = "length" # 2 is MAX_TOKENS in some versions of the SDK
-                                 else: finish_reason = "stop"
-                             except: finish_reason = "stop"
+                             chat = self.client.chats.create(model=self.config.model, history=history[:-1])
+                             last_message = history[-1]["parts"][0]["text"]
+                             
+                             if on_chunk:
+                                 response_stream = chat.send_message_stream(last_message, config=generation_config)
+                                 buffer = ""
+                                 last_update = time.time()
+                                 for chunk in response_stream:
+                                     if AI_CANCEL_REQUESTED:
+                                         finish_reason = "cancelled"
+                                         break
+                                     txt = chunk.text or ""
+                                     full_content += txt
+                                     buffer += txt
+                                     if time.time() - last_update > 0.05 or len(buffer) > 100:
+                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                         buffer = ""
+                                         last_update = time.time()
+                                     if chunk.candidates:
+                                         fr = chunk.candidates[0].finish_reason
+                                         if fr:
+                                             if any(x in str(fr).upper() for x in ["MAX_TOKENS", "LENGTH"]):
+                                                 finish_reason = "length"
+                                             else:
+                                                 finish_reason = "stop"
+                                 if buffer:
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                             else:
+                                 response = chat.send_message(last_message, config=generation_config)
+                                 full_content = response.text or ""
+                                 try:
+                                     fr = response.candidates[0].finish_reason
+                                     if fr and any(x in str(fr).upper() for x in ["MAX_TOKENS", "LENGTH"]):
+                                         finish_reason = "length"
+                                     else:
+                                         finish_reason = "stop"
+                                 except:
+                                     finish_reason = "stop"
                          else:
-                            response = chat.send_message(history[-1]["parts"][0], generation_config=generation_config)
-                            full_content = response.text
-                            try:
-                                fr = response.candidates[0].finish_reason
-                                if fr == 2: finish_reason = "length"
-                                else: finish_reason = "stop"
-                            except: finish_reason = "stop"
+                             if on_chunk:
+                                 response_stream = self.client.models.generate_content_stream(
+                                     model=self.config.model,
+                                     contents=prompt,
+                                     config=generation_config
+                                 )
+                                 buffer = ""
+                                 last_update = time.time()
+                                 for chunk in response_stream:
+                                     if AI_CANCEL_REQUESTED:
+                                         finish_reason = "cancelled"
+                                         break
+                                     txt = chunk.text or ""
+                                     full_content += txt
+                                     buffer += txt
+                                     if time.time() - last_update > 0.05 or len(buffer) > 100:
+                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                         buffer = ""
+                                         last_update = time.time()
+                                     if chunk.candidates:
+                                         fr = chunk.candidates[0].finish_reason
+                                         if fr:
+                                             if any(x in str(fr).upper() for x in ["MAX_TOKENS", "LENGTH"]):
+                                                 finish_reason = "length"
+                                             else:
+                                                 finish_reason = "stop"
+                                 if buffer:
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                             else:
+                                 response = self.client.models.generate_content(
+                                     model=self.config.model,
+                                     contents=prompt,
+                                     config=generation_config
+                                 )
+                                 full_content = response.text or ""
+                                 try:
+                                     fr = response.candidates[0].finish_reason
+                                     if fr and any(x in str(fr).upper() for x in ["MAX_TOKENS", "LENGTH"]):
+                                         finish_reason = "length"
+                                     else:
+                                         finish_reason = "stop"
+                                 except:
+                                     finish_reason = "stop"
                      else:
-                         if on_chunk:
-                             response_stream = model.generate_content(prompt, stream=True, generation_config=generation_config)
-                             buffer = ""
-                             last_update = time.time()
-                             for chunk in response_stream:
-                                 if AI_CANCEL_REQUESTED:
-                                     finish_reason = "cancelled"
-                                     break
-                                 full_content += chunk.text
-                                 buffer += chunk.text
-                                 if time.time() - last_update > 0.05 or len(buffer) > 100:
-                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
-                                     buffer = ""
-                                     last_update = time.time()
-                             if buffer:
-                                 ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                         model = genai.GenerativeModel(self.config.model)
+                         if isinstance(prompt, list):
+                             history = []
+                             for m in prompt:
+                                 role = m.get("role", "user")
+                                 if role == "assistant": role = "model"
+                                 if role == "system": continue 
+                                 history.append({"role": role, "parts": [m.get("content", "")]})
                              
-                             try:
-                                 fr = response_stream.last.candidates[0].finish_reason
-                                 if fr == 2: finish_reason = "length"
-                                 else: finish_reason = "stop"
-                             except: finish_reason = "stop"
+                             chat = model.start_chat(history=history[:-1])
+                             if on_chunk:
+                                 response_stream = chat.send_message(history[-1]["parts"][0], stream=True, generation_config=generation_config)
+                                 buffer = ""
+                                 last_update = time.time()
+                                 for chunk in response_stream:
+                                     if AI_CANCEL_REQUESTED:
+                                         finish_reason = "cancelled"
+                                         break
+                                     full_content += chunk.text
+                                     buffer += chunk.text
+                                     if time.time() - last_update > 0.05 or len(buffer) > 100:
+                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                         buffer = ""
+                                         last_update = time.time()
+                                 if buffer:
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                 
+                                 try:
+                                     fr = response_stream.last.candidates[0].finish_reason
+                                     if fr == 2: finish_reason = "length"
+                                     else: finish_reason = "stop"
+                                 except: finish_reason = "stop"
+                             else:
+                                 response = chat.send_message(history[-1]["parts"][0], generation_config=generation_config)
+                                 full_content = response.text
+                                 try:
+                                     fr = response.candidates[0].finish_reason
+                                     if fr == 2: finish_reason = "length"
+                                     else: finish_reason = "stop"
+                                 except: finish_reason = "stop"
                          else:
-                             response = model.generate_content(prompt, generation_config=generation_config)
-                             full_content = response.text
-                             try:
-                                 fr = response.candidates[0].finish_reason
-                                 if fr == 2: finish_reason = "length"
-                                 else: finish_reason = "stop"
-                             except: finish_reason = "stop"
+                             if on_chunk:
+                                 response_stream = model.generate_content(prompt, stream=True, generation_config=generation_config)
+                                 buffer = ""
+                                 last_update = time.time()
+                                 for chunk in response_stream:
+                                     if AI_CANCEL_REQUESTED:
+                                         finish_reason = "cancelled"
+                                         break
+                                     full_content += chunk.text
+                                     buffer += chunk.text
+                                     if time.time() - last_update > 0.05 or len(buffer) > 100:
+                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                         buffer = ""
+                                         last_update = time.time()
+                                 if buffer:
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                 
+                                 try:
+                                     fr = response_stream.last.candidates[0].finish_reason
+                                     if fr == 2: finish_reason = "length"
+                                     else: finish_reason = "stop"
+                                 except: finish_reason = "stop"
+                             else:
+                                 response = model.generate_content(prompt, generation_config=generation_config)
+                                 full_content = response.text
+                                 try:
+                                     fr = response.candidates[0].finish_reason
+                                     if fr == 2: finish_reason = "length"
+                                     else: finish_reason = "stop"
+                                 except: finish_reason = "stop"
 
 
                 LOGGER.log(f"Received response from {self.provider} ({len(full_content)} chars, reason: {finish_reason}).")
@@ -437,8 +531,14 @@ class SimpleAI:
             elif self.provider == "gemini":
                 if not self.client: return False, "Gemini not configured."
                 model_name = self.config.gemini_model if self.config.gemini_model else self.config.model
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
+                if gemini_backend == "google-genai":
+                    response = self.client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                    )
+                else:
+                    model = genai.GenerativeModel(model_name)
+                    response = model.generate_content(prompt)
                 return True, f"Connection successful!"
 
             return False, f"Unknown provider: {self.provider}"

@@ -134,7 +134,7 @@ class Config:
         self.var_auto_apply = True
         self.var_force_rename = False
         self.bulk_force_rename_sub = False
-        self.auto_apply_bulk = False
+        self.auto_apply_bulk = True
         self.show_pro_tip = True
         self.floss_path = ""
 
@@ -271,7 +271,7 @@ class Config:
             self.analyzer_append_address = parser.getboolean("General", "analyzer_append_address", fallback=True)
             self.var_auto_apply = parser.getboolean("General", "var_auto_apply", fallback=True)
             self.var_force_rename = parser.getboolean("Analysis", "VAR_FORCE_RENAME", fallback=False)
-            self.auto_apply_bulk = parser.getboolean("Analysis", "BULK_AUTO_APPLY", fallback=False)
+            self.auto_apply_bulk = parser.getboolean("Analysis", "BULK_AUTO_APPLY", fallback=True)
             
             # Specifics
             self.bulk_batch_size = parser.getint("Analysis", "BULK_BATCH_SIZE", fallback=10)

@@ -103,12 +103,16 @@ SYS_MODULES = ('kernel32.', 'ntdll.', 'user32.', 'advapi32.', 'msvcrt.', 'ucrtba
 
 DEFAULT_PROMPT = """Expert reverse engineer. Name this function in snake_case.
 
-STUB & THUNK RULES (overrides all):
-1. If function is EMPTY (no operations) → null_sub.
+STUB & THUNK RULES (overrides all — ONLY apply when the function body is TRIVIAL):
+1. If function is completely EMPTY (contains absolutely no instructions, operations, or logic) → null_sub.
+   WARNING: NEVER suggest null_sub if the function performs any math, assignments, memory writes, loops, or checks.
 2. If function only returns 0 → ret_0.
 3. If function only returns a constant (e.g. return 1) → ret_<value>.
 4. If function only returns a global offset/pointer → ret_<offset_name>.
-5. If function performs an indirect call or jump to a dynamic/computed address (e.g. (...)()) → wrap_indirect_call.
+5. If function is TRIVIALLY a single indirect call/jump to a computed address with NO other logic
+   (e.g. body is literally just: (*(a1 + N))(args)) → wrap_indirect_call.
+   WARNING: If the function also has conditionals, type-checks, magic constants, loops, or
+   ANY other meaningful logic → it is NOT a trivial thunk. Give it a descriptive name instead.
 6. If function only forwards directly to another unnamed/opaque target (sub_*) → thunk_<offset>.
 7. If function is a pure JUMP/Thunk to a known API → j_<api_name>.
 
@@ -130,7 +134,7 @@ STRICT NAMING RULES (MANDATORY):
    the, calls, call, func, function, do, run, exec, work,
    handler, routine, logic, stuff, thing.
 4. Minimum 2 meaningful semantic tokens required (except for STUB/THUNK rules).
-5. If meaning is unclear → use lowconf_something (≤30% confidence).
+5. If meaning is unclear → use lowconf_something (≤30% confidence). NEVER use null_sub or wrap_ as a generic fallback for unclear functions.
 6. DO NOT invent purpose.
 7. DO NOT guess.
 8. DO NOT summarize structure.
@@ -142,12 +146,14 @@ Name must reflect WHAT the code actually does, based strictly on evidence.
 Valid evidence:
 - Named API calls
 - Meaningful strings
-- Constants or magic values
+- Constants or magic values (e.g. struct magic numbers, flags, error codes)
 - Recognizable logic patterns:
   - Byte/word comparison loops returning -1, 0, 1 → compare_*
   - Pointer arithmetic + value checks → parse_* or find_*
   - Bitwise flag extraction → get_flags or check_status
   - Memory copying/initialization → copy_* or init_*
+  - Type-tag/magic-number validation before dispatch → validate_and_dispatch or check_and_invoke
+  - Vtable / function-pointer dispatch with guards → dispatch_* or invoke_*
 - Clear algorithmic intent
 
 If function is primarily:
@@ -155,10 +161,11 @@ If function is primarily:
 - Size arithmetic → compute_* or calculate_*
 - Memory copying → copy_* or clone_*
 - Dispatch logic → dispatch_* or route_*
+- Struct/object type validation then action → validate_and_<action> or check_<type>_and_<action>
 
 Allowed prefixes ONLY if supported by evidence:
 init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
-compute_ decode_ encode_ dispatch_ allocate_ copy_ compare_ wrap_ call_ ret_ j_
+compute_ decode_ encode_ dispatch_ allocate_ copy_ compare_ wrap_ call_ ret_ j_ invoke_
 
 Length: 3–40 characters.
 No filler names.
@@ -178,12 +185,16 @@ decrypt_payload [95]"""
 
 DEFAULT_BATCH_PROMPT = """Expert reverse engineer. Name each function in snake_case.
 
-STUB & THUNK RULES (overrides all):
-1. If EMPTY (no operations) → null_sub.
+STUB & THUNK RULES (overrides all — ONLY apply when the function body is TRIVIAL):
+1. If function is completely EMPTY (contains absolutely no instructions, operations, or logic) → null_sub.
+   WARNING: NEVER suggest null_sub if the function performs any math, assignments, memory writes, loops, or checks.
 2. If only returns 0 → ret_0.
 3. If only returns a constant → ret_<value>.
 4. If only returns a global offset → ret_<offset_name>.
-5. If indirect call/jump to dynamic address (e.g. (...)()) → wrap_indirect_call.
+5. If function is TRIVIALLY a single indirect call/jump to a computed address with NO other logic
+   (body is literally just the call, nothing else) → wrap_indirect_call.
+   WARNING: If the function also has conditionals, type-checks, magic constants, or loops,
+   it is NOT a trivial thunk — give it a descriptive name.
 6. If forwards directly to unnamed target (sub_*) → thunk_<offset>.
 
 WRAPPER RULE:
@@ -204,7 +215,7 @@ STRICT NAMING RULES (MANDATORY):
    the, calls, call, func, function, do, run, exec, work,
    handler, routine, logic, stuff, thing.
 4. Minimum 2 meaningful semantic tokens required (except for STUB/THUNK rules).
-5. If meaning is unclear → use wrap_<offset> (≤30% confidence).
+5. If meaning is unclear → use lowconf_<best_guess> (≤30% confidence). NEVER use null_sub or wrap_<offset> as a generic fallback for unclear functions.
 6. DO NOT invent purpose.
 7. DO NOT guess.
 8. DO NOT summarize structure.
@@ -216,8 +227,10 @@ Name must reflect WHAT the code clearly does, strictly based on evidence.
 Valid evidence:
 - Named API calls
 - Meaningful strings
-- Constants or magic values
+- Constants or magic values (struct magic numbers, flags, error codes)
 - Recognizable logic patterns (comparisons, loops, arithmetic)
+- Type-tag/magic-number validation before dispatch → validate_and_dispatch or check_and_invoke
+- Vtable / function-pointer dispatch with guards → dispatch_* or invoke_*
 - Clear algorithmic intent
 
 If function is primarily:
@@ -225,10 +238,11 @@ If function is primarily:
 - Size arithmetic → compute_* or calculate_*
 - Memory copying → copy_* or clone_*
 - Dispatch logic → dispatch_* or route_*
+- Struct type check then callback → validate_and_<action> or check_<type>_and_<action>
 
 Allowed prefixes ONLY if supported by evidence:
 init_ parse_ validate_ process_ handle_ get_ set_ create_ destroy_ check_
-compute_ decode_ encode_ dispatch_ allocate_ copy_ compare_ wrap_ call_ ret_ j_
+compute_ decode_ encode_ dispatch_ allocate_ copy_ compare_ wrap_ call_ ret_ j_ invoke_
 
 Length: 3–40 characters.
 No filler names.
@@ -563,21 +577,24 @@ def clean_name(name, existing=None, ea=None):
             if cnt > 99: break
 
     # 3. Handle IDB Name Collisions
-    # Check if name is already used in the database by ANOTHER address
+    # Check if name is already used in the database by ANOTHER address.
+    # IMPORTANT: idc.get_name_ea MUST be called from the main IDA thread.
+    # If we are on a background QThread, use execute_sync(MFF_READ).
     try:
-        existing_ea = idc.get_name_ea(idaapi.BADADDR, name)
-        if existing_ea != idaapi.BADADDR and existing_ea != ea:
-            orig = name
-            cnt = 1
-            while True:
-                new_name = f"{orig}_{cnt}"
-                chk_ea = idc.get_name_ea(idaapi.BADADDR, new_name)
-                # Success if name is free OR specifically belongs to this address already
-                if chk_ea == idaapi.BADADDR or chk_ea == ea:
-                    name = new_name
-                    break
-                cnt += 1
-                if cnt > 100: break
+        result_holder = [name]
+        def _check_collision():
+            candidate = result_holder[0]
+            existing_ea = idc.get_name_ea(idaapi.BADADDR, candidate)
+            if existing_ea != idaapi.BADADDR and existing_ea != ea:
+                orig = candidate
+                for cnt in range(1, 101):
+                    new_name = f"{orig}_{cnt}"
+                    chk_ea = idc.get_name_ea(idaapi.BADADDR, new_name)
+                    if chk_ea == idaapi.BADADDR or chk_ea == ea:
+                        result_holder[0] = new_name
+                        return
+        idaapi.execute_sync(_check_collision, idaapi.MFF_READ)
+        name = result_holder[0]
     except:
         pass
 
@@ -807,7 +824,8 @@ class AnalyzeWorker(QThread):
     log = Signal(str, str)
     update_status = Signal(str)
 
-    def __init__(self, cfg, items, existing, sys_prompt, batch_size, is_retry=False):
+    def __init__(self, cfg, items, existing, sys_prompt, batch_size, is_retry=False,
+                 is_low_score_rescan=False, func_score_map=None):
         super().__init__()
         self.cfg = cfg
         self.items = items
@@ -818,6 +836,9 @@ class AnalyzeWorker(QThread):
         self.running = True
         self.needs_cooldown = False
         self.is_retry = is_retry
+        self.is_low_score_rescan = is_low_score_rescan
+        # func_score_map: dict {ea: score_int} for all analyzed functions - used for callee-score blocking
+        self.func_score_map = func_score_map or {}
 
     def stop(self):
         self.running = False
@@ -830,8 +851,15 @@ class AnalyzeWorker(QThread):
         for batch in batches:
             if not self.running: break
             results = self.process_batch(batch)
+
+            # Immediate low-score rescan: after each batch, re-analyze any function
+            # that received a score <= 50%, one-by-one, for higher accuracy.
+            # Skip this extra pass when we are already in a rescan mode.
+            if not self.is_low_score_rescan:
+                results = self._rescan_low_score_results(results)
+
             for idx, func, name, score in results:
-                if name:
+                if name and name not in ('DEFERRED', 'DEFERRED_LOW_SCORE'):
                     self.existing.add(name)
             self.batch_done.emit(results)
             done += len(batch)
@@ -865,13 +893,37 @@ class AnalyzeWorker(QThread):
                 func.sub_count = count_sub_calls(func.code, own_name=func.name)
                 func.queue = 'clear' if func.sub_count == 0 else 'blocked'
             
-            if func.queue == 'blocked' and not self.is_retry:
+            if func.queue == 'blocked' and not self.is_retry and not self.is_low_score_rescan:
+                # Normal pass: defer until sub_* dependencies are resolved
                 func.status = 'Temporary Blocked - Waiting for sub-function analysis'
                 results.append((idx, func, 'DEFERRED', ''))
                 continue
-            elif func.queue == 'blocked' and self.is_retry:
-                # Final fallback: force analyse even with sub_* calls
+
+            elif func.queue == 'blocked' and self.is_retry and not self.is_low_score_rescan:
+                # Fallback retry pass: function still has sub_* calls that were never resolved.
+                # Do NOT force-analyze unless it is an explicitly promoted cycle-breaker.
+                if func.sub_count > 0 and 'Cycle Breaker' not in getattr(func, 'status', ''):
+                    func.status = f'Skipped - {func.sub_count} sub_* call(s) unresolved (rename manually)'
+                    func.queue = 'blocked'
+                    results.append((idx, func, None, ''))
+                    continue
+                # sub_count is now 0 (or it is a cycle breaker); safe to force-analyze.
                 func.status = 'Fallback'
+
+            elif func.queue == 'blocked' and self.is_low_score_rescan:
+                # Rescan mode: function already has a name, just improving score → force-analyze
+                func.status = 'Fallback'
+
+            # Callee-score blocking: if this function calls a named function that has score <= 50%
+            # (meaning it was recently renamed but with low confidence), defer it too.
+            # Only block in the first pass (not is_retry) to avoid infinite loop when scores are final.
+            if not self.is_retry and not self.is_low_score_rescan and self.func_score_map and func.code:
+                low_score_callees = self._find_low_score_callees(func)
+                if low_score_callees:
+                    func.status = f'Deferred - Waiting for low-score callees: {low_score_callees[:2]}'
+                    func.queue = 'blocked'
+                    results.append((idx, func, 'DEFERRED_LOW_SCORE', ''))
+                    continue
 
             if func.code:
                 line_count = func.code.count('\n')
@@ -881,10 +933,11 @@ class AnalyzeWorker(QThread):
                 dynamic_char_limit = max(4000, 45000 // len(batch))
                 
                 force = self.cfg.get('force_bulk_rename', False)
-                if not force and len(batch) > 1 and (len(func.code) > dynamic_char_limit or line_count > dynamic_line_limit):
-                    self.log.emit(f"Skipping {hex(func.ea)} ({line_count} lines): Volume too high for a batch of {len(batch)}. "
-                                  "Suggested: Decrease 'Batch Size' to 1 in Settings for large functions.", 'warn')
-                    results.append((idx, func, None, ''))
+                if not force and not self.is_retry and len(batch) > 1 and (len(func.code) > dynamic_char_limit or line_count > dynamic_line_limit):
+                    self.log.emit(f"Deferring {hex(func.ea)} ({line_count} lines) from batch: Volume too high for a batch of {len(batch)}. "
+                                  "Will analyze in retry pass.", 'info')
+                    func.status = 'Deferred - Too large for batch (needs single-function run)'
+                    results.append((idx, func, 'DEFERRED', ''))
                     continue
                 valid.append((idx, func))
             else:
@@ -935,15 +988,42 @@ class AnalyzeWorker(QThread):
                 results.append((idx, f, name, score_part))
             else:
                 self.log.emit(f"Processing batch of {len(valid)} functions...", 'info')
+                # Dynamic per-function snippet budget: split 40,000 chars evenly across
+                # all valid functions, but never below 800. This gives each function much
+                # more context than the old hard 800-char limit when batch is small.
+                per_func_limit = max(800, 40000 // len(valid))
                 prompt = "Functions to name:\n\n"
+                skip_indices = []
                 for i, (idx, f) in enumerate(valid):
                     snippet = f.code
-                    if len(snippet) > 800:
-                        snippet = snippet[:800] + "\n// ... (truncated) ..."
+                    # If even the generous dynamic budget covers less than 30% of the
+                    # function's code, the AI will only see variable declarations with
+                    # no real computation. Skip from batch → will be analyzed alone.
+                    if not self.is_retry and len(snippet) > per_func_limit and len(snippet) > 0:
+                        coverage = per_func_limit / len(snippet)
+                        if coverage < 0.30:
+                            self.log.emit(
+                                f"  Deferring {hex(f.ea)} from batch: {len(snippet):,} chars, "
+                                f"would only see {coverage*100:.0f}% — needs single-function analysis.",
+                                'warn'
+                            )
+                            skip_indices.append(i)
+                            continue
+                    if len(snippet) > per_func_limit:
+                        snippet = snippet[:per_func_limit] + "\n// ... (truncated) ..."
                     prompt += f"[{i+1}]\n```\n{snippet}\n```\n"
                     if f.strings: prompt += f"Strings: {f.strings[:3]}\n"
                     if f.calls: prompt += f"Calls: {f.calls[:3]}\n"
                     prompt += "\n"
+
+                # Emit skipped-from-batch functions as None results (will be caught by
+                # the dynamic limit skip path or re-tried as single functions later)
+                for si in skip_indices:
+                    s_idx, s_func = valid[si]
+                    s_func.status = 'Deferred - Too large for batch (needs single-function run)'
+                    results.append((s_idx, s_func, 'DEFERRED', ''))
+                    # Remove from valid so parse_batch_response gets the right count
+                valid_in_prompt = [v for i, v in enumerate(valid) if i not in skip_indices]
 
                 def _chunk(t):
                     self.update_status.emit(f"Analyzing batch ({len(t)} chars)...")
@@ -981,6 +1061,109 @@ class AnalyzeWorker(QThread):
                 results.append((idx, f, None, ''))
 
         return results
+
+    def _rescan_low_score_results(self, results):
+        """
+        After a normal batch, immediately re-analyze any function that received
+        a confidence score <= 50%, sending each one individually (batch_size=1)
+        using the single-function prompt for maximum accuracy.
+        The updated result replaces the original low-score entry in-place.
+        """
+        low_score_indices = []
+        for i, res in enumerate(results):
+            if not res or len(res) < 4:
+                continue
+            idx, func, name, score = res
+            # Only rescan real suggestions, not deferred/skipped results
+            if not name or name in ('DEFERRED', 'DEFERRED_LOW_SCORE'):
+                continue
+            try:
+                score_int = int(score.replace('%', ''))
+                if score_int <= 50:
+                    low_score_indices.append(i)
+            except Exception:
+                pass
+
+        if not low_score_indices:
+            return results
+
+        self.log.emit(
+            f"Low-score rescan: {len(low_score_indices)} function(s) scored ≤ 50% — "
+            "re-analyzing individually for higher accuracy...",
+            'warn'
+        )
+
+        results = list(results)
+        for i in low_score_indices:
+            if not self.running:
+                break
+            idx, func, name, score = results[i]
+
+            # Reset cached code so fresh decompilation is used for the rescan
+            func.code = None
+            func.strings = None
+            func.calls = None
+            func.status = 'Low-score Rescan'
+
+            self.log.emit(
+                f"  Re-scanning {func.name} ({hex(func.ea)}) [was {score}]...",
+                'info'
+            )
+
+            # Temporarily behave as a low-score-rescan worker:
+            # - bypass sub_* blocking (is_retry=True path)
+            # - bypass callee-score blocking
+            # - use single-function prompt via process_batch with batch of 1
+            orig_is_low = self.is_low_score_rescan
+            self.is_low_score_rescan = True
+            rescan = self.process_batch([(idx, func)])
+            self.is_low_score_rescan = orig_is_low
+
+            if rescan and rescan[0] and len(rescan[0]) >= 4:
+                r_idx, r_func, r_name, r_score = rescan[0]
+                if r_name and r_name not in ('DEFERRED', 'DEFERRED_LOW_SCORE'):
+                    try:
+                        new_score_int = int(r_score.replace('%', ''))
+                    except Exception:
+                        new_score_int = 0
+                    self.log.emit(
+                        f"  Rescan result: {r_name} [{r_score}] "
+                        f"({'improved' if new_score_int > 50 else 'still low'})",
+                        'ok' if new_score_int > 50 else 'warn'
+                    )
+                    results[i] = rescan[0]
+        return results
+
+    def _find_low_score_callees(self, func):
+        """Return list of callee names that have score <= 50% in the current func_score_map.
+        
+        SAFETY: All IDA API calls (FuncItems, CodeRefsFrom, get_func_name) are wrapped
+        in execute_sync(MFF_READ) because this method is called from a background QThread.
+        """
+        if not func.code or not self.func_score_map:
+            return []
+        result = [[]]
+        func_score_map = self.func_score_map
+        ea = func.ea
+        def _read():
+            low_callees = []
+            try:
+                for item in idautils.FuncItems(ea):
+                    for xref in idautils.CodeRefsFrom(item, False):
+                        callee_ea = xref
+                        if callee_ea in func_score_map:
+                            if func_score_map[callee_ea] <= 50:
+                                callee_name = idc.get_func_name(callee_ea) or hex(callee_ea)
+                                if callee_name not in low_callees:
+                                    low_callees.append(callee_name)
+            except Exception:
+                pass
+            result[0] = low_callees
+        try:
+            idaapi.execute_sync(_read, idaapi.MFF_READ)
+        except Exception:
+            pass
+        return result[0]
 
     def parse_batch_response(self, resp, expected):
         if not resp or not resp.strip():
@@ -1953,6 +2136,7 @@ class BulkRenamer(QDialog):
         self._is_retry_phase = False
         self._session_always_apply = False
         self._pending_still_blocked = []
+        self._func_score_map = {}  # ea -> score_int for all analyzed funcs (for callee-score blocking)
         _ai_mod.AI_CANCEL_REQUESTED = False
         self._start_time = time.time()
 
@@ -1993,7 +2177,11 @@ class BulkRenamer(QDialog):
         self.total_items = len(items)
 
         for chunk in chunks:
-            worker = AnalyzeWorker(self.cfg, chunk, self.existing_names, sys_prompt, batch_size, is_retry=is_retry)
+            worker = AnalyzeWorker(
+                self.cfg, chunk, self.existing_names, sys_prompt, batch_size,
+                is_retry=is_retry,
+                func_score_map=getattr(self, '_func_score_map', {})
+            )
             worker.batch_done.connect(self.on_batch_done)
             worker.progress.connect(self.on_progress)
             worker.finished.connect(self.on_worker_finished)
@@ -2021,10 +2209,24 @@ class BulkRenamer(QDialog):
             'info'
         )
         
+        try:
+            ida_hexrays.clear_cached_cfuncs()
+        except:
+            pass
+        
         promoted = []
         still_blocked = []
+        done_scan = 0
         
         for idx, func in self._deferred_items:
+            if _ai_mod.AI_CANCEL_REQUESTED:
+                break
+                
+            done_scan += 1
+            self.update_status(f"Re-scanning: {done_scan}/{self.total_items}...")
+            self.progress.setValue(done_scan)
+            QApplication.processEvents()
+            
             # Re-fetch fresh code — callees may have been renamed
             new_code = get_code_fast(func.ea, 50000, asm_max=1000)
             if new_code is not None:
@@ -2040,15 +2242,57 @@ class BulkRenamer(QDialog):
             else:
                 func.queue = 'blocked'
                 still_blocked.append((idx, func))
-        
+
+        if _ai_mod.AI_CANCEL_REQUESTED:
+            self.finish_analyze()
+            return
+            
         self.add_log(
             f"Retry: {len(promoted)} promoted to CLEAR, {len(still_blocked)} still BLOCKED.",
             'info' if promoted else 'warn'
         )
+        
+        if not promoted and still_blocked:
+            # Cycle-breaker logic: pick the functions with the lowest sub_* count to break the deadlock
+            # We promote up to 30 functions at once to prevent slow one-by-one analysis on large sets.
+            min_sub = min(f.sub_count for _, f in still_blocked)
+            candidates = [item for item in still_blocked if item[1].sub_count == min_sub]
+            
+            # Sort candidates by string count, then call count (both descending)
+            def _candidate_score(item):
+                idx, f = item
+                str_cnt = len(f.strings) if f.strings else 0
+                call_cnt = len(f.calls) if f.calls else 0
+                return (str_cnt, call_cnt)
+            candidates.sort(key=_candidate_score, reverse=True)
+            
+            limit = min(30, len(candidates))
+            selected = candidates[:limit]
+            
+            for breaker in selected:
+                still_blocked.remove(breaker)
+                idx, func = breaker
+                func.queue = 'clear'
+                func.status = f'Pending (Cycle Breaker - {func.sub_count} sub_* remaining)'
+                promoted.append(breaker)
+            
+            self.add_log(
+                f"Cycle/Deadlock detected: promoting {len(selected)} function(s) as cycle breakers "
+                f"with {min_sub} sub_* call(s) remaining.",
+                'info'
+            )
+        
         self._deferred_items = []
 
         if promoted and still_blocked:
-            # Analyse promoted first, then handle still_blocked after
+            # Analyse promoted first, then handle still_blocked after.
+            # Reset code cache for still_blocked so the fallback worker gets the
+            # freshest decompilation (callees renamed during this promoted pass
+            # will then correctly show as named, potentially dropping sub_count to 0).
+            for _, func in still_blocked:
+                func.code = None
+                func.strings = None
+                func.calls = None
             self._pending_still_blocked = still_blocked
             self._start_worker_items(promoted, is_retry=True)
             return
@@ -2059,16 +2303,25 @@ class BulkRenamer(QDialog):
 
         if still_blocked:
             self.add_log(
-                f"Fallback pass: sending {len(still_blocked)} still-BLOCKED functions to AI with batch_size=1...",
+                f"Fallback pass: {len(still_blocked)} function(s) still have unresolved sub_* calls — "
+                "will skip any with remaining sub_* dependencies.",
                 'warn'
             )
+            # Reset code so the fallback worker fetches the absolute freshest decompilation
+            for _, func in still_blocked:
+                func.code = None
+                func.strings = None
+                func.calls = None
             self._start_fallback_blocked(still_blocked)
             return
 
         self.finish_analyze()
 
     def _start_fallback_blocked(self, still_blocked):
-        """Send still-blocked functions to AI one-by-one (batch_size=1, is_retry=True)."""
+        """Final pass for still-blocked functions (is_retry=True, batch_size=1).
+        Functions that STILL have sub_* calls after fresh code fetch will be skipped
+        by process_batch's sub_count check. Only those that became clear are analyzed.
+        """
         for w in self.workers:
             w.stop()
         self.workers = []
@@ -2087,7 +2340,8 @@ class BulkRenamer(QDialog):
         sys_prompt = self.get_system_prompt(False)  # Single-function prompt
         worker = AnalyzeWorker(
             self.cfg, still_blocked, self.existing_names, sys_prompt,
-            batch_size=1, is_retry=True
+            batch_size=1, is_retry=True,
+            func_score_map=getattr(self, '_func_score_map', {})
         )
         worker.batch_done.connect(self.on_batch_done)
         worker.progress.connect(self.on_progress)
@@ -2104,40 +2358,73 @@ class BulkRenamer(QDialog):
             idx, func, name, score = res
             if name == 'DEFERRED':
                 func.queue = 'blocked'
-                func.status = 'Temporary Blocked - Waiting for sub-function analysis'
+                if not func.status or not func.status.startswith('Deferred'):
+                    func.status = 'Temporary Blocked - Waiting for sub-function analysis'
+                self._runtime_deferred.append((idx, func))
+            elif name == 'DEFERRED_LOW_SCORE':
+                # Caller deferred because one of its callees still has score <= 50%
+                func.queue = 'blocked'
                 self._runtime_deferred.append((idx, func))
             elif name:
+                # Parse score integer for callee-score blocking map
+                score_int = 0
+                try:
+                    score_int = int(score.replace('%', ''))
+                except Exception:
+                    pass
+
                 func.suggested = name
                 func.score = score
                 func.status = 'OK'
-                func.queue = 'done' # Mark as done since processed by AI
+                func.queue = 'done'
                 self.existing_names.add(name)
-                
+
+                # Update the callee-score map so future callers know this function's confidence
+                self._func_score_map[func.ea] = score_int
+
                 # Save suggestion to IDB for persistence (tag 84)
                 save_to_idb(func.ea, f"{name}|{score}", tag=84)
 
-                # Live Auto-Apply
+                # Live Auto-Apply — ALL IDA write operations must run on the main thread via MFF_WRITE
                 if self.auto_apply_cb.isChecked():
-                    # Store original name if not already stored (tag 82)
-                    orig = load_from_idb(func.ea, tag=82)
-                    if not orig:
-                        cur_name = idc.get_func_name(func.ea)
-                        if cur_name and not cur_name.startswith('sub_'):
-                            save_to_idb(func.ea, cur_name, tag=82)
-                    
-                    if ida_name.set_name(func.ea, name, ida_name.SN_NOWARN | ida_name.SN_FORCE):
+                    apply_result = [False]
+                    apply_ea   = func.ea
+                    apply_name = name
+                    def _do_apply():
+                        try:
+                            # Store original name if not already stored (to allow undo)
+                            orig = load_from_idb(apply_ea, tag=82)
+                            if not orig:
+                                cur_name = idc.get_func_name(apply_ea)
+                                if cur_name and not cur_name.startswith('sub_'):
+                                    save_to_idb(apply_ea, cur_name, tag=82)
+                            ok = ida_name.set_name(apply_ea, apply_name,
+                                                   ida_name.SN_NOWARN | ida_name.SN_FORCE)
+                            if ok:
+                                save_to_idb(apply_ea, "renamed_by_pseudonote", tag=83)
+                                try:
+                                    ida_hexrays.clear_cached_cfuncs()
+                                except Exception:
+                                    pass
+                            apply_result[0] = ok
+                        except Exception:
+                            import traceback
+                            traceback.print_exc()
+                    idaapi.execute_sync(_do_apply, idaapi.MFF_WRITE)
+                    if apply_result[0]:
                         func.name = name
                         func.suggested = ''
                         func.status = 'Applied'
                         func.checked = False
-                        save_to_idb(func.ea, "renamed_by_pseudonote", tag=83)
                     else:
                         func.status = 'Error Setting Name'
             else:
-                func.status = 'Skip'
+                # Keep detailed skip status if already set (e.g. from process_batch fallback)
+                if not func.status or func.status in ('Pending', 'Temporary Blocked - Waiting for sub-function analysis'):
+                    func.status = 'Skip'
                 func.queue = 'skipped'
             indices.append(idx)
-        
+
         # Sort so counts remain accurate
         self.model.sort(self.model.sort_col, self.model.sort_ord)
         self.model.refresh_rows(indices)
@@ -2217,7 +2504,7 @@ class BulkRenamer(QDialog):
         suggestions = sum(1 for f in self.model.funcs if f.suggested)
         self.update_status(f'Done: {suggestions:,} suggestions')
         self.add_log(f'Analysis complete: {suggestions:,} suggestions', 'ok')
-        
+
         if self._start_time:
             duration = time.time() - self._start_time
             hh = int(duration // 3600)
@@ -2226,13 +2513,13 @@ class BulkRenamer(QDialog):
             ts = f"{hh:02d}:{mm:02d}:{ss:02d}"
             self.add_log(f"Analysis finished in {ts}", "info")
             self._start_time = None
-        
+
         # UI State: Finished analysing
         self.analyze_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.apply_btn.setEnabled(suggestions > 0)
         self.save_table_state()
-        
+
         self.workers = []
         self._last_done = 0
         self.sel_good_btn.setEnabled(suggestions > 0)
@@ -2374,6 +2661,12 @@ class BulkRenamer(QDialog):
                 save_to_idb(f.ea, "renamed_by_pseudonote", tag=83)
                 
                 indices.append(i)
+
+        if applied > 0:
+            try:
+                ida_hexrays.clear_cached_cfuncs()
+            except:
+                pass
 
         self.model.refresh_rows(indices)
         self.update_count()

@@ -127,6 +127,11 @@ if QtWidgets and not hasattr(QtCore, "QRegExp"):
 if QtCore:
     Signal = getattr(QtCore, "pyqtSignal", getattr(QtCore, "Signal", None))
     Slot = getattr(QtCore, "pyqtSlot", getattr(QtCore, "Slot", None))
+    # Inject into QtCore module namespace for clients using QtCore.Signal/Slot
+    if Signal and not hasattr(QtCore, "Signal"):
+        QtCore.Signal = Signal
+    if Slot and not hasattr(QtCore, "Slot"):
+        QtCore.Slot = Slot
 else:
     Signal = None
     Slot = None
@@ -145,6 +150,12 @@ except ImportError:
     anthropic = None
 
 try:
-    import google.generativeai as genai
+    from google import genai
+    gemini_backend = "google-genai"
 except ImportError:
-    genai = None
+    try:
+        import google.generativeai as genai
+        gemini_backend = "google-generativeai"
+    except ImportError:
+        genai = None
+        gemini_backend = None

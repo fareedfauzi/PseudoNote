@@ -56,6 +56,21 @@ def _get_view_module():
     return _view_module
 
 
+class FlowchartActionHandler(idaapi.action_handler_t):
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+    def activate(self, ctx):
+        try:
+            import pseudonote.flowchart as fc
+            ea = ctx.cur_ea if hasattr(ctx, 'cur_ea') and ctx.cur_ea != idaapi.BADADDR else idaapi.get_screen_ea()
+            fc.open_flowchart(ea)
+        except Exception as e:
+            print(f"[PseudoNote] Failed to open Flowchart: {e}")
+        return 1
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
 class PseudoNotePlugin(idaapi.plugin_t):
     flags = idaapi.PLUGIN_FIX
     comment = "PseudoNote: AI Assistant for IDA Pro"
@@ -139,6 +154,18 @@ class PseudoNotePlugin(idaapi.plugin_t):
             58
         )
         idaapi.register_action(list_action_desc)
+
+        # Register Flowchart Action
+        flowchart_desc = idaapi.action_desc_t(
+            "pseudonote:flowchart",
+            "Show Flowchart",
+            FlowchartActionHandler(),
+            "Ctrl+Alt+F",
+            "Open Flowchart View for the current function",
+            199
+        )
+        idaapi.register_action(flowchart_desc)
+        idaapi.attach_action_to_menu("Edit/Plugins/PseudoNote/Show Flowchart", "pseudonote:flowchart", idaapi.SETMENU_APP)
 
         # Register Settings Action
         idaapi.register_action(idaapi.action_desc_t(
@@ -455,6 +482,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
         # Unregister all actions
         for action_id in [
             "pseudonote:readable_code", "pseudonote:analyst_notes", "pseudonote:list",
+            "pseudonote:flowchart",
             "pseudonote:rename_variables", "pseudonote:rename_function",
             "pseudonote:rename_function_malware", "pseudonote:suggest_function_prototype",
             "pseudonote:add_comments", "pseudonote:delete_comments",

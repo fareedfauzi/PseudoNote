@@ -2901,6 +2901,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:analyst_notes", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:list", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:settings", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:flowchart", "PseudoNote/")
 
         # Separator 1 + GROUP: TOOLS (Hex Viewer, Call Tree, Toggle Highlight)
         idaapi.attach_action_to_popup(widget, popup, "-", "PseudoNote/")
