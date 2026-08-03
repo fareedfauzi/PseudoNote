@@ -144,18 +144,9 @@ except ImportError:
     openai = None
     print("[PseudoNote] OpenAI or httpx not found. AI features will be disabled.")
 
-try:
-    import anthropic
-except ImportError:
-    anthropic = None
-
-try:
-    from google import genai
-    gemini_backend = "google-genai"
-except ImportError:
-    try:
-        import google.generativeai as genai
-        gemini_backend = "google-generativeai"
-    except ImportError:
-        genai = None
-        gemini_backend = None
+# Provider-specific SDKs are deliberately loaded lazily by ai_client. Importing
+# them here made every PseudoNote startup initialize unused backends; the legacy
+# Gemini SDK in particular prints optional-module and Pydantic warnings in IDA.
+anthropic = None
+genai = None
+gemini_backend = None

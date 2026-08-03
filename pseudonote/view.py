@@ -2954,6 +2954,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         
         # GROUP 4: DISCOVERY & UTILS
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:floss_strings", "PseudoNote/")
+        idaapi.attach_action_to_popup(widget, popup, "pseudonote:vftable_list", "PseudoNote/")
         
         if wtype == idaapi.BWN_PSEUDOCODE:
             # Prototype and Struct editor are specific to Pseudocode

@@ -44,6 +44,7 @@ from pseudonote.deep_analyzer import DeepAnalyzerHandler
 from pseudonote.summarizer import SummarizerHandler
 from pseudonote.chat_chain import ChatChainHandler
 from pseudonote.hexview import OpenHexViewHandler
+from pseudonote.vftable import VftableListHandler
 
 # These will be imported lazily to avoid circular imports
 _view_module = None
@@ -443,6 +444,21 @@ class PseudoNotePlugin(idaapi.plugin_t):
             80
         ))
 
+        # Vftable method browser
+        idaapi.register_action(idaapi.action_desc_t(
+            "pseudonote:vftable_list",
+            "Vftable List",
+            VftableListHandler(),
+            "",
+            "Scan vftables and browse their functions, callers, and users",
+            73
+        ))
+        idaapi.attach_action_to_menu(
+            "Edit/Plugins/PseudoNote/Vftable List",
+            "pseudonote:vftable_list",
+            idaapi.SETMENU_APP
+        )
+
         # Copy Function Tree Action
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:copy_function_tree",
@@ -500,6 +516,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:copy_yara_no_imm", "pseudonote:copy_yara_opcodes",
             "pseudonote:copy_python", "pseudonote:copy_c_array", "pseudonote:copy_disasm",
             "pseudonote:dump_bytes", "pseudonote:hex_viewer",
+            "pseudonote:vftable_list",
             "pseudonote:copy_function_tree",
             "pseudonote:copy_global_xref_tree",
         ]:

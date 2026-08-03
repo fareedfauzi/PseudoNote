@@ -322,7 +322,9 @@ class FlowchartNodeItem(QtWidgets.QGraphicsItem):
             painter.drawPath(title_path)
             
             painter.setPen(QtGui.QPen(border_color, 1))
-            painter.drawLine(1, 24, self.width - 2, 24)
+            # Use an explicit floating-point line. IDA 8.3's PyQt binding does
+            # not accept mixed int/float arguments for QPainter.drawLine().
+            painter.drawLine(QtCore.QLineF(1.0, 24.0, float(self.width) - 2.0, 24.0))
             
             painter.setPen(QtGui.QColor("#FFFFFF"))
             font = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold)
@@ -467,12 +469,16 @@ class FlowchartGraphicsView(QtWidgets.QGraphicsView):
         
         x = left
         while x < rect.right():
-            painter.drawLine(x, rect.top(), x, rect.bottom())
+            painter.drawLine(
+                QtCore.QLineF(float(x), rect.top(), float(x), rect.bottom())
+            )
             x += grid_size
             
         y = top
         while y < rect.bottom():
-            painter.drawLine(rect.left(), y, rect.right(), y)
+            painter.drawLine(
+                QtCore.QLineF(rect.left(), float(y), rect.right(), float(y))
+            )
             y += grid_size
 
     def wheelEvent(self, event):

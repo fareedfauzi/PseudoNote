@@ -6,6 +6,10 @@ AI client for PseudoNote - handles communication with AI providers.
 import threading
 import functools
 import time
+import contextlib
+import importlib
+import io
+import warnings
 
 import ida_kernwin
 
@@ -16,6 +20,47 @@ from pseudonote.config import CONFIG, LOGGER
 # Global state for UI to check
 _ai_busy_count = 0
 AI_CANCEL_REQUESTED = False
+
+
+def _quiet_optional_import(module_name):
+    """Import an optional provider without leaking its dependency diagnostics."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r'Field "model_(?:id|name)" has conflict with protected namespace.*',
+            category=UserWarning,
+        )
+        # Some provider discovery code prints missing optional integrations
+        # directly instead of reporting them through Python's warning system.
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return importlib.import_module(module_name)
+
+
+def _load_anthropic():
+    global anthropic
+    if anthropic is None:
+        try:
+            anthropic = _quiet_optional_import("anthropic")
+        except ImportError:
+            return None
+    return anthropic
+
+
+def _load_gemini():
+    global genai, gemini_backend
+    if genai is not None:
+        return genai
+    try:
+        genai = _quiet_optional_import("google.genai")
+        gemini_backend = "google-genai"
+    except ImportError:
+        try:
+            genai = _quiet_optional_import("google.generativeai")
+            gemini_backend = "google-generativeai"
+        except ImportError:
+            genai = None
+            gemini_backend = None
+    return genai
 
 class AIBusyStatus:
     def __bool__(self):
@@ -103,19 +148,21 @@ class SimpleAI:
             self.client = openai.OpenAI(api_key=self.config.custom_key, base_url=clean_url(self.config.custom_url), http_client=http_client)
 
         elif self.provider == "anthropic":
-            if not anthropic or not self.config.anthropic_key:
+            anthropic_sdk = _load_anthropic()
+            if not anthropic_sdk or not self.config.anthropic_key:
                 LOGGER.log("Anthropic library or Key missing.")
                 return
-            self.client = anthropic.Anthropic(api_key=self.config.anthropic_key, base_url=clean_url(self.config.anthropic_url), http_client=http_client)
+            self.client = anthropic_sdk.Anthropic(api_key=self.config.anthropic_key, base_url=clean_url(self.config.anthropic_url), http_client=http_client)
 
         elif self.provider == "gemini":
-            if not genai or not self.config.gemini_key:
+            gemini_sdk = _load_gemini()
+            if not gemini_sdk or not self.config.gemini_key:
                 LOGGER.log("Google GenAI library or Key missing.")
                 return
             if gemini_backend == "google-genai":
-                self.client = genai.Client(api_key=self.config.gemini_key)
+                self.client = gemini_sdk.Client(api_key=self.config.gemini_key)
             else:
-                genai.configure(api_key=self.config.gemini_key)
+                gemini_sdk.configure(api_key=self.config.gemini_key)
                 self.client = "gemini_configured"
 
     def query_model_async(self, prompt, callback, additional_options=None, on_chunk=None, on_status=None):
