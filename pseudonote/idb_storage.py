@@ -15,6 +15,9 @@ import idautils
 NETNODE_NAME = "$ pseudonote:readable_c"
 _NETNODE_CACHE = None
 
+KB_NETNODE_NAME = "$ pseudonote:agent_kb"
+_KB_NETNODE_CACHE = None
+
 
 def get_netnode(create=False):
     global _NETNODE_CACHE
@@ -31,6 +34,22 @@ def get_netnode(create=False):
         except: pass
 
     return _NETNODE_CACHE
+
+def get_kb_netnode(create=False):
+    global _KB_NETNODE_CACHE
+    if _KB_NETNODE_CACHE is None:
+        try:
+            node = ida_netnode.netnode(KB_NETNODE_NAME, 0, False)
+            if node and node != ida_netnode.BADNODE:
+                _KB_NETNODE_CACHE = node
+        except: pass
+
+    if _KB_NETNODE_CACHE is None and create:
+        try:
+            _KB_NETNODE_CACHE = ida_netnode.netnode(KB_NETNODE_NAME, 0, True)
+        except: pass
+
+    return _KB_NETNODE_CACHE
 
 
 import threading
@@ -68,6 +87,47 @@ def delete_from_idb(func_ea, tag=0):
     try:
         node.delblob(func_ea, tag)
     except: pass
+
+import json
+def agent_save_finding(key, value):
+    with _IDB_LOCK:
+        def _do_save():
+            node = get_kb_netnode(create=True)
+            if node:
+                try:
+                    # We store findings as blobs. We need a numerical index for delblob/setblob, so we hash the key
+                    hash_id = hash(key) & 0xFFFFFFFF
+                    data = json.dumps({"key": key, "value": value})
+                    node.setblob(data.encode('utf-8'), hash_id, 0)
+                except: pass
+        idaapi.execute_sync(_do_save, idaapi.MFF_WRITE)
+
+def agent_search_findings(query):
+    results = []
+    with _IDB_LOCK:
+        def _do_search():
+            node = get_kb_netnode(create=False)
+            if not node: return
+            
+            try:
+                # Iterate through all blobs (we only use tag 0)
+                # Since netnodes use supval/blob indices, we can iterate using supfirst/supnxt (blob uses sup)
+                idx = node.supfirst()
+                while idx != ida_netnode.BADNODE:
+                    data = node.getblob(idx, 0)
+                    if data:
+                        try:
+                            parsed = json.loads(data.decode('utf-8'))
+                            # Simple substring matching
+                            if not query or query.lower() in parsed["key"].lower() or query.lower() in parsed["value"].lower():
+                                results.append(parsed)
+                        except: pass
+                    idx = node.supnxt(idx)
+            except: pass
+        idaapi.execute_sync(_do_search, idaapi.MFF_READ)
+    
+    if not results: return "No findings matched your query."
+    return "Findings:\n" + "\n".join([f"- **{r['key']}**: {r['value']}" for r in results])
 
 
 def gather_function_context(func_ea, max_callers=8, max_caller_lines=40):

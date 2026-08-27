@@ -45,6 +45,7 @@ from pseudonote.summarizer import SummarizerHandler
 from pseudonote.chat_chain import ChatChainHandler
 from pseudonote.hexview import OpenHexViewHandler
 from pseudonote.vftable import VftableListHandler
+from pseudonote.agentic_analyzer import AgenticAnalysisHandler
 
 # These will be imported lazily to avoid circular imports
 _view_module = None
@@ -377,6 +378,16 @@ class PseudoNotePlugin(idaapi.plugin_t):
         )
         idaapi.register_action(ask_chat_chain_desc)
 
+        agentic_desc = idaapi.action_desc_t(
+            "pseudonote:agentic_analysis",
+            "Agentic Malware Analysis",
+            AgenticAnalysisHandler(),
+            "Ctrl+Alt+Shift+M",
+            "Run autonomous agentic loop to reverse engineer the current function",
+            204
+        )
+        idaapi.register_action(agentic_desc)
+
         # Register Search Utils Actions
         idaapi.register_action(idaapi.action_desc_t(
             "pseudonote:search_bytes_vt", "Search bytes in VirusTotal",
@@ -507,7 +518,7 @@ class PseudoNotePlugin(idaapi.plugin_t):
             "pseudonote:analyze_struct", "pseudonote:bulk_rename",
             "pseudonote:bulk_var_rename",
             "pseudonote:toggle_highlight", "pseudonote:toggle_disasm_highlight",
-            "pseudonote:ask_chat", "pseudonote:ask_chat_chain", "pseudonote:deep_analyzer", "pseudonote:summarizer", "pseudonote:floss_strings",
+            "pseudonote:ask_chat", "pseudonote:ask_chat_chain", "pseudonote:agentic_analysis", "pseudonote:deep_analyzer", "pseudonote:summarizer", "pseudonote:floss_strings",
             "pseudonote:search_bytes_vt", "pseudonote:search_str_vt",
             "pseudonote:search_str_google", "pseudonote:search_str_github",
             "pseudonote:search_str_msdn", "pseudonote:search_bytes_cyberchef",

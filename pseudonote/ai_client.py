@@ -175,6 +175,18 @@ class SimpleAI:
         global AI_BUSY, AI_CANCEL_REQUESTED
         if additional_options is None: additional_options = {}
 
+        def safe_execute(func):
+            def wrapper():
+                try:
+                    func()
+                except:
+                    pass
+                return False
+            try:
+                ida_kernwin.execute_ui_requests((wrapper,))
+            except:
+                pass
+
         def thread_target():
             global _ai_busy_count, AI_CANCEL_REQUESTED
             _ai_busy_count += 1
@@ -187,9 +199,7 @@ class SimpleAI:
                 
                 # Update UI that we are sending the request
                 if on_status:
-                    try:
-                        ida_kernwin.execute_sync(lambda: on_status(0, "Sending request..."), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
-                    except: pass
+                    safe_execute(lambda: on_status(0, "Sending request..."))
 
                 if self.provider in ["openai", "deepseek", "ollama", "lmstudio", "custom"]:
                     if not self.client: raise ValueError(f"Client for {self.provider} not initialized.")
@@ -242,8 +252,8 @@ class SimpleAI:
                                 buffer += content
                                 # Buffer updates to keep IDA thread responsive
                                 if time.time() - last_update > 0.05 or len(buffer) > 100:
-                                    def _do_update(txt): on_chunk(txt)
-                                    ida_kernwin.execute_sync(functools.partial(_do_update, buffer), ida_kernwin.MFF_WRITE)
+                                    def _do_update(txt=buffer): on_chunk(txt)
+                                    safe_execute(_do_update)
                                     buffer = ""
                                     last_update = time.time()
                             
@@ -252,7 +262,8 @@ class SimpleAI:
                         
                         # Flush remaining
                         if buffer:
-                            ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                            def _flush_update(txt=buffer): on_chunk(txt)
+                            safe_execute(_flush_update)
                     else:
                         response = self.client.chat.completions.create(**valid_args)
                         msg = response.choices[0].message if response.choices else None
@@ -288,11 +299,13 @@ class SimpleAI:
                                  full_content += text
                                  buffer += text
                                  if time.time() - last_update > 0.05 or len(buffer) > 100:
-                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                     def _do_update(txt=buffer): on_chunk(txt)
+                                     safe_execute(_do_update)
                                      buffer = ""
                                      last_update = time.time()
                              if buffer:
-                                 ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                 def _flush_update(txt=buffer): on_chunk(txt)
+                                 safe_execute(_flush_update)
                              
                              msg = stream.get_final_message()
                              finish_reason = getattr(msg, 'stop_reason', 'stop')
@@ -342,7 +355,7 @@ class SimpleAI:
                                      full_content += txt
                                      buffer += txt
                                      if time.time() - last_update > 0.05 or len(buffer) > 100:
-                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
                                          buffer = ""
                                          last_update = time.time()
                                      if chunk.candidates:
@@ -353,7 +366,7 @@ class SimpleAI:
                                              else:
                                                  finish_reason = "stop"
                                  if buffer:
-                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
                              else:
                                  response = chat.send_message(last_message, config=generation_config)
                                  full_content = response.text or ""
@@ -382,7 +395,7 @@ class SimpleAI:
                                      full_content += txt
                                      buffer += txt
                                      if time.time() - last_update > 0.05 or len(buffer) > 100:
-                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
                                          buffer = ""
                                          last_update = time.time()
                                      if chunk.candidates:
@@ -393,7 +406,7 @@ class SimpleAI:
                                              else:
                                                  finish_reason = "stop"
                                  if buffer:
-                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
                              else:
                                  response = self.client.models.generate_content(
                                      model=self.config.model,
@@ -431,11 +444,11 @@ class SimpleAI:
                                      full_content += chunk.text
                                      buffer += chunk.text
                                      if time.time() - last_update > 0.05 or len(buffer) > 100:
-                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
                                          buffer = ""
                                          last_update = time.time()
                                  if buffer:
-                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
                                  
                                  try:
                                      fr = response_stream.last.candidates[0].finish_reason
@@ -462,11 +475,11 @@ class SimpleAI:
                                      full_content += chunk.text
                                      buffer += chunk.text
                                      if time.time() - last_update > 0.05 or len(buffer) > 100:
-                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                         ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
                                          buffer = ""
                                          last_update = time.time()
                                  if buffer:
-                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_WRITE)
+                                     ida_kernwin.execute_sync(functools.partial(on_chunk, buffer), ida_kernwin.MFF_NOWAIT | ida_kernwin.MFF_WRITE)
                                  
                                  try:
                                      fr = response_stream.last.candidates[0].finish_reason
@@ -506,16 +519,21 @@ class SimpleAI:
                         try: callback(response=resp, finish_reason=reason)
                         except: callback(response=resp)
 
-                ida_kernwin.execute_sync(
-                    functools.partial(wrapped_callback, resp=full_content, reason=finish_reason),
-                    ida_kernwin.MFF_WRITE
-                )
+                def _final_call():
+                    wrapped_callback(resp=full_content, reason=finish_reason)
+                safe_execute(_final_call)
             except Exception as e:
                 LOGGER.log(f"AI Error ({self.provider}): {e}")
-                ida_kernwin.execute_sync(
-                    functools.partial(callback, response=None),
-                    ida_kernwin.MFF_WRITE
-                )
+                err_str = str(e).lower()
+                is_throttle = any(x in err_str for x in ["429", "too many requests", "quota", "rate limit"])
+                
+                def _do_err():
+                    try:
+                        callback(response=None, error_msg=str(e), is_throttle=is_throttle)
+                    except Exception:
+                        callback(response=None)
+                        
+                safe_execute(_do_err)
             finally:
                 _ai_busy_count -= 1
 

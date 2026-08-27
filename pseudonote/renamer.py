@@ -554,6 +554,17 @@ def clean_name(name, existing=None, ea=None):
     
     if not name or len(name) < 3: return None
     if name in ('function','func','sub','unknown','unnamed','noname'): return None
+
+    # Reject names that are just the function's address or hex suffixes/parts of it
+    if ea is not None:
+        ea_hex = f"{ea:x}".lower()
+        clean_lower = name.lower()
+        # strip common prefixes to find the base name
+        for prefix in ('sub_', 'bulkren_', 'lowconf_'):
+            if clean_lower.startswith(prefix):
+                clean_lower = clean_lower[len(prefix):]
+        if len(clean_lower) >= 3 and ea_hex.endswith(clean_lower) and re.match(r'^[0-9a-f_]+$', clean_lower):
+            return None
     
     # Add prefix as requested
     if getattr(CONFIG, 'use_bulk_prefix', True):
@@ -967,24 +978,39 @@ class AnalyzeWorker(QThread):
                 def _chunk(t):
                     self.update_status.emit(f"Analyzing {f.name} ({len(t)} chars)...")
                 
-                try:
-                    resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger, on_chunk=_chunk)
-                    if self.cooldown_seconds > 0:
-                        self.needs_cooldown = True
-                finally:
-                    pass
+                max_retries = 2
+                name = None
+                score_part = ''
+                for attempt in range(max_retries + 1):
+                    try:
+                        resp = ai_request(self.cfg, prompt, self.sys_prompt, logger=logger, on_chunk=_chunk)
+                        if self.cooldown_seconds > 0:
+                            self.needs_cooldown = True
+                    except Exception as e:
+                        self.log.emit(f"API Error: {str(e)}", 'err')
+                        break
+                    
+                    name_part, score_part = '', ''
+                    if resp:
+                        name_part = resp
+                        s_match = re.search(r'\[(\d+)%?\]', resp)
+                        if s_match:
+                            raw_score = int(s_match.group(1))
+                            clamped = max(0, min(raw_score, 100))
+                            score_part = f"{clamped}%"
+                            name_part = resp.replace(s_match.group(0), "").strip()
+                    
+                    name = clean_name(name_part, self.existing, ea=f.ea) if name_part else None
+                    if name is not None:
+                        break
+                    
+                    if resp and attempt < max_retries:
+                        self.log.emit(f"Rejected meaningless/address-derived suggestion '{resp}' for {hex(f.ea)}. Reprompting (Attempt {attempt+1}/{max_retries})...", "warn")
+                        # Add a strong reminder to the prompt
+                        prompt += "\n\nCRITICAL: Do NOT use the function address, hex values from the address, or generic placeholders like sub_XXX. Provide a meaningful name based on the function logic."
+                    else:
+                        break
                 
-                name_part, score_part = '', ''
-                if resp:
-                    name_part = resp
-                    s_match = re.search(r'\[(\d+)%?\]', resp)
-                    if s_match:
-                        raw_score = int(s_match.group(1))
-                        clamped = max(0, min(raw_score, 100))
-                        score_part = f"{clamped}%"
-                        name_part = resp.replace(s_match.group(0), "").strip()
-                
-                name = clean_name(name_part, self.existing, ea=f.ea) if name_part else None
                 results.append((idx, f, name, score_part))
             else:
                 self.log.emit(f"Processing batch of {len(valid)} functions...", 'info')
@@ -1046,7 +1072,24 @@ class AnalyzeWorker(QThread):
                     if name:
                         self.existing.add(name)
                     elif suggestion:
-                        self.log.emit(f"Suggestion '{suggestion}' for {hex(f.ea)} - can't find meaningful name", 'warn')
+                        # Check if the suggestion was rejected specifically because it is address-derived
+                        is_addr = False
+                        if f.ea is not None:
+                            clean_lower = suggestion.lower()
+                            for prefix in ('sub_', 'bulkren_', 'lowconf_'):
+                                if clean_lower.startswith(prefix):
+                                    clean_lower = clean_lower[len(prefix):]
+                            ea_hex = f"{f.ea:x}".lower()
+                            if len(clean_lower) >= 3 and ea_hex.endswith(clean_lower) and re.match(r'^[0-9a-f_]+$', clean_lower):
+                                is_addr = True
+                        
+                        if is_addr and 'reprompt' not in getattr(f, 'status', ''):
+                            self.log.emit(f"Suggestion '{suggestion}' for {hex(f.ea)} rejected as address-derived. Deferring for single-function reprompt.", 'warn')
+                            f.status = 'Deferred - Meaningless suggestion (needs single-function reprompt)'
+                            results.append((idx, f, 'DEFERRED', ''))
+                            continue
+                        else:
+                            self.log.emit(f"Suggestion '{suggestion}' for {hex(f.ea)} - can't find meaningful name", 'warn')
                     else:
                         self.log.emit(f"No suggestion found for {hex(f.ea)} (index {i+1} in batch)", 'warn')
                         

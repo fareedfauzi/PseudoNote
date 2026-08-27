@@ -2908,11 +2908,13 @@ class ContextMenuHooks(idaapi.UI_Hooks):
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:hex_viewer", "PseudoNote/")
         idaapi.attach_action_to_popup(widget, popup, "pseudonote:dump_bytes", "PseudoNote/")
         if wtype == idaapi.BWN_PSEUDOCODE:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:agentic_analysis", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:dnspy_xrefs", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_function_tree", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_global_xref_tree", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:toggle_highlight", "PseudoNote/")
         elif wtype in [idaapi.BWN_DISASM, idaapi.BWN_DISASMS]:
+            idaapi.attach_action_to_popup(widget, popup, "pseudonote:agentic_analysis", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:dnspy_xrefs", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_function_tree", "PseudoNote/")
             idaapi.attach_action_to_popup(widget, popup, "pseudonote:copy_global_xref_tree", "PseudoNote/")
